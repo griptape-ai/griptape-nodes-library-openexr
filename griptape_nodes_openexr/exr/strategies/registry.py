@@ -1,6 +1,6 @@
 """JSON-driven channel grouping strategy registry.
 
-Loads built-in strategies from settings.json at the package root.
+Loads built-in strategies from settings.json shipped inside the package.
 An additional strategy config file path is read from the Griptape Nodes
 settings system under the key ``openexr.openexr_config`` (an absolute file
 path). Configure it via Settings → OpenEXR in the UI.
@@ -13,6 +13,7 @@ and can extend (but not replace without re-registering) the built-ins.
 from __future__ import annotations
 
 import importlib
+import importlib.resources as _res
 import json
 import logging
 from pathlib import Path
@@ -23,23 +24,11 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger("griptape_nodes")
 
-_BUILTIN_CONFIG = Path(__file__).parents[3] / "settings.json"
-
 _registry: dict[str, ChannelGroupingStrategy] = {}
 _display_names: dict[str, str] = {}
 
 
-def _load_config(path: Path) -> None:
-    if not path.exists():
-        logger.warning("Channel strategy config not found: %s", path)
-        return
-
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        logger.error("Failed to load channel strategy config '%s': %s", path, exc)
-        return
-
+def _apply_config(data: dict, label: str) -> None:
     for entry in data.get("strategies", []):
         name = entry.get("name")
         display_name = entry.get("display_name", name)
@@ -59,10 +48,33 @@ def _load_config(path: Path) -> None:
             logger.error("Failed to load strategy '%s' from '%s.%s': %s", name, module_path, class_name, exc)
 
 
+def _load_builtin_config() -> None:
+    try:
+        text = _res.files("griptape_nodes_openexr").joinpath("settings.json").read_text(encoding="utf-8")
+        data = json.loads(text)
+    except (FileNotFoundError, json.JSONDecodeError) as exc:
+        logger.error("Failed to load built-in channel strategy config: %s", exc)
+        return
+    _apply_config(data, "built-in")
+
+
+def _load_config(path: Path) -> None:
+    if not path.exists():
+        logger.warning("Channel strategy config not found: %s", path)
+        return
+
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        logger.error("Failed to load channel strategy config '%s': %s", path, exc)
+        return
+    _apply_config(data, str(path))
+
+
 def _ensure_loaded() -> None:
     if _registry:
         return
-    _load_config(_BUILTIN_CONFIG)
+    _load_builtin_config()
     try:
         from griptape_nodes.retained_mode.griptape_nodes import GriptapeNodes
 

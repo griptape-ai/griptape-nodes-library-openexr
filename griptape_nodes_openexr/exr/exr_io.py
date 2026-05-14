@@ -1,7 +1,7 @@
 """OIIO-based EXR header scanning.
 
 Two-phase design:
-- scan_exr_header(): reads headers only, no pixel I/O — fast for UI path
+- scan_exr_header(): reads headers only, no pixel I/O - fast for UI path
 - Pixel loading is intentionally out of scope; downstream nodes call OIIO directly
 
 All OIIO APIs used here (ImageInput, seek_subimage, spec, extra_attribs, tile_width)
@@ -85,7 +85,7 @@ def scan_exr_header(file_path: str, strategy: ChannelGroupingStrategy) -> EXRDat
 
         while inp.seek_subimage(subimage_idx, 0):
             spec = inp.spec()
-            channels = _build_channel_list(spec, strategy)
+            channels = _build_channel_list(spec)
 
             if not channels:
                 msg = f"EXR part {subimage_idx} has no channels: {file_path}"
@@ -119,7 +119,7 @@ def scan_exr_header(file_path: str, strategy: ChannelGroupingStrategy) -> EXRDat
         inp.close()
 
 
-def _build_channel_list(spec: Any, strategy: ChannelGroupingStrategy) -> list[EXRChannelInfo]:
+def _build_channel_list(spec: Any) -> list[EXRChannelInfo]:
     """Build channel metadata list from an OIIO ImageSpec."""
     channels: list[EXRChannelInfo] = []
     for ch_idx in range(spec.nchannels):

@@ -116,7 +116,7 @@ class MyStudioChannelGrouping:
 
 ### 3. Add the config path in Griptape Nodes settings
 
-Open Griptape Nodes → **Settings → OpenEXR**. Add the absolute path to your JSON file in the `openexr_configs` list. Your strategy will appear in the `channel_style` dropdown on every `Read EXR Header` node after restarting. Multiple strategies can be registered in the same JSON file.
+Open Griptape Nodes → **Settings → OpenEXR**. Set the absolute path to your JSON file in the `openexr_config` field. Your strategy will appear in the `channel_style` dropdown on every `Read EXR Header` node after restarting. Multiple strategies can be registered in the same JSON file.
 
 ## Development
 

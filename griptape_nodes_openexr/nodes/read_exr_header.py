@@ -1,4 +1,4 @@
-"""ReadEXRHeader node — parse EXR header metadata without loading pixels.
+"""ReadEXRHeader node - parse EXR header metadata without loading pixels.
 
 Architecture: Two-phase scanning.
 - Phase 1 (after_value_set on file_path or channel_style): Scan headers only.
@@ -271,7 +271,7 @@ class ReadEXRHeader(SuccessFailureNode):
             return
 
         if not self._cached_exr_data:
-            self._set_status_results(was_successful=False, result_details="No EXR data loaded — check file path")
+            self._set_status_results(was_successful=False, result_details="No EXR data loaded - check file path")
             return
 
         exr_data = self._cached_exr_data
@@ -293,10 +293,32 @@ class ReadEXRHeader(SuccessFailureNode):
 
     # --- Private: scan and populate ---
 
+    def _clear_static_outputs(self) -> None:
+        """Reset all non-dynamic output parameters to empty/zero defaults."""
+        self.parameter_output_values[self._image_width_param.name] = 0
+        self.parameter_output_values[self._image_height_param.name] = 0
+        self.parameter_output_values[self._part_count_param.name] = 0
+        self.parameter_output_values[self._layer_count_param.name] = 0
+        self.parameter_output_values[self._channel_count_param.name] = 0
+        self.parameter_output_values[self._compression_param.name] = ""
+        self.parameter_output_values[self._storage_type_param.name] = ""
+        self.parameter_output_values[self._pixel_aspect_ratio_param.name] = 0.0
+        self.parameter_output_values[self._data_window_param.name] = ""
+        self.parameter_output_values[self._display_window_param.name] = ""
+        self.parameter_output_values[self._time_code_param.name] = ""
+        self.parameter_output_values[self._software_param.name] = ""
+        self.parameter_output_values[self._owner_param.name] = ""
+        self.parameter_output_values[self._chromaticities_param.name] = ""
+        self.parameter_output_values[self._custom_attributes_param.name] = "{}"
+        self.parameter_output_values[self._exr_header_param.name] = None
+        self.parameter_output_values[self._all_parts_param.name] = []
+        self.parameter_output_values[self._all_layers_param.name] = []
+
     def _on_inputs_changed(self, file_path: str, style: str) -> None:
         """Scan EXR header and refresh all outputs. Called on file or style change."""
         self._remove_dynamic_elements()
         self._cached_exr_data = None
+        self._clear_static_outputs()
 
         if not file_path:
             return
@@ -422,10 +444,9 @@ class ReadEXRHeader(SuccessFailureNode):
                 param = Parameter(
                     name=f"{_LAYER_PREFIX}{key}",
                     display_name=display,
-                    type="str",
+                    type="EXRLayerArtifact",
                     output_type="EXRLayerArtifact",
-                    default_value=layer.name or _DEFAULT_LAYER_LABEL,
-                    tooltip=f"Layer '{layer.name or _DEFAULT_LAYER_LABEL}' — {len(layer.channels)} channel(s)",
+                    tooltip=f"Layer '{layer.name or _DEFAULT_LAYER_LABEL}' - {len(layer.channels)} channel(s)",
                     allowed_modes={ParameterMode.PROPERTY, ParameterMode.OUTPUT},
                     settable=False,
                     hide_property=True,
@@ -477,7 +498,7 @@ class ReadEXRHeader(SuccessFailureNode):
         return label
 
     def _layer_display_name(self, layer: EXRLayer) -> str:
-        """'beauty (R, G, B, A)' — short channel names after strategy parsing."""
+        """'beauty (R, G, B, A)' - short channel names after strategy parsing."""
         label = layer.name or _DEFAULT_LAYER_LABEL
         short_names = [parse_channel_name(ch.name).channel_name for ch in layer.channels]
         return f"{label} ({', '.join(short_names)})"
