@@ -1,0 +1,436 @@
+---
+name: os-model-library-setup
+description: Set up a Griptape Nodes library structure for an OS model. Renames directories, adds the OS model as a git submodule, creates the advanced library file, and updates all configuration files.
+argument-hint: <spec-file-path>
+allowed-tools: Bash Read Write Edit Grep Glob
+disable-model-invocation: false
+---
+
+# Set Up an OS Model Library
+
+Transform a repo created from `griptape-nodes-library-template` into an advanced library for an OS model repo. This skill renames directories, configures manifests, adds the submodule, and creates the `*_library_advanced.py` file.
+
+## 1. Read the Spec
+
+Read the spec file at `$ARGUMENTS`.
+
+Extract:
+- `Library Name` (e.g., "Griptape Nodes SAM3 Library")
+- `Package Dir Name` (e.g., `griptape_nodes_library_sam3`). The convention is `griptape_nodes_library_<dependency_name>` (the prefix is `griptape_nodes_library_`, NOT a `_library` suffix). The repo dir on disk is `griptape-nodes-library-<dependency_name>` (e.g., `griptape-nodes-library-sam3`). If the spec still uses the older `griptape_nodes_<name>_library` form, rewrite it to the new convention before proceeding.
+- `Submodule Name` (e.g., `sam3`)
+- `Repo URL` (the OS model GitHub URL)
+- `Submodule branch` (from Advanced Library Notes)
+- `Install method` (from Advanced Library Notes: `pip install --no-deps` or `sys.path.insert`)
+- `Tags`, `Categories`
+- `Dependencies` full list
+- `Torch required` and `GPU Requirements`
+- `Post-install patches needed`
+
+Determine the library root: the spec file is at `<library-root>/.scratch/os-model-spec-<name>/spec.md`, so the library root is two directories up from the spec file.
+
+## 2. Rename the Package Directory
+
+Rename `example_nodes_template/` to the package dir name from the spec:
+
+```bash
+mv <library-root>/example_nodes_template <library-root>/<package_dir_name>
+```
+
+## 3. Remove Template Example Files
+
+Delete all `.py` files in the renamed directory except `__init__.py`, plus the `widgets/` subdirectory. This catches any example files the template may have added (the specific filename list changes over time):
+
+```bash
+find <package-dir> -maxdepth 1 -type f -name "*.py" ! -name "__init__.py" -delete
+rm -rf <package-dir>/widgets
+```
+
+## 4. Update __init__.py
+
+Rewrite `<package-dir>/__init__.py` with a library-appropriate docstring:
+
+```python
+"""<Library Name> for Griptape Nodes."""
+```
+
+## 5. Move the Manifest JSON
+
+Move `griptape-nodes-library.json` from the repo root into the package directory:
+
+```bash
+mv <library-root>/griptape-nodes-library.json <library-root>/<package-dir>/griptape-nodes-library.json
+```
+
+## 6. Add the Git Submodule and Pin to a Specific Commit
+
+Add the OS model repo as a git submodule inside the package directory:
+
+```bash
+cd <library-root> && git submodule add <repo-url> <package-dir>/<submodule-name>
+```
+
+**Pin the submodule to a specific commit.** The committed SHA in the parent repo is what determines which version of the OS model will be installed -- this is how the library guarantees reproducibility regardless of how the upstream repo changes. Choose the commit to pin:
+
+- If the OS model repo has release tags, check out the latest one:
+  ```bash
+  cd <library-root>/<package-dir>/<submodule-name> && git tag --sort=-version:refname | head -5
+  cd <library-root>/<package-dir>/<submodule-name> && git checkout <latest-tag>
+  ```
+- If there are no release tags, the current HEAD (cloned by `git submodule add`) is already the pin -- no action needed.
+
+After checking out the desired commit, the parent repo will record the new SHA. The advanced library's commit-aware install check (see Step 10) ensures that when a future library release changes this SHA, the OS model package is automatically reinstalled in the user's venv.
+
+## 7. Update pyproject.toml
+
+Edit `pyproject.toml` to update the package name, description, and include the package:
+
+The `[project]` `name` field should become the library package name in the form `griptape-nodes-library-<dependency_name>` (kebab-case form of the package dir), e.g., `griptape-nodes-library-sam3`. Do NOT use the older `griptape-nodes-<name>-library` form.
+
+Also update `[tool.hatch.build.targets.wheel]` packages to point to the new package dir name (`griptape_nodes_library_<dependency_name>`) instead of `example_nodes_template`.
+
+Read the current pyproject.toml first, then make the minimal changes: update `name`, `description`, and `authors` (replace the template placeholder `{ name = "Your Name", email = "you@example.com" }` with `{ name = "Griptape, Inc.", email = "hello@griptape.ai" }`, matching the convention used by other first-party libraries like `griptape-nodes-void-library`). The manifest JSON's `metadata.author` field should be the string `"Griptape, Inc."` (also already shown in the manifest template below).
+
+Also add the submodule path to the `exclude` list in `[tool.ruff]` (the section already exists in the template):
+
+```toml
+[tool.ruff]
+exclude = [
+  ".venv",
+  "**/node_modules",
+  "**/__pycache__",
+  "<package_dir>/<submodule_name>",
+]
+```
+
+And update `[tool.pyright]` to exclude the submodule and suppress missing-import errors:
+
+```toml
+[tool.pyright]
+exclude = [".venv", "**/node_modules", "**/__pycache__", "**/.*", "templates", "<package_dir>/<submodule_name>"]
+reportMissingImports = false
+reportMissingModuleSource = false
+```
+
+This prevents ruff and pyright from scanning the submodule source, which contains pre-existing issues unrelated to the library being built.
+
+## 8. Update the Makefile
+
+Read the current Makefile. Find the line that sets `LIBRARY_JSON` and update it to point inside the package directory:
+
+```makefile
+LIBRARY_JSON := <package-dir>/griptape-nodes-library.json
+```
+
+## 9. Update .gitignore
+
+Ensure these entries are present in `.gitignore` (add any that are missing):
+
+```
+.scratch/
+__pycache__/
+*.py[cod]
+.venv/
+.installed_commit
+dist/
+build/
+*.egg-info/
+```
+
+## 10. Create the Advanced Library File
+
+Create `<package-dir>/<library_short_name>_library_advanced.py`. The `library_short_name` is the package dir name with the `griptape_nodes_library_` prefix removed (e.g., `griptape_nodes_library_sam3` -> `sam3`, `griptape_nodes_library_corridorkey` -> `corridorkey`).
+
+**The class name** preserves the product's original casing from the spec's "Model Info > Name" or "Submodule Name" field, plus `LibraryAdvanced`. Do NOT lowercase-then-PascalCase the package dir name -- that destroys camel-cased product names (e.g., `CorridorKey` -> wrong: `Corridorkey`, right: `CorridorKey`; `BiRefNet` -> wrong: `Birefnet`, right: `BiRefNet`). Examples: `griptape_nodes_library_sam3` + product `SAM3` -> `SAM3LibraryAdvanced`; `griptape_nodes_library_corridorkey` + product `CorridorKey` -> `CorridorKeyLibraryAdvanced`; `griptape_nodes_library_depth_anything_3` + product `DepthAnything3` -> `DepthAnything3LibraryAdvanced`. The file name stays lowercase (`<library_short_name>_library_advanced.py`).
+
+**The import name** is the main Python package name from the spec's "Main Package Name" field.
+
+Use the appropriate install method from the spec:
+
+Always use this template. It installs dependencies from the submodule's own `requirements.txt` at runtime, which preserves platform markers, version pins, and extra-index-url directives exactly as the model author intended.
+
+```python
+import logging
+import subprocess
+import sys
+from pathlib import Path
+
+import pygit2
+from griptape_nodes.node_library.advanced_node_library import AdvancedNodeLibrary
+from griptape_nodes.node_library.library_registry import Library, LibrarySchema
+
+logger = logging.getLogger("<library_short_name>_library")
+
+
+class <ClassName>LibraryAdvanced(AdvancedNodeLibrary):
+    def before_library_nodes_loaded(self, library_data: LibrarySchema, library: Library) -> None:
+        logger.info(f"Loading '{library_data.name}' library...")
+        submodule_path = self._init_submodule()
+        if not self._is_installed(submodule_path):
+            self._install_from_requirements(submodule_path)
+            self._install_package(submodule_path)
+            self._write_installed_sentinel(submodule_path)
+
+    def after_library_nodes_loaded(self, library_data: LibrarySchema, library: Library) -> None:
+        logger.info(f"Finished loading '{library_data.name}' library")
+
+    def _get_library_root(self) -> Path:
+        return Path(__file__).parent
+
+    def _get_venv_python_path(self) -> Path:
+        root = self._get_library_root()
+        if sys.platform == "win32":
+            return root / ".venv" / "Scripts" / "python.exe"
+        return root / ".venv" / "bin" / "python"
+
+    def _update_submodules_recursive(self, repo_path: Path) -> None:
+        repo = pygit2.Repository(str(repo_path))
+        repo.submodules.update(init=True)
+        for sub in repo.submodules:
+            sub_path = repo_path / sub.path
+            if sub_path.exists() and (sub_path / ".git").exists():
+                self._update_submodules_recursive(sub_path)
+
+    def _init_submodule(self) -> Path:
+        library_root = self._get_library_root()
+        submodule_dir = library_root / "<submodule_name>"
+        if submodule_dir.exists() and any(submodule_dir.iterdir()):
+            logger.info("Submodule already initialized")
+            return submodule_dir
+        self._update_submodules_recursive(library_root.parent)
+        if not submodule_dir.exists() or not any(submodule_dir.iterdir()):
+            raise RuntimeError(f"Submodule init failed: {submodule_dir}")
+        logger.info("Submodule initialized successfully")
+        return submodule_dir
+
+    def _ensure_pip(self) -> None:
+        venv_python = self._get_venv_python_path()
+        result = subprocess.run([str(venv_python), "-m", "pip", "--version"], capture_output=True)
+        if result.returncode == 0:
+            return
+        subprocess.check_call([str(venv_python), "-m", "ensurepip", "--upgrade"])
+
+    def _get_submodule_commit(self, submodule_path: Path) -> str:
+        """Return the HEAD commit SHA of the submodule (the version pinned by the library author)."""
+        repo = pygit2.Repository(str(submodule_path))
+        return str(repo.head.target)
+
+    def _get_installed_sentinel(self) -> Path:
+        return self._get_library_root() / ".installed_commit"
+
+    def _write_installed_sentinel(self, submodule_path: Path) -> None:
+        self._get_installed_sentinel().write_text(self._get_submodule_commit(submodule_path))
+
+    def _is_installed(self, submodule_path: Path) -> bool:
+        """Return True only if the package is importable AND was installed from the currently-pinned commit.
+
+        This ensures that when a new library version ships with a different submodule commit,
+        the package is reinstalled rather than reusing a stale installation.
+        """
+        venv_python = self._get_venv_python_path()
+        result = subprocess.run(
+            [str(venv_python), "-c", "import <import_name>"],
+            capture_output=True,
+        )
+        if result.returncode != 0:
+            return False
+        sentinel = self._get_installed_sentinel()
+        if not sentinel.exists():
+            return False
+        return sentinel.read_text().strip() == self._get_submodule_commit(submodule_path)
+
+    def _install_from_requirements(self, submodule_path: Path) -> None:
+        """Install dependencies from the submodule's requirements.txt.
+
+        This preserves platform markers, version pins, and extra-index-url
+        directives exactly as the model author specified.
+
+        Uses --no-build-isolation so that packages requiring torch at build time
+        (e.g., auto_gptq, flash-attn) can find the torch already installed in the venv.
+        Without this flag, pip creates an isolated build environment that doesn't
+        see the venv's packages, causing "No module named 'torch'" build failures.
+        """
+        requirements_file = submodule_path / "requirements.txt"
+        if not requirements_file.exists():
+            logger.info("No requirements.txt found in submodule, skipping")
+            return
+        venv_python = self._get_venv_python_path()
+        self._ensure_pip()
+        logger.info(f"Installing requirements from {requirements_file}...")
+        subprocess.check_call(
+            [str(venv_python), "-m", "pip", "install", "--no-build-isolation", "-r", str(requirements_file)]
+        )
+        logger.info("Requirements installed successfully")
+
+    def _install_package(self, submodule_path: Path) -> None:
+        """Install the submodule as a Python package (--no-deps since requirements.txt handled deps)."""
+        venv_python = self._get_venv_python_path()
+        logger.info(f"Installing package from {submodule_path}...")
+        subprocess.check_call(
+            [str(venv_python), "-m", "pip", "install", "--no-deps", str(submodule_path)]
+        )
+        logger.info("Package installed successfully")
+```
+
+If the submodule is NOT pip-installable (no setup.py/pyproject.toml), apply THREE changes to the template above. The default `_is_installed` runs `import <name>` in a venv subprocess to check whether the package is present, but sys.path mutations happen only in the engine process and never reach a subprocess, so the subprocess check is the wrong signal. The path must also be re-applied on every load, since sys.path does not persist across engine restarts.
+
+1. Replace `_install_package` with the sys.path variant. Point to the exact directory that contains the importable modules — this may be a subdirectory of the submodule root (e.g., `<submodule>/lite/demo`) when upstream ships flat scripts in a subdir rather than a package at the repo root:
+
+   ```python
+       def _install_package(self, submodule_path: Path) -> None:
+           # Point at the directory containing the importable modules. This may be
+           # submodule_path itself, or a subdirectory like submodule_path / "lite" / "demo".
+           import_root = submodule_path  # or: submodule_path / "lite" / "demo"
+           if str(import_root) not in sys.path:
+               sys.path.insert(0, str(import_root))
+           logger.info(f"Added {import_root} to sys.path")
+   ```
+
+2. Replace `_is_installed` so it uses the commit sentinel as the sole source of truth (skip the subprocess import check, which will always fail for sys.path installs):
+
+   ```python
+       def _is_installed(self, submodule_path: Path) -> bool:
+           """For sys.path installs, the commit sentinel is the only durable install signal.
+
+           sys.path mutations do not survive across engine restarts and cannot be observed
+           from a venv subprocess, so we rely entirely on the committed-version sentinel.
+           """
+           sentinel = self._get_installed_sentinel()
+           if not sentinel.exists():
+               return False
+           return sentinel.read_text().strip() == self._get_submodule_commit(submodule_path)
+   ```
+
+3. Modify `before_library_nodes_loaded` to always call `_install_package` (not just on first install), so sys.path is re-applied every load:
+
+   ```python
+       def before_library_nodes_loaded(self, library_data: LibrarySchema, library: Library) -> None:
+           logger.info(f"Loading '{library_data.name}' library...")
+           submodule_path = self._init_submodule()
+           if not self._is_installed(submodule_path):
+               self._install_from_requirements(submodule_path)
+               self._write_installed_sentinel(submodule_path)
+           # Always re-apply sys.path — it does not persist across engine restarts,
+           # and _install_package is idempotent (no-ops if path already present).
+           self._install_package(submodule_path)
+   ```
+
+If post-install patches are needed (from the spec's "Post-install patches needed"), add a `self._apply_patches()` call in `before_library_nodes_loaded` after `_install_package` and implement the method.
+
+## 11. Rewrite the Manifest JSON
+
+Before writing the manifest, fetch the latest Griptape Nodes release version from GitHub. Prefer the `gh` CLI; fall back to WebFetch only if `gh` is unavailable:
+
+```
+gh release view --repo griptape-ai/griptape-nodes --json tagName -q .tagName
+```
+
+(Fallback: `WebFetch: https://github.com/griptape-ai/griptape-nodes/releases/latest`.)
+
+Strip the leading `v` if present (e.g., `v0.84.0` -> `0.84.0`) and use it as the `engine_version` below.
+
+Write the new manifest JSON to `<package-dir>/griptape-nodes-library.json`. Use this structure:
+
+```json
+{
+    "name": "<Library Name from spec>",
+    "library_schema_version": "0.5.0",
+    "advanced_library_path": "<library_short_name>_library_advanced.py",
+    "metadata": {
+        "author": "Griptape, Inc.",
+        "description": "<Description from spec Model Info>",
+        "library_version": "0.1.0",
+        "engine_version": "<latest release version from GitHub>",
+        "tags": <tags array from spec>,
+        "dependencies": {
+            "pip_dependencies": <build this list - see below>,
+            "pip_install_flags": <include if CUDA torch needed - see below>
+        },
+        "resources": <include if GPU required - see below>
+    },
+    "categories": <build from spec Categories - see below>,
+    "nodes": []
+}
+```
+
+**Building `pip_dependencies`**:
+- If the spec indicates "Torch required: yes", add PyTorch to `pip_dependencies`:
+  ```json
+  "pip_dependencies": [
+      "torch",
+      "torchvision",
+      "torchaudio"
+  ],
+  "pip_install_flags": [
+      "--preview",
+      "--torch-backend=auto"
+  ]
+  ```
+  This is **required** because many packages in the submodule's `requirements.txt` (e.g., `auto_gptq`, `flash-attn`) need torch at build time. If torch isn't installed first, pip will fail with "No module named 'torch'" during wheel builds. The `--torch-backend=auto` flag lets uv auto-detect the correct CUDA version.
+- If "Torch required: no", leave `pip_dependencies` as an empty array `[]`
+- `pygit2` is a dependency of `griptape-nodes` and is always available - no need to list it
+- Do NOT include `griptape-nodes` itself
+
+**Exception: submodule is sys.path-installed AND has no `requirements.txt`**
+
+When the spec says the submodule is NOT pip-installable AND there is no `requirements.txt` for `_install_from_requirements` to consume, runtime deps have nowhere else to go. In this case, list ALL runtime deps from the spec's "Dependencies" section directly in `pip_dependencies`, not just torch:
+
+```json
+"pip_dependencies": [
+    "torch",
+    "torchvision",
+    "opencv-python-headless",
+    "tqdm",
+    "numpy",
+    "huggingface_hub"
+]
+```
+
+This is the ONLY scenario where `pip_dependencies` should contain anything beyond torch. For pip-installable submodules or submodules with a `requirements.txt`, keep `pip_dependencies` minimal and let the advanced library handle runtime deps at load time.
+
+**Adding `resources`** - set based on spec's "GPU Requirements":
+- "CUDA required" (no MPS/CPU support): `[["cuda"], "has_any"]`
+- "CUDA or MPS" (supports both GPU types): `[["cuda", "mps"], "has_any"]`
+- "CPU only" or CPU is fully supported: omit the `resources` field entirely
+
+```json
+"resources": {
+    "required": {
+        "compute": [["cuda", "mps"], "has_any"]
+    }
+}
+```
+
+**Building `categories`** from spec. Each category entry looks like:
+```json
+{
+    "<category-key>": {
+        "color": "<border-color-500>",
+        "title": "<Title>",
+        "description": "<description>",
+        "icon": "<icon-name>"
+    }
+}
+```
+
+## 12. Final Verification
+
+Verify the library structure:
+
+```bash
+ls <library-root>/.gitmodules
+ls <library-root>/<package-dir>/griptape-nodes-library.json
+ls <library-root>/<package-dir>/<library_short_name>_library_advanced.py
+ls <library-root>/<package-dir>/__init__.py
+```
+
+Check that `griptape-nodes-library.json` no longer exists at the repo root:
+```bash
+test ! -f <library-root>/griptape-nodes-library.json && echo "OK - manifest at root removed"
+```
+
+Check that `example_nodes_template/` no longer exists:
+```bash
+test ! -d <library-root>/example_nodes_template && echo "OK - template dir removed"
+```
+
+Report the package directory name and a confirmation that the submodule was added back to the caller.
