@@ -94,6 +94,6 @@ def test_unnamed_part_skipped() -> None:
         _make_part("", [_ch("Z", 0)], idx=1),
     ]
     _apply_legacy_part_name_prefix(parts)
-    # Empty part names — no prefix applied
+    # Empty part names - no prefix applied
     assert parts[0].channels[0].name == "R"
     assert parts[1].channels[0].name == "Z"

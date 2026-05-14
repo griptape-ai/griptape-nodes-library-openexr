@@ -2,7 +2,7 @@
 
 Presents channels exactly as stored in the file:
 - No name sanitization
-- No layer grouping — each channel is its own single-channel layer
+- No layer grouping - each channel is its own single-channel layer
 - Display window coordinates preserved as-is (no origin normalisation)
 - Multi-part legacy detection skipped
 """

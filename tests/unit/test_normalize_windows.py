@@ -21,7 +21,7 @@ def test_positive_display_offset() -> None:
 
 
 def test_negative_display_offset() -> None:
-    # Display window starts at (-8, -8) — common overscan pattern
+    # Display window starts at (-8, -8) - common overscan pattern
     display = WindowCoordinates(-8, -8, 1927, 1087)
     data = WindowCoordinates(0, 0, 1919, 1079)
     result = _normalize_windows(data, display)
@@ -34,6 +34,6 @@ def test_data_window_smaller_than_display() -> None:
     display = WindowCoordinates(0, 0, 3839, 2159)
     data = WindowCoordinates(512, 256, 3327, 1903)
     result = _normalize_windows(data, display)
-    # No offset needed — display already at origin
+    # No offset needed - display already at origin
     assert result.display == display
     assert result.data == data

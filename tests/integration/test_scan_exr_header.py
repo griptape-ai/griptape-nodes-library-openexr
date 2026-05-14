@@ -31,7 +31,7 @@ def layer_map(data, part_index: int = 0) -> dict[str, list[str]]:
 
 
 # ---------------------------------------------------------------------------
-# single_part_rgba.exr — baseline
+# single_part_rgba.exr - baseline
 # ---------------------------------------------------------------------------
 
 
@@ -82,7 +82,7 @@ class TestSinglePartRgba:
 
 
 # ---------------------------------------------------------------------------
-# single_part_aovs.exr — Nuke layer grouping
+# single_part_aovs.exr - Nuke layer grouping
 # ---------------------------------------------------------------------------
 
 
@@ -123,7 +123,7 @@ class TestSinglePartAovs:
 
 
 # ---------------------------------------------------------------------------
-# multi_part.exr — named parts, Nuke legacy prefix
+# multi_part.exr - named parts, Nuke legacy prefix
 # ---------------------------------------------------------------------------
 
 
@@ -158,7 +158,7 @@ class TestMultiPart:
 
 
 # ---------------------------------------------------------------------------
-# tiled.exr — tile description
+# tiled.exr - tile description
 # ---------------------------------------------------------------------------
 
 
@@ -195,7 +195,7 @@ class TestTiled:
 
 
 # ---------------------------------------------------------------------------
-# overscan.exr — data window extends outside display window (overscan pattern)
+# overscan.exr - data window extends outside display window (overscan pattern)
 # Display is at origin; data window is -8,-8 to 55,55 (8px overscan on all sides)
 # ---------------------------------------------------------------------------
 
@@ -238,7 +238,7 @@ class TestOverscan:
 
 
 # ---------------------------------------------------------------------------
-# custom_attributes.exr — chromaticities and custom metadata
+# custom_attributes.exr - chromaticities and custom metadata
 # ---------------------------------------------------------------------------
 
 
@@ -285,7 +285,7 @@ class TestCustomAttributes:
 
 
 # ---------------------------------------------------------------------------
-# nuke_metadata.exr — EXR from Nuke Write (or equivalent)
+# nuke_metadata.exr - EXR from Nuke Write (or equivalent)
 # ---------------------------------------------------------------------------
 
 
@@ -323,7 +323,7 @@ class TestNukeMetadata:
 
 
 # ---------------------------------------------------------------------------
-# legacy_multipart.exr — part names as layer names, bare channels
+# legacy_multipart.exr - part names as layer names, bare channels
 # ---------------------------------------------------------------------------
 
 

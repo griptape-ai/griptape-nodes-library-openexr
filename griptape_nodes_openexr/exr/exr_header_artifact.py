@@ -1,6 +1,6 @@
 """Metadata-only artifacts for EXR header data.
 
-These are descriptors — they carry file path, header metadata, and channel/
+These are descriptors - they carry file path, header metadata, and channel/
 layer structure but never load pixel data. Downstream nodes use them to
 understand file structure and, when needed, initiate pixel loading via OIIO.
 

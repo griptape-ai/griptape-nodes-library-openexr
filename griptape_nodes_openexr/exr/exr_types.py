@@ -2,7 +2,7 @@
 
 Core types ported from griptape-nodes-library-opencolorio (James C),
 extended with TileDescription, Chromaticities, and richer EXRHeader fields.
-Uses OpenImageIO for I/O — no pixel data is loaded here.
+Uses OpenImageIO for I/O - no pixel data is loaded here.
 """
 
 from __future__ import annotations
@@ -93,7 +93,7 @@ _ATTR_SOFTWARE = "Software"
 _ATTR_TIME_CODE = "timeCode"
 _ATTR_CHROMATICITIES = "chromaticities"
 
-# Attributes handled as dedicated fields — excluded from EXRHeader.custom
+# Attributes handled as dedicated fields - excluded from EXRHeader.custom
 _HEADER_SKIP_ATTRS: set[str] = {
     _ATTR_COMPRESSION,
     _ATTR_LINE_ORDER,
@@ -168,7 +168,7 @@ class Chromaticities:
     """CIE xy chromaticity coordinates for primary colours and white point.
 
     Present in EXR files that declare their colour primaries explicitly.
-    Absence does not imply sRGB/Rec.709 — check with your pipeline.
+    Absence does not imply sRGB/Rec.709 - check with your pipeline.
     """
 
     red_x: float

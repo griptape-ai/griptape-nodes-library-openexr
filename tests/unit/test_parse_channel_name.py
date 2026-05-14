@@ -1,4 +1,4 @@
-"""Unit tests for parse_channel_name() — Nuke-compatible algorithm."""
+"""Unit tests for parse_channel_name() - Nuke-compatible algorithm."""
 
 import pytest
 
