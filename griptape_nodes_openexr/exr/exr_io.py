@@ -96,14 +96,16 @@ def scan_exr_header(file_path: str, strategy: ChannelGroupingStrategy) -> EXRDat
             width = data_win.xmax - data_win.xmin + 1
             height = data_win.ymax - data_win.ymin + 1
 
-            parts.append(EXRPart(
-                channels=channels,
-                layers=strategy.group_into_layers(channels),
-                header=header,
-                index=subimage_idx,
-                width=width,
-                height=height,
-            ))
+            parts.append(
+                EXRPart(
+                    channels=channels,
+                    layers=strategy.group_into_layers(channels),
+                    header=header,
+                    index=subimage_idx,
+                    width=width,
+                    height=height,
+                )
+            )
             subimage_idx += 1
 
         if not parts:
@@ -124,13 +126,15 @@ def _build_channel_list(spec: Any, strategy: ChannelGroupingStrategy) -> list[EX
         ch_name = spec.channelnames[ch_idx]
         ch_format = str(spec.channelformat(ch_idx))
         pixel_type = _map_oiio_string(_OIIO_PIXEL_TYPE_MAP, ch_format, "pixel type")
-        channels.append(EXRChannelInfo(
-            name=ch_name,
-            pixel_type=pixel_type,
-            channel_index=ch_idx,
-            x_sampling=1,
-            y_sampling=1,
-        ))
+        channels.append(
+            EXRChannelInfo(
+                name=ch_name,
+                pixel_type=pixel_type,
+                channel_index=ch_idx,
+                x_sampling=1,
+                y_sampling=1,
+            )
+        )
     return channels
 
 
@@ -260,10 +264,14 @@ def _extract_chromaticities(spec: Any) -> Chromaticities | None:
                 floats = [float(x) for x in v]
                 if len(floats) >= 8:  # noqa: PLR2004
                     return Chromaticities(
-                        red_x=floats[0], red_y=floats[1],
-                        green_x=floats[2], green_y=floats[3],
-                        blue_x=floats[4], blue_y=floats[5],
-                        white_x=floats[6], white_y=floats[7],
+                        red_x=floats[0],
+                        red_y=floats[1],
+                        green_x=floats[2],
+                        green_y=floats[3],
+                        blue_x=floats[4],
+                        blue_y=floats[5],
+                        white_x=floats[6],
+                        white_y=floats[7],
                     )
             except (TypeError, ValueError):
                 logger.debug("Could not parse chromaticities attribute: %s", v)

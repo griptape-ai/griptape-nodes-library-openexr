@@ -82,7 +82,9 @@ class ReadEXRHeader(SuccessFailureNode):
         self._channel_style_param = ParameterString(
             name="channel_style",
             display_name="Channel Style",
-            default_value=_DEFAULT_STRATEGY if _DEFAULT_STRATEGY in strategy_names else (strategy_names[0] if strategy_names else "nuke"),
+            default_value=_DEFAULT_STRATEGY
+            if _DEFAULT_STRATEGY in strategy_names
+            else (strategy_names[0] if strategy_names else "nuke"),
             tooltip="How channel names are parsed and grouped into layers",
             allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
         )
@@ -336,7 +338,9 @@ class ReadEXRHeader(SuccessFailureNode):
         dw = header.data_window
         self.parameter_output_values[self._data_window_param.name] = f"{dw.xmin},{dw.ymin} - {dw.xmax},{dw.ymax}"
         disp = header.display_window
-        self.parameter_output_values[self._display_window_param.name] = f"{disp.xmin},{disp.ymin} - {disp.xmax},{disp.ymax}"
+        self.parameter_output_values[self._display_window_param.name] = (
+            f"{disp.xmin},{disp.ymin} - {disp.xmax},{disp.ymax}"
+        )
 
         self.parameter_output_values[self._time_code_param.name] = header.time_code or ""
         self.parameter_output_values[self._software_param.name] = header.software or ""
@@ -345,10 +349,14 @@ class ReadEXRHeader(SuccessFailureNode):
         if header.chromaticities:
             c = header.chromaticities
             chroma_dict = {
-                "red_x": c.red_x, "red_y": c.red_y,
-                "green_x": c.green_x, "green_y": c.green_y,
-                "blue_x": c.blue_x, "blue_y": c.blue_y,
-                "white_x": c.white_x, "white_y": c.white_y,
+                "red_x": c.red_x,
+                "red_y": c.red_y,
+                "green_x": c.green_x,
+                "green_y": c.green_y,
+                "blue_x": c.blue_x,
+                "blue_y": c.blue_y,
+                "white_x": c.white_x,
+                "white_y": c.white_y,
             }
             self.parameter_output_values[self._chromaticities_param.name] = json.dumps(chroma_dict)
         else:

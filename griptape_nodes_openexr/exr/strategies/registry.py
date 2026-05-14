@@ -66,9 +66,7 @@ def _ensure_loaded() -> None:
     try:
         from griptape_nodes.retained_mode.griptape_nodes import GriptapeNodes
 
-        extra_path = GriptapeNodes.ConfigManager().get_config_value(
-            "openexr.openexr_config", default=""
-        ) or ""
+        extra_path = GriptapeNodes.ConfigManager().get_config_value("openexr.openexr_config", default="") or ""
     except Exception:
         extra_path = ""
     if extra_path:

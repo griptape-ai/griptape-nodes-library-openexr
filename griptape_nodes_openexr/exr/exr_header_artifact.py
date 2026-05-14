@@ -71,10 +71,7 @@ class EXRHeaderArtifact:
     def to_text(self) -> str:
         total_channels = sum(len(p.channels) for p in self.parts)
         total_layers = sum(len(p.layers) for p in self.parts)
-        return (
-            f"EXR: {self.file_path} "
-            f"({len(self.parts)} parts, {total_layers} layers, {total_channels} channels)"
-        )
+        return f"EXR: {self.file_path} ({len(self.parts)} parts, {total_layers} layers, {total_channels} channels)"
 
 
 @dataclass

@@ -184,11 +184,13 @@ class TestTiled:
 
     def test_tile_dimensions(self) -> None:
         td = scan_exr_header(str(self.FILE), NUKE).parts[0].header.tile_description
+        assert td is not None
         assert td.tile_width == 32
         assert td.tile_height == 32
 
     def test_tile_level_mode(self) -> None:
         td = scan_exr_header(str(self.FILE), NUKE).parts[0].header.tile_description
+        assert td is not None
         assert td.level_mode == "ONE_LEVEL"
 
 
@@ -250,6 +252,7 @@ class TestCustomAttributes:
     def test_chromaticities_values_rec709(self) -> None:
         # Fixture uses Rec.709/sRGB primaries
         c = scan_exr_header(str(self.FILE), NUKE).parts[0].header.chromaticities
+        assert c is not None
         assert c.red_x == pytest.approx(0.64, abs=0.01)
         assert c.red_y == pytest.approx(0.33, abs=0.01)
         assert c.green_x == pytest.approx(0.30, abs=0.01)
