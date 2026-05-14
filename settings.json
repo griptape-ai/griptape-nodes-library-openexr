@@ -1,0 +1,16 @@
+{
+  "strategies": [
+    {
+      "name": "nuke",
+      "display_name": "Nuke",
+      "module": "griptape_nodes_openexr.exr.strategies.nuke_strategy",
+      "class": "NukeChannelGrouping"
+    },
+    {
+      "name": "raw",
+      "display_name": "Raw EXR",
+      "module": "griptape_nodes_openexr.exr.strategies.raw_strategy",
+      "class": "RawEXRChannelGrouping"
+    }
+  ]
+}
