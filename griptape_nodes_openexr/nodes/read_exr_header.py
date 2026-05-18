@@ -279,6 +279,7 @@ class ReadEXRHeader(SuccessFailureNode):
 
         self._populate_scalar_outputs(exr_data)
         self._populate_structured_outputs(file_path, exr_data)
+        self._repopulate_dynamic_output_values(file_path, exr_data)
 
         part = exr_data.parts[0]
         total_layers = sum(len(p.layers) for p in exr_data.parts)
@@ -422,6 +423,38 @@ class ReadEXRHeader(SuccessFailureNode):
             )
             self._parts_group.add_child(param)
             self.parameter_output_values[param.name] = artifact
+
+    def _repopulate_dynamic_output_values(self, file_path: str, exr_data: EXRData) -> None:
+        """Re-write parameter_output_values for dynamic groups after aprocess clears them.
+
+        The parallel resolution engine calls parameter_output_values.silent_clear() before
+        running aprocess(). Dynamic group parameters (parts, layers, channels) are populated
+        during after_value_set but not during aprocess, so they would deliver None to
+        downstream nodes. This method restores the output values for any dynamic parameters
+        that already exist on the node.
+        """
+        is_multi = len(exr_data.parts) > 1
+        for part in exr_data.parts:
+            part_artifact = self._build_part_artifact(file_path, part)
+            # Parts group (only present for multi-part files)
+            if is_multi:
+                param_name = f"{_PART_PREFIX}{part.index}"
+                if self.get_parameter_by_name(param_name) is not None:
+                    self.parameter_output_values[param_name] = part_artifact
+            # Layers group
+            prefix = f"p{part.index}_" if is_multi else ""
+            for layer in part.layers:
+                key = f"{prefix}{layer.name or _DEFAULT_LAYER_LABEL}"
+                param_name = f"{_LAYER_PREFIX}{key}"
+                if self.get_parameter_by_name(param_name) is not None:
+                    layer_artifact = EXRLayerArtifact(part=part_artifact, layer=layer)
+                    self.parameter_output_values[param_name] = layer_artifact
+            # Channels group
+            for ch in part.channels:
+                key = f"{prefix}{ch.channel_index}"
+                param_name = f"{_CHANNEL_PREFIX}{key}"
+                if self.get_parameter_by_name(param_name) is not None:
+                    self.parameter_output_values[param_name] = ch.name
 
     def _populate_layers_group(self, file_path: str, exr_data: EXRData) -> None:
         """One output per layer across all parts."""
