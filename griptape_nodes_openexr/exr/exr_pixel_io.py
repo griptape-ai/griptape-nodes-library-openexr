@@ -262,9 +262,11 @@ _HABLE_W = 11.2
 
 
 def _hable(x: np.ndarray) -> np.ndarray:
-    return (x * (_HABLE_A * x + _HABLE_C * _HABLE_B) + _HABLE_D * _HABLE_E) / (
+    # Compute in float64 to avoid overflow on large HDR values (float32 ~3.4e38).
+    x = x.astype(np.float64)
+    return ((x * (_HABLE_A * x + _HABLE_C * _HABLE_B) + _HABLE_D * _HABLE_E) / (
         x * (_HABLE_A * x + _HABLE_B) + _HABLE_D * _HABLE_F
-    ) - _HABLE_E / _HABLE_F
+    ) - _HABLE_E / _HABLE_F).astype(np.float32)
 
 
 def tone_map(pixels: np.ndarray, method: str = "simple") -> np.ndarray:
