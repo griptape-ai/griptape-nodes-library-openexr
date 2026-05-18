@@ -5,7 +5,7 @@ Two-phase design:
 - Pixel loading is intentionally out of scope; downstream nodes call OIIO directly
 
 All OIIO APIs used here (ImageInput, seek_subimage, spec, extra_attribs, tile_width)
-are stable across OIIO 2.3–2.5 (VFX Reference Platform 2022–2025).
+are stable across OIIO 2.3+ and 3.x (VFX Reference Platform 2022 onwards).
 """
 
 from __future__ import annotations

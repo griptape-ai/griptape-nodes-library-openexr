@@ -17,10 +17,8 @@ import importlib.resources as _res
 import json
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING
 
-if TYPE_CHECKING:
-    from griptape_nodes_openexr.exr.strategies.base import ChannelGroupingStrategy
+from griptape_nodes_openexr.exr.strategies.base import ChannelGroupingStrategy
 
 logger = logging.getLogger("griptape_nodes")
 
@@ -42,7 +40,16 @@ def _apply_config(data: dict, label: str) -> None:
         try:
             module = importlib.import_module(module_path)
             cls = getattr(module, class_name)
-            _registry[name] = cls()
+            instance = cls()
+            if not isinstance(instance, ChannelGroupingStrategy):
+                logger.error(
+                    "Strategy '%s' (%s.%s) does not satisfy ChannelGroupingStrategy protocol",
+                    name,
+                    module_path,
+                    class_name,
+                )
+                continue
+            _registry[name] = instance
             _display_names[name] = display_name
         except (ImportError, AttributeError) as exc:
             logger.error("Failed to load strategy '%s' from '%s.%s': %s", name, module_path, class_name, exc)
