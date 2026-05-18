@@ -4,12 +4,9 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
-import pytest
-
 from griptape_nodes_openexr.exr.exr_header_artifact import EXRLayerArtifact, EXRPartHeaderArtifact
 from griptape_nodes_openexr.exr.exr_types import EXRChannelInfo, EXRLayer, PixelType, StorageType
 from griptape_nodes_openexr.nodes.display_exr import DisplayEXR
-
 
 # ---------------------------------------------------------------------------
 # Minimal fixture helpers
@@ -70,6 +67,9 @@ def test_node_instantiation():
     assert "width" in param_names
     assert "height" in param_names
     assert "detected_colorspace" in param_names
+    # SuccessFailureNode adds a Status group
+    element_names = [e.name for e in node.root_ui_element.children if hasattr(e, "name")]
+    assert "Status" in element_names
 
 
 def test_tone_mapping_has_options_trait():
@@ -264,57 +264,32 @@ def test_resolve_input_returns_part_and_channels_for_layer_artifact():
 
 
 # ---------------------------------------------------------------------------
-# Deep EXR detection
+# Deep EXR routing
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_aprocess_raises_for_deep_scanline_exr():
-    """aprocess raises ValueError with a clear message for deep scanline EXRs."""
-    from unittest.mock import patch
+def test_load_layer_pixels_routes_deep_through_flatten():
+    """load_layer_pixels detects deep EXRs and calls _load_deep_pixels."""
+    from unittest.mock import MagicMock, patch
 
-    node = DisplayEXR("test_deep_scanline")
-    layers = [_make_layer("", ["R", "G", "B"])]
-    part = _make_part(layers, storage_type=StorageType.DEEP_SCANLINE)
+    import numpy as np
 
-    def _get(name):
-        return part if name == "part" else None
+    fake_pixels = np.zeros((4, 4, 3), dtype=np.float32)
 
-    with patch.object(node, "get_parameter_value", side_effect=_get):
-        with pytest.raises(ValueError, match="deep EXR"):
-            await node.aprocess()
+    with patch("griptape_nodes_openexr.exr.exr_pixel_io._load_deep_pixels", return_value=fake_pixels) as mock_deep:
 
+        mock_spec = MagicMock()
+        mock_spec.deep = True
+        mock_spec.nchannels = 3
 
-@pytest.mark.asyncio
-async def test_aprocess_raises_for_deep_tiled_exr():
-    """aprocess raises ValueError with a clear message for deep tiled EXRs."""
-    from unittest.mock import patch
+        mock_inp = MagicMock()
+        mock_inp.__bool__ = lambda self: True
+        mock_inp.seek_subimage.return_value = True
+        mock_inp.spec.return_value = mock_spec
 
-    node = DisplayEXR("test_deep_tiled")
-    layers = [_make_layer("", ["R"])]
-    part = _make_part(layers, storage_type=StorageType.DEEP_TILED)
+        with patch("OpenImageIO.ImageInput.open", return_value=mock_inp):
+            from griptape_nodes_openexr.exr.exr_pixel_io import load_layer_pixels
+            result = load_layer_pixels("/fake/deep.exr", 0, [0, 1, 2])
 
-    def _get(name):
-        return part if name == "part" else None
-
-    with patch.object(node, "get_parameter_value", side_effect=_get):
-        with pytest.raises(ValueError, match="DeepToFlat"):
-            await node.aprocess()
-
-
-@pytest.mark.asyncio
-async def test_aprocess_raises_for_deep_exr_from_layer_input():
-    """Deep EXR detection works even when the input is an EXRLayerArtifact."""
-    from unittest.mock import patch
-
-    node = DisplayEXR("test_deep_from_layer")
-    layers = [_make_layer("", ["R", "G", "B"])]
-    part = _make_part(layers, storage_type=StorageType.DEEP_SCANLINE)
-    layer_artifact = EXRLayerArtifact(part=part, layer=layers[0])
-
-    def _get(name):
-        return layer_artifact if name == "part" else None
-
-    with patch.object(node, "get_parameter_value", side_effect=_get):
-        with pytest.raises(ValueError, match="deep EXR"):
-            await node.aprocess()
+        mock_deep.assert_called_once_with("/fake/deep.exr", 0, [0, 1, 2])
+        assert result.shape == (4, 4, 3)

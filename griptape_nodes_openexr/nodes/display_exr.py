@@ -9,8 +9,8 @@ Accepts both EXRPartHeaderArtifact and EXRLayerArtifact as input:
 - Part: renders the layer selected by the layer_name property (or default composite).
 - Layer: renders that layer directly; layer_name property is hidden.
 
-Deep EXRs (deepscanline / deeptiled) are detected early and rejected with a
-clear message — they require a DeepToFlat node before display.
+Deep EXRs (deepscanline / deeptiled) are flattened automatically via
+ImageBufAlgo.flatten() before tone-mapping.
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ from typing import Any
 
 from griptape.artifacts import ImageUrlArtifact
 from griptape_nodes.exe_types.core_types import Parameter, ParameterGroup, ParameterMode
-from griptape_nodes.exe_types.node_types import ControlNode
+from griptape_nodes.exe_types.node_types import SuccessFailureNode
 from griptape_nodes.exe_types.param_components.project_file_parameter import ProjectFileParameter
 from griptape_nodes.exe_types.param_types.parameter_float import ParameterFloat
 from griptape_nodes.exe_types.param_types.parameter_image import ParameterImage
@@ -39,7 +39,7 @@ from griptape_nodes_openexr.exr.exr_pixel_io import (
     to_pil_rgb,
     tone_map,
 )
-from griptape_nodes_openexr.exr.exr_types import EXRChannelInfo, StorageType, parse_channel_name
+from griptape_nodes_openexr.exr.exr_types import EXRChannelInfo, parse_channel_name
 from griptape_nodes_openexr.exr.strategies.registry import get_strategy
 
 logger = logging.getLogger("griptape_nodes")
@@ -49,10 +49,9 @@ _DEFAULT_TONE_MAPPING = "simple"
 _DEFAULT_LAYER_LABEL = "default"
 _LAYER_PREFIX = "layer_"
 _MAX_PREVIEW_DIM = 2048
-_DEEP_STORAGE_TYPES = {StorageType.DEEP_SCANLINE, StorageType.DEEP_TILED}
 
 
-class DisplayEXR(ControlNode):
+class DisplayEXR(SuccessFailureNode):
     """Render a tone-mapped sRGB preview from an EXR part or layer.
 
     Accepts EXRPartHeaderArtifact (renders selected or default layer) or
@@ -162,6 +161,12 @@ class DisplayEXR(ControlNode):
         self._layers_group.ui_options = {"display_name": "Layers"}
         self.add_node_element(self._layers_group)
 
+        self._create_status_parameters(
+            result_details_tooltip="Details about the render result",
+            result_details_placeholder="Render a connected EXR to see results here.",
+            parameter_group_initially_collapsed=True,
+        )
+
     # --- Lifecycle ---
 
     def after_value_set(self, parameter: Parameter, value: Any) -> None:
@@ -173,53 +178,59 @@ class DisplayEXR(ControlNode):
         return super().after_value_set(parameter, value)
 
     async def aprocess(self) -> None:
+        self._clear_execution_status()
+
         value = self.get_parameter_value("part")
         if not isinstance(value, (EXRPartHeaderArtifact, EXRLayerArtifact)):
+            self._set_status_results(was_successful=False, result_details="No EXR part or layer connected")
             return
 
-        part, pinned_channels = self._resolve_input(value)
+        try:
+            part, pinned_channels = self._resolve_input(value)
 
-        if part.header.storage_type in _DEEP_STORAGE_TYPES:
-            msg = (
-                f"'{part.file_path}' part {part.part_index} is a deep EXR "
-                f"({part.header.storage_type.value}). "
-                "Flatten it with a DeepToFlat node before displaying."
+            self._update_metadata(part)
+            self._populate_layers(part)
+
+            if pinned_channels is not None:
+                channels = pinned_channels
+            else:
+                layer_name_raw = self.get_parameter_value("layer_name") or ""
+                layer_name = layer_name_raw if layer_name_raw else None
+                strategy = get_strategy("nuke")
+                exr_data = scan_exr_header(part.file_path, strategy)
+                exr_part = exr_data.parts[part.part_index]
+                channels = resolve_layer_channels(exr_part, layer_name, part.file_path)
+
+            tone_mapping_str = self.get_parameter_value("tone_mapping") or _DEFAULT_TONE_MAPPING
+            exposure = float(self.get_parameter_value("exposure") or 0.0)
+
+            indices = [ch.channel_index for ch in channels]
+            pixels = load_layer_pixels(part.file_path, part.part_index, indices)
+
+            if exposure != 0.0:
+                pixels = apply_exposure(pixels, exposure)
+
+            pixels = tone_map(pixels, tone_mapping_str)
+            img = to_pil_rgb(pixels, _MAX_PREVIEW_DIM, _MAX_PREVIEW_DIM)
+
+            buf = BytesIO()
+            img.save(buf, format="PNG")
+
+            dest = self._output_file.build_file()
+            saved = dest.write_bytes(buf.getvalue())
+            artifact = ImageUrlArtifact(value=saved.location)
+            self.publish_update_to_parameter("output", artifact)
+            self.parameter_output_values["output"] = artifact
+
+            is_deep = part.header.storage_type.value.startswith("deep")
+            depth_label = "deep, flattened" if is_deep else "flat"
+            self._set_status_results(
+                was_successful=True,
+                result_details=f"Rendered {part.width}×{part.height} ({depth_label})",
             )
-            raise ValueError(msg)
-
-        self._update_metadata(part)
-        self._populate_layers(part)
-
-        if pinned_channels is not None:
-            channels = pinned_channels
-        else:
-            layer_name_raw = self.get_parameter_value("layer_name") or ""
-            layer_name = layer_name_raw if layer_name_raw else None
-            strategy = get_strategy("nuke")
-            exr_data = scan_exr_header(part.file_path, strategy)
-            exr_part = exr_data.parts[part.part_index]
-            channels = resolve_layer_channels(exr_part, layer_name, part.file_path)
-
-        tone_mapping_str = self.get_parameter_value("tone_mapping") or _DEFAULT_TONE_MAPPING
-        exposure = float(self.get_parameter_value("exposure") or 0.0)
-
-        indices = [ch.channel_index for ch in channels]
-        pixels = load_layer_pixels(part.file_path, part.part_index, indices)
-
-        if exposure != 0.0:
-            pixels = apply_exposure(pixels, exposure)
-
-        pixels = tone_map(pixels, tone_mapping_str)
-        img = to_pil_rgb(pixels, _MAX_PREVIEW_DIM, _MAX_PREVIEW_DIM)
-
-        buf = BytesIO()
-        img.save(buf, format="PNG")
-
-        dest = self._output_file.build_file()
-        saved = dest.write_bytes(buf.getvalue())
-        artifact = ImageUrlArtifact(value=saved.location)
-        self.publish_update_to_parameter("output", artifact)
-        self.parameter_output_values["output"] = artifact
+        except Exception as exc:
+            self._set_status_results(was_successful=False, result_details=str(exc))
+            raise
 
     # --- Private helpers ---
 

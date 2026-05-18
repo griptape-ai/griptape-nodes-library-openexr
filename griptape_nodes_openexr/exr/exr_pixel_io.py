@@ -121,6 +121,61 @@ def detect_colorspace(file_path: str, part_index: int = 0, chromaticities: Any =
 # ---------------------------------------------------------------------------
 
 
+def _load_deep_pixels(
+    file_path: str,
+    part_index: int,
+    channel_indices: list[int],
+) -> np.ndarray:
+    """Flatten a deep EXR part via over-compositing and extract channels.
+
+    Uses ImageBuf + ImageBufAlgo.flatten(). Safe with threads=1 set at module
+    load — no thread pool is created. Called automatically by load_layer_pixels
+    when spec.deep is True.
+
+    Args:
+        file_path: Absolute path to the deep EXR file.
+        part_index: Zero-based part (subimage) index.
+        channel_indices: Ordered list of channel indices to extract after flatten.
+
+    Returns:
+        float32 array of shape (H, W, C) where C = len(channel_indices).
+
+    Raises:
+        RuntimeError: If opening or flattening fails.
+        ValueError: If channel_indices are out of range after flatten.
+    """
+    import OpenImageIO as oiio  # type: ignore[import-not-found]
+
+    deep_buf = oiio.ImageBuf(file_path, part_index, 0)
+    if deep_buf.has_error:
+        msg = f"Failed to open deep EXR '{file_path}' part {part_index}: {deep_buf.geterror()}"
+        raise RuntimeError(msg)
+
+    flat_buf = oiio.ImageBufAlgo.flatten(deep_buf)
+    if flat_buf.has_error:
+        msg = f"Failed to flatten '{file_path}' part {part_index}: {flat_buf.geterror()}"
+        raise RuntimeError(msg)
+
+    spec = flat_buf.spec()
+    nchannels_total = spec.nchannels
+    invalid = [i for i in channel_indices if i < 0 or i >= nchannels_total]
+    if invalid:
+        msg = f"Channel indices {invalid} out of range (flattened image has {nchannels_total} channels)"
+        raise ValueError(msg)
+
+    chbegin = min(channel_indices)
+    chend = max(channel_indices) + 1
+    sub = oiio.ImageBufAlgo.channels(flat_buf, tuple(range(chbegin, chend)))
+    pixels = sub.get_pixels(oiio.FLOAT)
+    if pixels is None:
+        msg = f"get_pixels returned None after flatten: {sub.geterror()}"
+        raise RuntimeError(msg)
+
+    pixels = np.asarray(pixels, dtype=np.float32)
+    local_indices = [i - chbegin for i in channel_indices]
+    return pixels[:, :, local_indices]
+
+
 def load_layer_pixels(
     file_path: str,
     part_index: int,
@@ -128,10 +183,9 @@ def load_layer_pixels(
 ) -> np.ndarray:
     """Load specific channels from an EXR part into a float32 numpy array.
 
-    Uses ImageInput.read_image with a channel range rather than ImageBuf so
-    that OIIO's thread pool is never involved. This avoids a SIGSEGV that
-    occurs when the thread pool is initialised inside a forked or async Python
-    process.
+    For flat EXRs uses ImageInput.read_image (no thread pool). For deep EXRs
+    uses ImageBufAlgo.flatten() to composite samples via the over operator,
+    then extracts the requested channels.
 
     Args:
         file_path: Absolute path to the EXR file.
@@ -163,6 +217,11 @@ def load_layer_pixels(
 
         spec = inp.spec()
         nchannels_total = spec.nchannels
+
+        if spec.deep:
+            # Must close before ImageBuf opens the same file
+            inp.close()
+            return _load_deep_pixels(file_path, part_index, channel_indices)
 
         invalid = [i for i in channel_indices if i < 0 or i >= nchannels_total]
         if invalid:
