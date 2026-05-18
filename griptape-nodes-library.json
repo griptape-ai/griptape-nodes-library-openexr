@@ -1,6 +1,7 @@
 {
   "name": "OpenEXR Library",
   "library_schema_version": "0.6.0",
+  "advanced_library_path": "griptape_nodes_openexr/exr_library_advanced.py",
   "metadata": {
     "author": "Griptape Community",
     "description": "OpenEXR file handling nodes for VFX and HDR workflows",
@@ -48,7 +49,8 @@
       "category": "openexr",
       "description": "Additional configuration files to extend OpenEXR file parsing and handling capabilities.",
       "contents": {
-        "openexr_config": ""
+        "openexr_config": "",
+        "preview_display_colorspace": "sRGB"
       }
     }
   ]
