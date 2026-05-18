@@ -65,7 +65,7 @@ class DisplayEXR(SuccessFailureNode):
         # --- Input (accepts part or layer) ---
 
         self._part_param = Parameter(
-            name="part",
+            name="exr",
             type="EXRPartHeaderArtifact",
             input_types=["EXRPartHeaderArtifact", "EXRLayerArtifact"],
             tooltip="EXR part or layer to display",
@@ -89,6 +89,10 @@ class DisplayEXR(SuccessFailureNode):
             default_value=0.0,
             tooltip="Exposure adjustment in stops (positive = brighter)",
             allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
+            slider=True,
+            min_val=-10.0,
+            max_val=10.0,
+            step=0.1,
         )
         self.add_parameter(self._exposure_param)
 
@@ -170,7 +174,7 @@ class DisplayEXR(SuccessFailureNode):
     # --- Lifecycle ---
 
     def after_value_set(self, parameter: Parameter, value: Any) -> None:
-        if parameter.name == "part" and isinstance(value, (EXRPartHeaderArtifact, EXRLayerArtifact)):
+        if parameter.name == "exr" and isinstance(value, (EXRPartHeaderArtifact, EXRLayerArtifact)):
             part, pinned_channels = self._resolve_input(value)
             self._update_metadata(part)
             self._populate_layers(part)
@@ -180,7 +184,7 @@ class DisplayEXR(SuccessFailureNode):
     async def aprocess(self) -> None:
         self._clear_execution_status()
 
-        value = self.get_parameter_value("part")
+        value = self.get_parameter_value("exr")
         if not isinstance(value, (EXRPartHeaderArtifact, EXRLayerArtifact)):
             self._set_status_results(was_successful=False, result_details="No EXR part or layer connected")
             return

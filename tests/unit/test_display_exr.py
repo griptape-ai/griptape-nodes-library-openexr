@@ -58,7 +58,7 @@ def _make_part(
 def test_node_instantiation():
     node = DisplayEXR("test_display_exr")
     param_names = [p.name for p in node.parameters]
-    assert "part" in param_names
+    assert "exr" in param_names
     assert "tone_mapping" in param_names
     assert "exposure" in param_names
     assert "layer_name" in param_names
