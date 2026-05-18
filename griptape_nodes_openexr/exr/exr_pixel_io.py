@@ -176,7 +176,7 @@ def load_layer_pixels(
         # slice from the current subimage — no thread pool, no full decode.
         pixels = inp.read_image(chbegin, chend, oiio.FLOAT)
         if pixels is None:
-            msg = f"read_image returned None for '{file_path}' part {part_index}"
+            msg = f"read_image returned None for '{file_path}' part {part_index}: {inp.geterror()}"
             raise RuntimeError(msg)
 
         pixels = np.asarray(pixels, dtype=np.float32)

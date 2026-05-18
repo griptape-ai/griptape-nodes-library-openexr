@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from unittest.mock import MagicMock
 
 import pytest
 
 from griptape_nodes_openexr.exr.exr_header_artifact import EXRLayerArtifact, EXRPartHeaderArtifact
-from griptape_nodes_openexr.exr.exr_types import EXRChannelInfo, EXRLayer, PixelType
+from griptape_nodes_openexr.exr.exr_types import EXRChannelInfo, EXRLayer, PixelType, StorageType
 from griptape_nodes_openexr.nodes.display_exr import DisplayEXR
 
 
@@ -32,9 +31,15 @@ def _make_layer(name: str, channel_names: list[str], start_index: int = 0) -> EX
     return EXRLayer(name=name, channels=channels)
 
 
-def _make_part(layers: list[EXRLayer], width: int = 1920, height: int = 1080) -> EXRPartHeaderArtifact:
+def _make_part(
+    layers: list[EXRLayer],
+    width: int = 1920,
+    height: int = 1080,
+    storage_type: StorageType = StorageType.SCANLINE_IMAGE,
+) -> EXRPartHeaderArtifact:
     header = MagicMock()
     header.chromaticities = None
+    header.storage_type = storage_type
     all_channels = [ch for layer in layers for ch in layer.channels]
     return EXRPartHeaderArtifact(
         file_path="/fake/test.exr",
@@ -183,3 +188,133 @@ def test_after_value_set_default_layer_name():
 
     child_names = [c.name for c in node._layers_group.children]
     assert "layer_default" in child_names
+
+
+# ---------------------------------------------------------------------------
+# EXRLayerArtifact input
+# ---------------------------------------------------------------------------
+
+
+def test_after_value_set_with_layer_artifact():
+    """Connecting an EXRLayerArtifact populates metadata from the parent part."""
+    node = DisplayEXR("test_layer_input")
+    layers = [
+        _make_layer("beauty", ["R", "G", "B", "A"], start_index=0),
+        _make_layer("depth", ["Z"], start_index=4),
+    ]
+    part = _make_part(layers, width=2048, height=1556)
+    layer_artifact = EXRLayerArtifact(part=part, layer=layers[0])
+
+    node.after_value_set(node._part_param, layer_artifact)
+
+    assert node.parameter_output_values.get("width") == 2048
+    assert node.parameter_output_values.get("height") == 1556
+    # Both layers still appear in the group
+    assert len(list(node._layers_group.children)) == 2
+
+
+def test_after_value_set_hides_layer_name_for_layer_input():
+    """layer_name property is hidden when an EXRLayerArtifact is connected."""
+    node = DisplayEXR("test_hide_layer_name")
+    layers = [_make_layer("beauty", ["R", "G", "B"])]
+    part = _make_part(layers)
+    layer_artifact = EXRLayerArtifact(part=part, layer=layers[0])
+
+    node.after_value_set(node._part_param, layer_artifact)
+
+    assert node._layer_name_param.hide is True
+
+
+def test_after_value_set_shows_layer_name_for_part_input():
+    """layer_name property is visible when an EXRPartHeaderArtifact is connected."""
+    node = DisplayEXR("test_show_layer_name")
+    # First connect a layer (hides the param)
+    layers = [_make_layer("beauty", ["R", "G", "B"])]
+    part = _make_part(layers)
+    layer_artifact = EXRLayerArtifact(part=part, layer=layers[0])
+    node.after_value_set(node._part_param, layer_artifact)
+    assert node._layer_name_param.hide is True
+
+    # Then switch to a part (should un-hide)
+    node.after_value_set(node._part_param, part)
+    assert node._layer_name_param.hide is False
+
+
+def test_resolve_input_returns_part_and_none_for_part_artifact():
+    node = DisplayEXR("test_resolve_part")
+    layers = [_make_layer("beauty", ["R", "G", "B"])]
+    part = _make_part(layers)
+
+    resolved_part, channels = node._resolve_input(part)
+
+    assert resolved_part is part
+    assert channels is None
+
+
+def test_resolve_input_returns_part_and_channels_for_layer_artifact():
+    node = DisplayEXR("test_resolve_layer")
+    layers = [_make_layer("beauty", ["R", "G", "B"])]
+    part = _make_part(layers)
+    layer_artifact = EXRLayerArtifact(part=part, layer=layers[0])
+
+    resolved_part, channels = node._resolve_input(layer_artifact)
+
+    assert resolved_part is part
+    assert channels == layers[0].channels
+
+
+# ---------------------------------------------------------------------------
+# Deep EXR detection
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_aprocess_raises_for_deep_scanline_exr():
+    """aprocess raises ValueError with a clear message for deep scanline EXRs."""
+    from unittest.mock import patch
+
+    node = DisplayEXR("test_deep_scanline")
+    layers = [_make_layer("", ["R", "G", "B"])]
+    part = _make_part(layers, storage_type=StorageType.DEEP_SCANLINE)
+
+    def _get(name):
+        return part if name == "part" else None
+
+    with patch.object(node, "get_parameter_value", side_effect=_get):
+        with pytest.raises(ValueError, match="deep EXR"):
+            await node.aprocess()
+
+
+@pytest.mark.asyncio
+async def test_aprocess_raises_for_deep_tiled_exr():
+    """aprocess raises ValueError with a clear message for deep tiled EXRs."""
+    from unittest.mock import patch
+
+    node = DisplayEXR("test_deep_tiled")
+    layers = [_make_layer("", ["R"])]
+    part = _make_part(layers, storage_type=StorageType.DEEP_TILED)
+
+    def _get(name):
+        return part if name == "part" else None
+
+    with patch.object(node, "get_parameter_value", side_effect=_get):
+        with pytest.raises(ValueError, match="DeepToFlat"):
+            await node.aprocess()
+
+
+@pytest.mark.asyncio
+async def test_aprocess_raises_for_deep_exr_from_layer_input():
+    """Deep EXR detection works even when the input is an EXRLayerArtifact."""
+    from unittest.mock import patch
+
+    node = DisplayEXR("test_deep_from_layer")
+    layers = [_make_layer("", ["R", "G", "B"])]
+    part = _make_part(layers, storage_type=StorageType.DEEP_SCANLINE)
+    layer_artifact = EXRLayerArtifact(part=part, layer=layers[0])
+
+    def _get(name):
+        return layer_artifact if name == "part" else None
+
+    with patch.object(node, "get_parameter_value", side_effect=_get):
+        with pytest.raises(ValueError, match="deep EXR"):
+            await node.aprocess()

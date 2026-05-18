@@ -1,9 +1,16 @@
-"""DisplayEXR node — tone-mapped composite preview of a single EXR part.
+"""DisplayEXR node — tone-mapped composite preview of a single EXR part or layer.
 
 Two-phase design:
 - after_value_set: populate metadata outputs and dynamic layer group immediately
-  when a part artifact is connected, with no pixel I/O.
+  when a part or layer artifact is connected, with no pixel I/O.
 - aprocess: load pixels, tone map, write PNG, publish ImageUrlArtifact.
+
+Accepts both EXRPartHeaderArtifact and EXRLayerArtifact as input:
+- Part: renders the layer selected by the layer_name property (or default composite).
+- Layer: renders that layer directly; layer_name property is hidden.
+
+Deep EXRs (deepscanline / deeptiled) are detected early and rejected with a
+clear message — they require a DeepToFlat node before display.
 """
 
 from __future__ import annotations
@@ -32,7 +39,7 @@ from griptape_nodes_openexr.exr.exr_pixel_io import (
     to_pil_rgb,
     tone_map,
 )
-from griptape_nodes_openexr.exr.exr_types import parse_channel_name
+from griptape_nodes_openexr.exr.exr_types import EXRChannelInfo, StorageType, parse_channel_name
 from griptape_nodes_openexr.exr.strategies.registry import get_strategy
 
 logger = logging.getLogger("griptape_nodes")
@@ -42,27 +49,27 @@ _DEFAULT_TONE_MAPPING = "simple"
 _DEFAULT_LAYER_LABEL = "default"
 _LAYER_PREFIX = "layer_"
 _MAX_PREVIEW_DIM = 2048
+_DEEP_STORAGE_TYPES = {StorageType.DEEP_SCANLINE, StorageType.DEEP_TILED}
 
 
 class DisplayEXR(ControlNode):
-    """Render a tone-mapped sRGB preview from an EXR part.
+    """Render a tone-mapped sRGB preview from an EXR part or layer.
 
-    Accepts an EXRPartHeaderArtifact, loads the requested layer (or the
-    default composite), applies tone mapping and exposure, and outputs a
-    PNG preview as an ImageUrlArtifact. Dynamic layer outputs expose each
-    layer as an EXRLayerArtifact for downstream nodes.
+    Accepts EXRPartHeaderArtifact (renders selected or default layer) or
+    EXRLayerArtifact (renders that layer directly). Deep EXRs are rejected
+    with a clear message pointing to a future DeepToFlat node.
     """
 
     def __init__(self, name: str, metadata: dict[Any, Any] | None = None) -> None:
         super().__init__(name, metadata)
 
-        # --- Input ---
+        # --- Input (accepts part or layer) ---
 
         self._part_param = Parameter(
             name="part",
             type="EXRPartHeaderArtifact",
-            input_types=["EXRPartHeaderArtifact"],
-            tooltip="EXR part descriptor to display",
+            input_types=["EXRPartHeaderArtifact", "EXRLayerArtifact"],
+            tooltip="EXR part or layer to display",
             allowed_modes={ParameterMode.INPUT},
         )
         self.add_parameter(self._part_param)
@@ -89,7 +96,7 @@ class DisplayEXR(ControlNode):
         self._layer_name_param = ParameterString(
             name="layer_name",
             default_value="",
-            tooltip="Layer to render. Empty string renders the default composite (top-level RGBA or first layer).",
+            tooltip="Layer to render. Empty string renders the default composite (top-level RGBA or first layer). Hidden when a layer is directly connected.",
             allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
         )
         self.add_parameter(self._layer_name_param)
@@ -109,7 +116,7 @@ class DisplayEXR(ControlNode):
             name="output",
             display_name="sRGB Preview",
             default_value=None,
-            tooltip="Tone-mapped sRGB preview of the EXR part",
+            tooltip="Tone-mapped sRGB preview of the EXR part or layer",
             allowed_modes={ParameterMode.OUTPUT},
             ui_options={"pulse_on_run": True},
         )
@@ -158,33 +165,45 @@ class DisplayEXR(ControlNode):
     # --- Lifecycle ---
 
     def after_value_set(self, parameter: Parameter, value: Any) -> None:
-        if parameter.name == "part" and isinstance(value, EXRPartHeaderArtifact):
-            self._update_metadata(value)
-            self._populate_layers(value)
+        if parameter.name == "part" and isinstance(value, (EXRPartHeaderArtifact, EXRLayerArtifact)):
+            part, pinned_channels = self._resolve_input(value)
+            self._update_metadata(part)
+            self._populate_layers(part)
+            self._layer_name_param.hide = pinned_channels is not None
         return super().after_value_set(parameter, value)
 
     async def aprocess(self) -> None:
-        part = self.get_parameter_value("part")
-        if not isinstance(part, EXRPartHeaderArtifact):
+        value = self.get_parameter_value("part")
+        if not isinstance(value, (EXRPartHeaderArtifact, EXRLayerArtifact)):
             return
+
+        part, pinned_channels = self._resolve_input(value)
+
+        if part.header.storage_type in _DEEP_STORAGE_TYPES:
+            msg = (
+                f"'{part.file_path}' part {part.part_index} is a deep EXR "
+                f"({part.header.storage_type.value}). "
+                "Flatten it with a DeepToFlat node before displaying."
+            )
+            raise ValueError(msg)
 
         self._update_metadata(part)
         self._populate_layers(part)
 
-        layer_name_raw = self.get_parameter_value("layer_name") or ""
-        layer_name = layer_name_raw if layer_name_raw else None
+        if pinned_channels is not None:
+            channels = pinned_channels
+        else:
+            layer_name_raw = self.get_parameter_value("layer_name") or ""
+            layer_name = layer_name_raw if layer_name_raw else None
+            strategy = get_strategy("nuke")
+            exr_data = scan_exr_header(part.file_path, strategy)
+            exr_part = exr_data.parts[part.part_index]
+            channels = resolve_layer_channels(exr_part, layer_name, part.file_path)
 
         tone_mapping_str = self.get_parameter_value("tone_mapping") or _DEFAULT_TONE_MAPPING
         exposure = float(self.get_parameter_value("exposure") or 0.0)
 
-        # Re-scan to get EXRPart (needed by resolve_layer_channels)
-        strategy = get_strategy("nuke")
-        exr_data = scan_exr_header(part.file_path, strategy)
-        exr_part = exr_data.parts[part.part_index]
-
-        channels = resolve_layer_channels(exr_part, layer_name, part.file_path)
         indices = [ch.channel_index for ch in channels]
-
         pixels = load_layer_pixels(part.file_path, part.part_index, indices)
 
         if exposure != 0.0:
@@ -203,6 +222,19 @@ class DisplayEXR(ControlNode):
         self.parameter_output_values["output"] = artifact
 
     # --- Private helpers ---
+
+    def _resolve_input(
+        self, value: EXRPartHeaderArtifact | EXRLayerArtifact
+    ) -> tuple[EXRPartHeaderArtifact, list[EXRChannelInfo] | None]:
+        """Extract the part and optional pinned channels from either artifact type.
+
+        Returns:
+            (part, None) for EXRPartHeaderArtifact — caller uses layer_name param.
+            (part, channels) for EXRLayerArtifact — caller uses channels directly.
+        """
+        if isinstance(value, EXRLayerArtifact):
+            return value.part, list(value.layer.channels)
+        return value, None
 
     def _update_metadata(self, part: EXRPartHeaderArtifact) -> None:
         self.parameter_output_values["part_name"] = part.name
