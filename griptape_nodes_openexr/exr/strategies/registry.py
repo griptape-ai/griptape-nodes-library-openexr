@@ -7,7 +7,7 @@ path). Configure it via Settings → OpenEXR in the UI.
 
 Third-party studios create their own JSON file with the same schema and
 set its path in that setting. Entries in external configs are merged with
-and can extend (but not replace without re-registering) the built-ins.
+and can extend or override the built-ins by reusing the same strategy name.
 """
 
 from __future__ import annotations

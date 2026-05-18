@@ -302,7 +302,7 @@ class ReadEXRHeader(SuccessFailureNode):
         self.parameter_output_values[self._channel_count_param.name] = 0
         self.parameter_output_values[self._compression_param.name] = ""
         self.parameter_output_values[self._storage_type_param.name] = ""
-        self.parameter_output_values[self._pixel_aspect_ratio_param.name] = 0.0
+        self.parameter_output_values[self._pixel_aspect_ratio_param.name] = 1.0
         self.parameter_output_values[self._data_window_param.name] = ""
         self.parameter_output_values[self._display_window_param.name] = ""
         self.parameter_output_values[self._time_code_param.name] = ""
