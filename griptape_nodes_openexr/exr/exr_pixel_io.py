@@ -25,6 +25,17 @@ from PIL import Image
 
 logger = logging.getLogger("griptape_nodes")
 
+# OIIO's thread pool crashes with SIGSEGV when initialized inside a forked or
+# async Python process (e.g. Griptape Nodes). Disabling it here prevents the
+# thread pool from being created at all. Single-threaded OIIO is safe in all
+# embedding contexts; multi-threaded can be re-enabled in a dedicated pipeline
+# environment by calling oiio.attribute("threads", 0) after import.
+try:
+    import OpenImageIO as _oiio  # type: ignore[import-not-found]
+    _oiio.attribute("threads", 1)
+except Exception:
+    pass
+
 # ---------------------------------------------------------------------------
 # Chromaticity → colorspace label
 # ---------------------------------------------------------------------------
@@ -117,8 +128,10 @@ def load_layer_pixels(
 ) -> np.ndarray:
     """Load specific channels from an EXR part into a float32 numpy array.
 
-    Only the requested channels are read — no full-image decode. Large EXRs
-    with many channels are handled efficiently.
+    Uses ImageInput.read_image with a channel range rather than ImageBuf so
+    that OIIO's thread pool is never involved. This avoids a SIGSEGV that
+    occurs when the thread pool is initialised inside a forked or async Python
+    process.
 
     Args:
         file_path: Absolute path to the EXR file.
@@ -138,37 +151,42 @@ def load_layer_pixels(
         msg = "channel_indices must not be empty"
         raise ValueError(msg)
 
-    buf = oiio.ImageBuf(file_path, part_index, 0)
-    if buf.has_error:
-        msg = f"Failed to open '{file_path}' subimage {part_index}: {buf.geterror()}"
+    inp = oiio.ImageInput.open(file_path)
+    if not inp:
+        msg = f"Failed to open '{file_path}': {oiio.geterror()}"
         raise RuntimeError(msg)
 
-    spec = buf.spec()
-    nchannels_total = spec.nchannels
+    try:
+        if not inp.seek_subimage(part_index, 0):
+            msg = f"Part index {part_index} not found in '{file_path}'"
+            raise RuntimeError(msg)
 
-    # Validate indices
-    invalid = [i for i in channel_indices if i < 0 or i >= nchannels_total]
-    if invalid:
-        msg = f"Channel indices {invalid} out of range (file has {nchannels_total} channels)"
-        raise ValueError(msg)
+        spec = inp.spec()
+        nchannels_total = spec.nchannels
 
-    chbegin = min(channel_indices)
-    chend = max(channel_indices) + 1
-    sub = oiio.ImageBufAlgo.channels(buf, tuple(range(chbegin, chend)))
-    if sub.has_error:
-        msg = f"Failed to extract channels {chbegin}:{chend}: {sub.geterror()}"
-        raise RuntimeError(msg)
+        invalid = [i for i in channel_indices if i < 0 or i >= nchannels_total]
+        if invalid:
+            msg = f"Channel indices {invalid} out of range (file has {nchannels_total} channels)"
+            raise ValueError(msg)
 
-    pixels = sub.get_pixels(oiio.FLOAT)  # (H, W, chend-chbegin)
-    if pixels is None:
-        msg = f"get_pixels returned None for '{file_path}'"
-        raise RuntimeError(msg)
+        chbegin = min(channel_indices)
+        chend = max(channel_indices) + 1
 
-    pixels = np.asarray(pixels, dtype=np.float32)
+        # read_image(chbegin, chend, format) reads only the requested channel
+        # slice from the current subimage — no thread pool, no full decode.
+        pixels = inp.read_image(chbegin, chend, oiio.FLOAT)
+        if pixels is None:
+            msg = f"read_image returned None for '{file_path}' part {part_index}"
+            raise RuntimeError(msg)
 
-    # Remap to only the requested indices within the sub-buffer
-    local_indices = [i - chbegin for i in channel_indices]
-    return pixels[:, :, local_indices]
+        pixels = np.asarray(pixels, dtype=np.float32)
+
+        # Remap from the [chbegin, chend) slice to the requested indices
+        local_indices = [i - chbegin for i in channel_indices]
+        return pixels[:, :, local_indices]
+
+    finally:
+        inp.close()
 
 
 # ---------------------------------------------------------------------------
