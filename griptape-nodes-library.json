@@ -41,6 +41,17 @@
         "icon": "file-search",
         "group": "load"
       }
+    },
+    {
+      "class_name": "DisplayEXR",
+      "file_path": "griptape_nodes_openexr/nodes/display_exr.py",
+      "metadata": {
+        "category": "exr",
+        "description": "Render a tone-mapped sRGB preview from an EXR part, with per-layer artifact outputs",
+        "display_name": "Display EXR",
+        "icon": "eye",
+        "group": "display"
+      }
     }
   ],
   "workflows": [],

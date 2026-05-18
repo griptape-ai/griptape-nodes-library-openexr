@@ -58,7 +58,7 @@ def _load_exr_part(file_path: str, part_index: int) -> EXRPart:
     return exr_data.parts[part_index]
 
 
-def _resolve_layer_channels(part: EXRPart, layer_name: str | None, file_path: str) -> list[EXRChannelInfo]:
+def resolve_layer_channels(part: EXRPart, layer_name: str | None, file_path: str) -> list[EXRChannelInfo]:
     """Return channels for the named layer, or the default composite if None."""
     if layer_name is not None:
         for layer in part.layers:
@@ -189,7 +189,7 @@ class EXRPreviewGenerator(BaseArtifactPreviewGenerator):
     async def attempt_generate_preview(self) -> str:
         part = _load_exr_part(self.source_file_location, self.params.part_index)
         layer = self.params.layer_name or None
-        channels = _resolve_layer_channels(part, layer, self.source_file_location)
+        channels = resolve_layer_channels(part, layer, self.source_file_location)
         indices = [ch.channel_index for ch in channels]
 
         pixels = load_layer_pixels(self.source_file_location, self.params.part_index, indices)
@@ -306,7 +306,7 @@ class EXRChannelPreviewGenerator(BaseArtifactPreviewGenerator):
     async def attempt_generate_preview(self) -> str:
         part = _load_exr_part(self.source_file_location, self.params.part_index)
         layer = self.params.layer_name or None
-        channels = _resolve_layer_channels(part, layer, self.source_file_location)
+        channels = resolve_layer_channels(part, layer, self.source_file_location)
         channel_info = self._find_channel(channels, self.params.channel_name)
 
         pixels = load_layer_pixels(
