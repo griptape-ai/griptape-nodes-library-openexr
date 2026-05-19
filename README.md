@@ -137,7 +137,7 @@ uv sync
 # Unit tests only (no EXR files required)
 uv run pytest tests/unit/
 
-# Full suite including integration tests
+# Full suite including integration tests (fixtures auto-generated on first run)
 uv run pytest tests/
 ```
 
@@ -150,7 +150,19 @@ uv run pyright
 
 ### Test Fixtures
 
-EXR fixtures live in `tests/data/`. The current set covers:
+EXR fixtures are generated locally and are not committed to the repository. To generate them manually:
+
+```bash
+make test/fixtures
+```
+
+The fixtures are also generated automatically the first time you run `pytest`. The `openexr` Python package (included in dev dependencies) is required:
+
+```bash
+uv sync --group dev
+```
+
+The fixture set covers:
 
 | File | Purpose |
 |---|---|
@@ -160,5 +172,5 @@ EXR fixtures live in `tests/data/`. The current set covers:
 | `tiled.exr` | Tiled image with `TileDescription` |
 | `overscan.exr` | Data window extends beyond display window (8px overscan) |
 | `custom_attributes.exr` | Chromaticities, software, and non-standard attributes |
-| `nuke_metadata.exr` | Written by Nuke 17 Write node |
+| `nuke_metadata.exr` | Nuke-style custom binary blob attribute (`nuke/node`) |
 | `legacy_multipart.exr` | Multi-part where part name encodes the layer name |

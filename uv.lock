@@ -305,6 +305,7 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "openexr" },
     { name = "pyright" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
@@ -320,6 +321,7 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "openexr", specifier = ">=3.3.0" },
     { name = "pyright", specifier = ">=1.1.396" },
     { name = "pytest" },
     { name = "pytest-asyncio", specifier = ">=0.21.0" },
@@ -650,6 +652,25 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/56/87/eb0abb4ef88ddb95b3c13149384c4c288f584f3be17d6a4f63f8c3e3c226/openai-2.28.0.tar.gz", hash = "sha256:bb7fdff384d2a787fa82e8822d1dd3c02e8cf901d60f1df523b7da03cbb6d48d", size = 670334, upload-time = "2026-03-13T19:56:27.306Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/c0/5a/df122348638885526e53140e9c6b0d844af7312682b3bde9587eebc28b47/openai-2.28.0-py3-none-any.whl", hash = "sha256:79aa5c45dba7fef84085701c235cf13ba88485e1ef4f8dfcedc44fc2a698fc1d", size = 1141218, upload-time = "2026-03-13T19:56:25.46Z" },
+]
+
+[[package]]
+name = "openexr"
+version = "3.4.11"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/36/7f/b172c42790a16179a8eb474c46fa30dacf788b6babb4604866b9fec791f6/openexr-3.4.11.tar.gz", hash = "sha256:c32233f4ffea51ca3fe05a3f0193b24bf21d7cab04a46c292badc7c9dfa60851", size = 25603203, upload-time = "2026-04-29T23:30:42.186Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/31/f0/3468e2024ca933206cea5d5cd75dcf1c9e5670fd5e1804020a174f6b72e7/openexr-3.4.11-cp312-cp312-macosx_10_15_universal2.whl", hash = "sha256:c11187b2b7818abcd4caae98939a192409de7032900305540f124ab02a122f2d", size = 2152344, upload-time = "2026-04-29T23:29:47.209Z" },
+    { url = "https://files.pythonhosted.org/packages/82/1e/7fea40898376d3713bd3d89cd383ab3d1bc52aa73d8a28fe82e88053ab7b/openexr-3.4.11-cp312-cp312-macosx_10_15_x86_64.whl", hash = "sha256:d0faef97e93a539a7de59b247c22b19037f3adbf17e61790f61cfd1ca631e68a", size = 1143126, upload-time = "2026-04-29T23:29:48.728Z" },
+    { url = "https://files.pythonhosted.org/packages/cc/43/96b15e406db7d2543b2c48a03ba8e3ac37a54e07b7ff81a679683362a174/openexr-3.4.11-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:9a16d54d1fb65cefd73189c7d7f2437385563a297129fefcae3601b31704b8ac", size = 1018180, upload-time = "2026-04-29T23:29:50.185Z" },
+    { url = "https://files.pythonhosted.org/packages/11/6d/973dc612d1dd47246612b6cb8028ccaff0439043470424ab2f72839a3086/openexr-3.4.11-cp312-cp312-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:a5baebe08bcf294feb50ceae07456302e3d87886b27cafcabe2e81dce3dc1214", size = 1163056, upload-time = "2026-04-29T23:29:51.72Z" },
+    { url = "https://files.pythonhosted.org/packages/ef/49/c41814516729d830443b5ba1f34742db33b6f430feebaa3285ac20c2a769/openexr-3.4.11-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:6b5f90d8ca262119e1ca626ee9ccc92bd1859cff38c19e3ba14c0353ec1352f9", size = 1293228, upload-time = "2026-04-29T23:29:53.454Z" },
+    { url = "https://files.pythonhosted.org/packages/81/c8/3d035c14e1064fdbdaaebfc29304b99bb975c0bc51ee1282a5c4af53203d/openexr-3.4.11-cp312-cp312-musllinux_1_2_aarch64.whl", hash = "sha256:c90d565b37c53e9b644ef454a02642cea6e3b3f22de7f638f4346cefd782b9ca", size = 2152016, upload-time = "2026-04-29T23:29:55.201Z" },
+    { url = "https://files.pythonhosted.org/packages/8e/38/2d4e0299d50d652f1888c514f5fdd62b2decff28c39e08ff65e5c6f83f18/openexr-3.4.11-cp312-cp312-musllinux_1_2_x86_64.whl", hash = "sha256:26a9fe29d65aa7e7086e9d89f3c416cc66c0fb2b211b3b98d1df95b25c276b5a", size = 2334046, upload-time = "2026-04-29T23:29:57.027Z" },
+    { url = "https://files.pythonhosted.org/packages/f0/04/08945b1abcf2f4b85f291723dc78216c21f21bfb76155e54e7d4f7433423/openexr-3.4.11-cp312-cp312-win_amd64.whl", hash = "sha256:65a3a5d456ce33f79fdaba5c9b5e28837164b6e672f3866bbd8c940c69abc1fb", size = 735276, upload-time = "2026-04-29T23:29:58.429Z" },
 ]
 
 [[package]]

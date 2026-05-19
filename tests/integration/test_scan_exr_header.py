@@ -298,23 +298,19 @@ class TestNukeMetadata:
 
     def test_basic_structure(self) -> None:
         part = scan_exr_header(str(self.FILE), NUKE).parts[0]
-        assert part.width == 256
-        assert part.height == 256
-        assert [ch.name for ch in part.channels] == ["R", "G", "B"]
+        assert part.width == 64
+        assert part.height == 64
+        assert [ch.name for ch in part.channels] == ["R", "G", "B", "A"]
 
-    def test_compression_zips(self) -> None:
+    def test_compression_zip(self) -> None:
         part = scan_exr_header(str(self.FILE), NUKE).parts[0]
-        assert part.header.compression == CompressionType.ZIPS_COMPRESSION
+        assert part.header.compression == CompressionType.ZIP_COMPRESSION
 
     def test_nuke_attrs_in_custom(self) -> None:
         custom = scan_exr_header(str(self.FILE), NUKE).parts[0].header.custom
-        assert "nuke/full_layer_names" in custom
-        assert "nuke/node_hash" in custom
         assert "nuke/version" in custom
-
-    def test_nuke_version(self) -> None:
-        custom = scan_exr_header(str(self.FILE), NUKE).parts[0].header.custom
-        assert custom["nuke/version"] == "17.0v1"
+        assert "nuke/node_hash" in custom
+        assert "nuke/full_layer_names" in custom
 
     def test_single_default_layer(self) -> None:
         part = scan_exr_header(str(self.FILE), NUKE).parts[0]

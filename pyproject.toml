@@ -18,7 +18,7 @@ build-backend = "hatchling.build"
 packages = ["griptape_nodes_openexr"]
 
 [dependency-groups]
-dev = ["pyright>=1.1.396", "pytest-asyncio>=0.21.0", "ruff>=0.8.0", "pytest"]
+dev = ["pyright>=1.1.396", "pytest-asyncio>=0.21.0", "ruff>=0.8.0", "pytest", "openexr>=3.3.0"]
 
 [tool.ruff]
 line-length = 120
