@@ -193,15 +193,16 @@ def test_to_pil_rgb_single_channel_broadcasts():
     pixels = np.full((10, 10, 1), 0.5, dtype=np.float32)
     img = to_pil_rgb(pixels)
     assert img.mode == "RGB"
-    r, g, b = img.split()
-    assert list(r.getdata()) == list(g.getdata()) == list(b.getdata())
+    arr = np.asarray(img)
+    assert np.array_equal(arr[:, :, 0], arr[:, :, 1])
+    assert np.array_equal(arr[:, :, 1], arr[:, :, 2])
 
 
 def test_to_pil_rgb_clamps_over_one():
     pixels = np.full((4, 4, 3), 5.0, dtype=np.float32)
     img = to_pil_rgb(pixels, apply_srgb=False)
-    # All values should be 255 after clip
-    assert all(v == 255 for v in img.getdata()[0])
+    arr = np.asarray(img)
+    assert np.all(arr == 255)
 
 
 # ---------------------------------------------------------------------------

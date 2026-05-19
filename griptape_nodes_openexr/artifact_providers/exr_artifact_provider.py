@@ -12,7 +12,7 @@ from griptape_nodes.retained_mode.managers.artifact_providers.base_artifact_prov
 # BaseArtifactMetadata was added in a newer engine version; import conditionally.
 try:
     from griptape_nodes.retained_mode.managers.artifact_providers.base_artifact_provider import (
-        BaseArtifactMetadata,
+        BaseArtifactMetadata,  # type: ignore[reportAttributeAccessIssue]
     )
 
     _MetadataBase = BaseArtifactMetadata
@@ -30,7 +30,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger("griptape_nodes")
 
 
-class EXRArtifactMetadata(_MetadataBase):
+class EXRArtifactMetadata(_MetadataBase):  # type: ignore[misc]
     """Metadata extracted from an EXR file header."""
 
     width: int
