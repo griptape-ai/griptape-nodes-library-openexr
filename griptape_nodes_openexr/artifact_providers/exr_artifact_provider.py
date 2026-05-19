@@ -14,9 +14,11 @@ try:
     from griptape_nodes.retained_mode.managers.artifact_providers.base_artifact_provider import (
         BaseArtifactMetadata,
     )
+
     _MetadataBase = BaseArtifactMetadata
 except ImportError:
     from pydantic import BaseModel
+
     _MetadataBase = BaseModel  # type: ignore[assignment,misc]
 
 if TYPE_CHECKING:
@@ -75,6 +77,7 @@ class EXRArtifactProvider(BaseArtifactProvider):
             EXRChannelPreviewGenerator,
             EXRPreviewGenerator,
         )
+
         return [EXRPreviewGenerator, EXRChannelPreviewGenerator]
 
     @classmethod

@@ -12,7 +12,6 @@ from griptape_nodes_openexr.artifact_providers.exr_preview_generators import (
     EXRPreviewParameters,
 )
 
-
 # ---------------------------------------------------------------------------
 # EXRPreviewGenerator class methods
 # ---------------------------------------------------------------------------

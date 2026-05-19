@@ -32,6 +32,7 @@ logger = logging.getLogger("griptape_nodes")
 # environment by calling oiio.attribute("threads", 0) after import.
 try:
     import OpenImageIO as _oiio  # type: ignore[import-not-found]
+
     _oiio.attribute("threads", 1)
 except Exception:
     pass
@@ -43,8 +44,8 @@ except Exception:
 # Known primary sets as (rx, ry, gx, gy, bx, by) rounded to 3 dp.
 # White point is not included — D65 is universal for all entries below.
 _KNOWN_PRIMARIES: list[tuple[tuple[float, ...], str]] = [
-    ((0.64, 0.33, 0.30, 0.60, 0.15, 0.06), "lin_srgb"),   # Rec.709 / sRGB
-    ((0.68, 0.32, 0.265, 0.69, 0.15, 0.06), "ACEScg"),     # AP1
+    ((0.64, 0.33, 0.30, 0.60, 0.15, 0.06), "lin_srgb"),  # Rec.709 / sRGB
+    ((0.68, 0.32, 0.265, 0.69, 0.15, 0.06), "ACEScg"),  # AP1
     ((0.7347, 0.2653, 0.0, 1.0, 0.0001, -0.077), "ACES2065-1"),  # AP0
     ((0.708, 0.292, 0.170, 0.797, 0.131, 0.046), "lin_rec2020"),
     ((0.63, 0.34, 0.31, 0.595, 0.155, 0.07), "lin_dcip3"),
@@ -219,8 +220,6 @@ def load_layer_pixels(
         nchannels_total = spec.nchannels
 
         if spec.deep:
-            # Must close before ImageBuf opens the same file
-            inp.close()
             return _load_deep_pixels(file_path, part_index, channel_indices)
 
         invalid = [i for i in channel_indices if i < 0 or i >= nchannels_total]
@@ -264,9 +263,11 @@ _HABLE_W = 11.2
 def _hable(x: np.ndarray) -> np.ndarray:
     # Compute in float64 to avoid overflow on large HDR values (float32 ~3.4e38).
     x = x.astype(np.float64)
-    return ((x * (_HABLE_A * x + _HABLE_C * _HABLE_B) + _HABLE_D * _HABLE_E) / (
-        x * (_HABLE_A * x + _HABLE_B) + _HABLE_D * _HABLE_F
-    ) - _HABLE_E / _HABLE_F).astype(np.float32)
+    return (
+        (x * (_HABLE_A * x + _HABLE_C * _HABLE_B) + _HABLE_D * _HABLE_E)
+        / (x * (_HABLE_A * x + _HABLE_B) + _HABLE_D * _HABLE_F)
+        - _HABLE_E / _HABLE_F
+    ).astype(np.float32)
 
 
 def tone_map(pixels: np.ndarray, method: str = "simple") -> np.ndarray:
@@ -304,7 +305,7 @@ def apply_exposure(pixels: np.ndarray, stops: float) -> np.ndarray:
     """
     if stops == 0.0:
         return pixels
-    return pixels * np.float32(2.0 ** stops)
+    return pixels * np.float32(2.0**stops)
 
 
 def apply_gamma(pixels: np.ndarray, gamma: float = 2.2) -> np.ndarray:

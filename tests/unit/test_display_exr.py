@@ -74,6 +74,7 @@ def test_node_instantiation():
 
 def test_tone_mapping_has_options_trait():
     from griptape_nodes.traits.options import Options
+
     node = DisplayEXR("test_tm")
     tm_param = next(p for p in node.parameters if p.name == "tone_mapping")
     options_traits = tm_param.find_elements_by_type(Options)
@@ -277,7 +278,6 @@ def test_load_layer_pixels_routes_deep_through_flatten():
     fake_pixels = np.zeros((4, 4, 3), dtype=np.float32)
 
     with patch("griptape_nodes_openexr.exr.exr_pixel_io._load_deep_pixels", return_value=fake_pixels) as mock_deep:
-
         mock_spec = MagicMock()
         mock_spec.deep = True
         mock_spec.nchannels = 3
@@ -289,6 +289,7 @@ def test_load_layer_pixels_routes_deep_through_flatten():
 
         with patch("OpenImageIO.ImageInput.open", return_value=mock_inp):
             from griptape_nodes_openexr.exr.exr_pixel_io import load_layer_pixels
+
             result = load_layer_pixels("/fake/deep.exr", 0, [0, 1, 2])
 
         mock_deep.assert_called_once_with("/fake/deep.exr", 0, [0, 1, 2])

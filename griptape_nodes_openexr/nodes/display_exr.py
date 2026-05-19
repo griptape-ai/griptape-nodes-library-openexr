@@ -29,9 +29,7 @@ from griptape_nodes.exe_types.param_types.parameter_int import ParameterInt
 from griptape_nodes.exe_types.param_types.parameter_string import ParameterString
 from griptape_nodes.traits.options import Options
 
-from griptape_nodes_openexr.artifact_providers.exr_preview_generators import resolve_layer_channels
 from griptape_nodes_openexr.exr.exr_header_artifact import EXRLayerArtifact, EXRPartHeaderArtifact
-from griptape_nodes_openexr.exr.exr_io import scan_exr_header
 from griptape_nodes_openexr.exr.exr_pixel_io import (
     apply_exposure,
     detect_colorspace,
@@ -40,7 +38,6 @@ from griptape_nodes_openexr.exr.exr_pixel_io import (
     tone_map,
 )
 from griptape_nodes_openexr.exr.exr_types import EXRChannelInfo, parse_channel_name
-from griptape_nodes_openexr.exr.strategies.registry import get_strategy
 
 logger = logging.getLogger("griptape_nodes")
 
@@ -55,8 +52,8 @@ class DisplayEXR(SuccessFailureNode):
     """Render a tone-mapped sRGB preview from an EXR part or layer.
 
     Accepts EXRPartHeaderArtifact (renders selected or default layer) or
-    EXRLayerArtifact (renders that layer directly). Deep EXRs are rejected
-    with a clear message pointing to a future DeepToFlat node.
+    EXRLayerArtifact (renders that layer directly). Deep EXRs are flattened
+    automatically via ImageBufAlgo.flatten() before tone-mapping.
     """
 
     def __init__(self, name: str, metadata: dict[Any, Any] | None = None) -> None:
@@ -200,10 +197,7 @@ class DisplayEXR(SuccessFailureNode):
             else:
                 layer_name_raw = self.get_parameter_value("layer_name") or ""
                 layer_name = layer_name_raw if layer_name_raw else None
-                strategy = get_strategy("nuke")
-                exr_data = scan_exr_header(part.file_path, strategy)
-                exr_part = exr_data.parts[part.part_index]
-                channels = resolve_layer_channels(exr_part, layer_name, part.file_path)
+                channels = self._resolve_layer_channels(part, layer_name)
 
             tone_mapping_str = self.get_parameter_value("tone_mapping") or _DEFAULT_TONE_MAPPING
             exposure = float(self.get_parameter_value("exposure") or 0.0)
@@ -238,6 +232,37 @@ class DisplayEXR(SuccessFailureNode):
 
     # --- Private helpers ---
 
+    def _resolve_layer_channels(self, part: EXRPartHeaderArtifact, layer_name: str | None) -> list[EXRChannelInfo]:
+        """Return channels for the named layer, or the default composite if None.
+
+        Uses the pre-parsed layers already stored in the artifact, matching
+        the strategy that was applied upstream rather than re-scanning the file.
+        """
+        if layer_name is not None:
+            for layer in part.layers:
+                if layer.name == layer_name:
+                    return layer.channels
+            available = [layer.name or "(default)" for layer in part.layers]
+            msg = (
+                f"Layer '{layer_name}' not found in part {part.part_index} of '{part.file_path}'. "
+                f"Available: {', '.join(available)}"
+            )
+            raise ValueError(msg)
+
+        # Default: top-level RGBA channels, or first layer
+        rgba = [
+            ch
+            for ch in part.channels
+            if parse_channel_name(ch.name).layer_name == ""
+            and parse_channel_name(ch.name).channel_name.upper() in ("R", "G", "B", "A")
+        ]
+        if rgba:
+            return rgba
+        if part.layers:
+            return part.layers[0].channels
+        msg = f"No RGBA or layer channels found in part {part.part_index} of '{part.file_path}'"
+        raise ValueError(msg)
+
     def _resolve_input(
         self, value: EXRPartHeaderArtifact | EXRLayerArtifact
     ) -> tuple[EXRPartHeaderArtifact, list[EXRChannelInfo] | None]:
@@ -255,9 +280,7 @@ class DisplayEXR(SuccessFailureNode):
         self.parameter_output_values["part_name"] = part.name
         self.parameter_output_values["width"] = part.width
         self.parameter_output_values["height"] = part.height
-        colorspace = detect_colorspace(
-            part.file_path, part.part_index, part.header.chromaticities
-        )
+        colorspace = detect_colorspace(part.file_path, part.part_index, part.header.chromaticities)
         self.parameter_output_values["detected_colorspace"] = colorspace
 
     def _populate_layers(self, part: EXRPartHeaderArtifact) -> None:

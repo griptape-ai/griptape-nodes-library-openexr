@@ -40,14 +40,10 @@ def test_config_key_prefix():
 
 
 def test_preview_format_config_key():
-    assert (
-        EXRArtifactProvider.get_preview_format_config_key()
-        == "artifacts.exr.preview_generation.preview_format"
-    )
+    assert EXRArtifactProvider.get_preview_format_config_key() == "artifacts.exr.preview_generation.preview_format"
 
 
 def test_preview_generator_config_key():
     assert (
-        EXRArtifactProvider.get_preview_generator_config_key()
-        == "artifacts.exr.preview_generation.preview_generator"
+        EXRArtifactProvider.get_preview_generator_config_key() == "artifacts.exr.preview_generation.preview_generator"
     )

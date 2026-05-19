@@ -2,11 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
-
 import numpy as np
-import pytest
-from PIL import Image
 
 from griptape_nodes_openexr.exr.exr_pixel_io import (
     _chromaticities_to_colorspace,
@@ -17,7 +13,6 @@ from griptape_nodes_openexr.exr.exr_pixel_io import (
     to_pil_rgb,
     tone_map,
 )
-
 
 # ---------------------------------------------------------------------------
 # Chromaticity label mapping

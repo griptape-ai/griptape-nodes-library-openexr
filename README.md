@@ -40,6 +40,32 @@ Dynamic groups are also populated after scan:
 - **Layers** - one `EXRLayerArtifact` per layer, labelled `beauty (R, G, B, A)`
 - **Channels** - one output per raw channel with name, pixel type, and sampling
 
+### Display EXR
+
+Renders a tone-mapped sRGB preview from an EXR part or layer. No pixel data is stored — the preview is written as a PNG to the project file location and exposed as an `ImageUrlArtifact`.
+
+**Inputs**
+
+| Parameter | Description |
+|---|---|
+| `exr` | `EXRPartHeaderArtifact` or `EXRLayerArtifact` to render |
+| `tone_mapping` | Tone mapping method: `simple` (x/(1+x)), `reinhard`, or `filmic` (Hable/Uncharted2) |
+| `exposure` | Exposure adjustment in stops before tone mapping (slider, −10 to +10) |
+| `layer_name` | Layer to render. Empty renders the default composite (top-level RGBA or first layer). Hidden when an `EXRLayerArtifact` is connected directly. |
+
+**Outputs**
+
+| Parameter | Type | Description |
+|---|---|---|
+| `output` | `ImageUrlArtifact` | Tone-mapped sRGB preview as PNG |
+| `part_name` | `str` | Part name (empty for unnamed parts) |
+| `width` / `height` | `int` | Image dimensions in pixels |
+| `detected_colorspace` | `str` | Colorspace from `oiio:ColorSpace` or chromaticities, e.g. `lin_srgb`, `ACEScg`, or `unknown` |
+
+A **Layers** group is also populated dynamically: one `EXRLayerArtifact` output per layer, ready to wire into another Display EXR node or any other node that accepts `EXRLayerArtifact`.
+
+Deep EXRs (`deepscanline` / `deeptiled`) are flattened automatically via `ImageBufAlgo.flatten()` before tone-mapping. The status display will show `(deep, flattened)` when this occurs.
+
 ## Channel Style
 
 The `channel_style` dropdown controls how channel names are parsed and grouped into layers. Two styles are built in:

@@ -50,10 +50,7 @@ def _default_strategy():
 def _load_exr_part(file_path: str, part_index: int) -> EXRPart:
     exr_data = scan_exr_header(file_path, _default_strategy())
     if part_index < 0 or part_index >= len(exr_data.parts):
-        msg = (
-            f"Part index {part_index} out of range for '{file_path}' "
-            f"({len(exr_data.parts)} part(s))"
-        )
+        msg = f"Part index {part_index} out of range for '{file_path}' ({len(exr_data.parts)} part(s))"
         raise ValueError(msg)
     return exr_data.parts[part_index]
 
@@ -65,10 +62,7 @@ def resolve_layer_channels(part: EXRPart, layer_name: str | None, file_path: str
             if layer.name == layer_name:
                 return layer.channels
         available = [layer.name or "(default)" for layer in part.layers]
-        msg = (
-            f"Layer '{layer_name}' not found in part {part.index} of '{file_path}'. "
-            f"Available: {', '.join(available)}"
-        )
+        msg = f"Layer '{layer_name}' not found in part {part.index} of '{file_path}'. Available: {', '.join(available)}"
         raise ValueError(msg)
 
     # Default: top-level RGBA, or first layer
@@ -309,9 +303,7 @@ class EXRChannelPreviewGenerator(BaseArtifactPreviewGenerator):
         channels = resolve_layer_channels(part, layer, self.source_file_location)
         channel_info = self._find_channel(channels, self.params.channel_name)
 
-        pixels = load_layer_pixels(
-            self.source_file_location, self.params.part_index, [channel_info.channel_index]
-        )
+        pixels = load_layer_pixels(self.source_file_location, self.params.part_index, [channel_info.channel_index])
         # Shape is (H, W, 1) — reduce to (H, W)
         pixels_2d = pixels[:, :, 0]
 
@@ -342,8 +334,5 @@ class EXRChannelPreviewGenerator(BaseArtifactPreviewGenerator):
             if parse_channel_name(ch.name).channel_name == channel_name:
                 return ch
         available = [parse_channel_name(ch.name).channel_name for ch in channels]
-        msg = (
-            f"Channel '{channel_name}' not found. "
-            f"Available: {', '.join(available)}"
-        )
+        msg = f"Channel '{channel_name}' not found. Available: {', '.join(available)}"
         raise ValueError(msg)

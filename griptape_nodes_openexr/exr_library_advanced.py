@@ -28,9 +28,7 @@ class OpenEXRLibraryAdvanced(AdvancedNodeLibrary):
 
         from griptape_nodes_openexr.artifact_providers.exr_artifact_provider import EXRArtifactProvider
 
-        result = GriptapeNodes.handle_request(
-            RegisterArtifactProviderRequest(provider_class=EXRArtifactProvider)
-        )
+        result = GriptapeNodes.handle_request(RegisterArtifactProviderRequest(provider_class=EXRArtifactProvider))
         if isinstance(result, RegisterArtifactProviderResultFailure):
             logger.warning(
                 "OpenEXR library: Failed to register EXRArtifactProvider: %s",
