@@ -9,7 +9,7 @@ as advisory — a hook for future OCIO integration rather than a guarantee.
 Tone mapping converts scene-linear float32 data to a displayable [0, 1]
 range. Three operators are provided in ascending quality order:
   simple   — per-channel x/(1+x), fastest, hue-shifting under saturation
-  reinhard — per-channel Reinhard, slightly better highlight roll-off
+  reinhard — extended Reinhard with white point w=4.0; maps w → 1.0, rolls off highlights faster than simple
   filmic   — Hable/Uncharted2 approximation, best hue preservation
 
 All pixel arrays are float32 (H, W, C) or (H, W) for single-channel.
@@ -275,7 +275,7 @@ def tone_map(pixels: np.ndarray, method: str = "simple") -> np.ndarray:
 
     Args:
         pixels: float32 array, any shape. Negative values are clipped to 0 first.
-        method: "simple" | "reinhard" | "filmic"
+        method: "simple" | "reinhard" | "filmic". Reinhard uses white point w=4.0.
 
     Returns:
         float32 array of same shape, values in [0, 1].
@@ -284,7 +284,9 @@ def tone_map(pixels: np.ndarray, method: str = "simple") -> np.ndarray:
 
     match method:
         case "reinhard":
-            return x / (1.0 + x)
+            # Extended Reinhard: x*(1+x/w²)/(1+x) maps the white point w to exactly 1.0
+            w = 4.0
+            return np.minimum((x * (1.0 + x / (w * w))) / (1.0 + x), 1.0).astype(np.float32)
         case "filmic":
             white = _hable(np.full(1, _HABLE_W, dtype=np.float32))
             return np.clip(_hable(x * 2.0) / white, 0.0, 1.0)

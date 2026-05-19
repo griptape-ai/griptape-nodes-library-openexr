@@ -43,6 +43,9 @@ from griptape_nodes_openexr.exr.exr_types import EXRChannelInfo, EXRPart, parse_
 from griptape_nodes_openexr.exr.strategies.registry import get_strategy
 
 
+_PILLOW_FORMAT: dict[str, str] = {"jpg": "JPEG", "png": "PNG", "webp": "WEBP"}
+
+
 def _default_strategy():
     return get_strategy("nuke")
 
@@ -195,7 +198,7 @@ class EXRPreviewGenerator(BaseArtifactPreviewGenerator):
         img = to_pil_rgb(pixels, self.params.max_width, self.params.max_height)
 
         buf = BytesIO()
-        img.save(buf, format=self.preview_format.upper())
+        img.save(buf, format=_PILLOW_FORMAT.get(self.preview_format, self.preview_format.upper()))
         return _write_preview(
             self.destination_preview_directory,
             self.destination_preview_file_name,
@@ -317,7 +320,7 @@ class EXRChannelPreviewGenerator(BaseArtifactPreviewGenerator):
         img = to_pil_gray(pixels_2d, self.params.max_width, self.params.max_height)
 
         buf = BytesIO()
-        img.save(buf, format=self.preview_format.upper())
+        img.save(buf, format=_PILLOW_FORMAT.get(self.preview_format, self.preview_format.upper()))
         return _write_preview(
             self.destination_preview_directory,
             self.destination_preview_file_name,

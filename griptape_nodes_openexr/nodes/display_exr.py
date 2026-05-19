@@ -16,6 +16,7 @@ ImageBufAlgo.flatten() before tone-mapping.
 from __future__ import annotations
 
 import logging
+import re
 from io import BytesIO
 from typing import Any
 
@@ -287,18 +288,24 @@ class DisplayEXR(SuccessFailureNode):
         for child in list(self._layers_group.children):
             self._layers_group.remove_child(child)
 
+        seen_keys: set[str] = set()
         for layer in part.layers:
             layer_artifact = EXRLayerArtifact(part=part, layer=layer)
             layer_label = layer.name or _DEFAULT_LAYER_LABEL
             short_names = [parse_channel_name(ch.name).channel_name for ch in layer.channels]
             display = f"{layer_label} ({', '.join(short_names)})"
 
+            # Sanitize for use as a parameter name key; keep display_name human-readable
+            key = re.sub(r"[^a-zA-Z0-9_]", "_", layer_label)
+            if key in seen_keys:
+                key = f"{key}_{len(seen_keys)}"
+            seen_keys.add(key)
+
             param = Parameter(
-                name=f"{_LAYER_PREFIX}{layer_label}",
+                name=f"{_LAYER_PREFIX}{key}",
                 display_name=display,
-                type="str",
+                type="EXRLayerArtifact",
                 output_type="EXRLayerArtifact",
-                default_value=layer_label,
                 tooltip=f"Layer '{layer_label}' with channels: {', '.join(short_names)}",
                 allowed_modes={ParameterMode.PROPERTY, ParameterMode.OUTPUT},
                 settable=False,
