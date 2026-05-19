@@ -42,7 +42,6 @@ from griptape_nodes_openexr.exr.exr_pixel_io import (
 from griptape_nodes_openexr.exr.exr_types import EXRChannelInfo, EXRPart, parse_channel_name
 from griptape_nodes_openexr.exr.strategies.registry import get_strategy
 
-
 _PILLOW_FORMAT: dict[str, str] = {"jpg": "JPEG", "png": "PNG", "webp": "WEBP"}
 
 
