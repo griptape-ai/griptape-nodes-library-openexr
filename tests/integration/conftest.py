@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-_DATA_DIR = Path(__file__).parent / "data"
+_DATA_DIR = Path(__file__).parents[1] / "data"
 _MARKER = _DATA_DIR / "single_part_rgba.exr"
 
 
@@ -18,7 +18,7 @@ def ensure_fixtures() -> None:
         return
 
     result = subprocess.run(
-        [sys.executable, str(Path(__file__).parent / "generate_fixtures.py")],
+        [sys.executable, str(Path(__file__).parents[1] / "generate_fixtures.py")],
         check=False,
     )
     if result.returncode != 0:

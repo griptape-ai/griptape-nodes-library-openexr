@@ -193,7 +193,7 @@ class ReadEXRHeader(SuccessFailureNode):
             self._custom_attributes_param = ParameterString(
                 name="custom_attributes",
                 display_name="Custom Attributes",
-                default_value="",
+                default_value="{}",
                 tooltip="Non-standard header attributes as JSON",
                 allowed_modes={ParameterMode.OUTPUT},
             )
