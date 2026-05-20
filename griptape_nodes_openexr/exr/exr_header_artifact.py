@@ -35,7 +35,6 @@ class EXRPartHeaderArtifact:
     """
 
     file_path: str
-    part_index: int
     name: str
     width: int
     height: int

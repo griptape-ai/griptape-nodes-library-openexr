@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+import pathlib
 from typing import Any
 
 from griptape_nodes.exe_types.core_types import (
@@ -330,10 +331,9 @@ class ReadEXRHeader(SuccessFailureNode):
             return
 
         try:
-            exr_data = scan_exr_header(file_path, strategy)
+            exr_data = scan_exr_header(pathlib.Path(file_path), strategy)
         except (ValueError, RuntimeError) as e:
             logger.error("ReadEXRHeader '%s': Failed to scan '%s': %s", self.name, file_path, e)
-            return
 
         self._cached_exr_data = exr_data
 
@@ -412,11 +412,11 @@ class ReadEXRHeader(SuccessFailureNode):
             artifact = self._build_part_artifact(file_path, part)
             display = self._part_display_name(part, is_multi=True)
             param = Parameter(
-                name=f"{_PART_PREFIX}{part.index}",
+                name=f"{_PART_PREFIX}{part.name}",
                 display_name=display,
                 type="EXRPartHeaderArtifact",
                 output_type="EXRPartHeaderArtifact",
-                tooltip=f"Descriptor for part {part.index} ({part.width}×{part.height})",
+                tooltip=f"Descriptor for part {part.name} ({part.width}×{part.height})",
                 allowed_modes={ParameterMode.OUTPUT},
                 settable=False,
             )
@@ -430,14 +430,14 @@ class ReadEXRHeader(SuccessFailureNode):
 
         for part in exr_data.parts:
             part_artifact = self._build_part_artifact(file_path, part)
-            prefix = f"p{part.index}_" if is_multi else ""
+            prefix = f"p{part.name}_" if is_multi else ""
 
             for layer in part.layers:
                 layer_artifact = EXRLayerArtifact(part=part_artifact, layer=layer)
                 key = f"{prefix}{layer.name or _DEFAULT_LAYER_LABEL}"
                 # Deduplicate in case of edge cases
                 if key in seen_keys:
-                    key = f"{key}_{part.index}"
+                    key = f"{key}_{part.name}"
                 seen_keys.add(key)
 
                 display = self._layer_display_name(layer)
@@ -459,9 +459,9 @@ class ReadEXRHeader(SuccessFailureNode):
         is_multi = len(exr_data.parts) > 1
 
         for part in exr_data.parts:
-            prefix = f"p{part.index}_" if is_multi else ""
+            prefix = f"p{part.name}_" if is_multi else ""
             for ch in part.channels:
-                key = f"{prefix}{ch.channel_index}"
+                key = f"{prefix}{ch.name}"
                 sampling = "" if (ch.x_sampling == 1 and ch.y_sampling == 1) else f" [{ch.x_sampling}×{ch.y_sampling}]"
                 display = f"{ch.name} ({ch.pixel_type.value}{sampling})"
                 param = Parameter(
@@ -482,7 +482,6 @@ class ReadEXRHeader(SuccessFailureNode):
     def _build_part_artifact(self, file_path: str, part: EXRPart) -> EXRPartHeaderArtifact:
         return EXRPartHeaderArtifact(
             file_path=file_path,
-            part_index=part.index,
             name=part.header.name,
             width=part.width,
             height=part.height,
@@ -492,7 +491,7 @@ class ReadEXRHeader(SuccessFailureNode):
         )
 
     def _part_display_name(self, part: EXRPart, *, is_multi: bool) -> str:
-        label = f"Part {part.index + 1}" if is_multi else "Single Part"
+        label = f"Part {part.name}" if is_multi else "Single Part"
         if part.header.name:
             return f"{label}: {part.header.name}"
         return label

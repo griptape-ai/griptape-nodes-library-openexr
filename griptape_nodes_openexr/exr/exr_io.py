@@ -1,19 +1,18 @@
-"""OIIO-based EXR header scanning.
+"""OpenEXR-based EXR header scanning.
 
 Two-phase design:
 - scan_exr_header(): reads headers only, no pixel I/O - fast for UI path
-- Pixel loading is intentionally out of scope; downstream nodes call OIIO directly
-
-All OIIO APIs used here (ImageInput, seek_subimage, spec, extra_attribs, tile_width)
-are stable across OIIO 2.3+ and 3.x (VFX Reference Platform 2022 onwards).
+- Pixel loading is intentionally out of scope; downstream nodes call OpenImageIO directly
 """
 
 from __future__ import annotations
 
 import logging
+import pathlib
 from typing import TYPE_CHECKING, Any
 
-import OpenImageIO as oiio  # type: ignore[import-not-found]
+import numpy as np
+import OpenEXR
 
 from griptape_nodes_openexr.exr.exr_types import (
     _ATTR_CAP_DATE,
@@ -21,29 +20,39 @@ from griptape_nodes_openexr.exr.exr_types import (
     _ATTR_CHUNK_COUNT,
     _ATTR_COMMENTS,
     _ATTR_COMPRESSION,
+    _ATTR_DATA_WINDOW,
+    _ATTR_DISPLAY_WINDOW,
     _ATTR_LINE_ORDER,
-    _ATTR_NAME,
     _ATTR_OWNER,
     _ATTR_PIXEL_ASPECT_RATIO,
     _ATTR_SCREEN_WINDOW_CENTER,
     _ATTR_SCREEN_WINDOW_WIDTH,
     _ATTR_SOFTWARE,
+    _ATTR_STORAGE_TYPE,
+    _ATTR_TILE_DESCRIPTION,
     _ATTR_TIME_CODE,
+    _EXR_COMPRESSION_MAP,
+    _EXR_LEVEL_MODE_MAP,
+    _EXR_LEVEL_ROUNDING_MODE_MAP,
+    _EXR_LINE_ORDER_MAP,
+    _EXR_PIXEL_TYPE_MAP,
+    _EXR_STORAGE_TYPE_MAP,
     _HEADER_SKIP_ATTRS,
-    _OIIO_COMPRESSION_MAP,
-    _OIIO_LINE_ORDER_MAP,
-    _OIIO_PIXEL_TYPE_MAP,
     Chromaticities,
+    CompressionType,
     EXRChannelInfo,
     EXRData,
     EXRHeader,
     EXRPart,
+    LevelModeType,
+    LevelRoundingModeType,
+    LineOrderType,
+    PixelType,
     StorageType,
     TileDescription,
     WindowCoordinates,
     _convert_attribute_value,
     _format_time_code,
-    _map_oiio_string,
 )
 
 if TYPE_CHECKING:
@@ -52,7 +61,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger("griptape_nodes")
 
 
-def scan_exr_header(file_path: str, strategy: ChannelGroupingStrategy) -> EXRData:
+def scan_exr_header(file_path: pathlib.Path, strategy: ChannelGroupingStrategy) -> EXRData:
     """Scan an EXR file's headers without loading pixel data.
 
     Opens the file, iterates all parts via OIIO subimage seeking, and builds
@@ -70,122 +79,104 @@ def scan_exr_header(file_path: str, strategy: ChannelGroupingStrategy) -> EXRDat
         ValueError: If file_path is empty or the file has no readable parts
         RuntimeError: If OIIO cannot open the file
     """
-    if not file_path:
-        msg = "file_path must not be empty"
-        raise ValueError(msg)
-
-    inp = oiio.ImageInput.open(file_path)
-    if not inp:
-        msg = f"Failed to open EXR file '{file_path}': {oiio.geterror()}"
-        raise RuntimeError(msg)
-
     try:
-        parts: list[EXRPart] = []
-        subimage_idx = 0
-
-        while inp.seek_subimage(subimage_idx, 0):
-            spec = inp.spec()
-            channels = _build_channel_list(spec)
-
-            if not channels:
-                msg = f"EXR part {subimage_idx} has no channels: {file_path}"
-                raise ValueError(msg)
-
-            header = _build_header_from_spec(spec)
-            data_win = header.data_window
-            width = data_win.xmax - data_win.xmin + 1
-            height = data_win.ymax - data_win.ymin + 1
-
-            parts.append(
-                EXRPart(
-                    channels=channels,
-                    layers=strategy.group_into_layers(channels),
-                    header=header,
-                    index=subimage_idx,
-                    width=width,
-                    height=height,
-                )
-            )
-            subimage_idx += 1
-
-        if not parts:
-            msg = f"EXR file has no parts: {file_path}"
+        if not file_path:
+            msg = "file_path must not be empty"
             raise ValueError(msg)
 
-        strategy.postprocess_parts(parts)
+        if not file_path.exists():
+            msg = "file_path does not exist"
+            raise ValueError(msg)
+
+        # Parse the EXR Parts
+        parts: list[EXRPart] = []
+        with OpenEXR.File(str(file_path)) as exr_file:
+            part: OpenEXR.Part = OpenEXR.Part()
+            for part in exr_file.parts:
+                # Gather channel info for the channels in this part.
+                channels = _build_channel_list(exr_file.channels(part.part_index))
+                header = _build_header(part, part.header)
+
+                parts.append(
+                    EXRPart(
+                        name=part.name(),
+                        width=part.width(),
+                        height=part.height(),
+                        layers=[],
+                        header=header,
+                        channels=channels,
+                    )
+                )
         return EXRData(parts=parts)
+    except:
+        logger.exception('Error parsing EXR')
 
-    finally:
-        inp.close()
 
-
-def _build_channel_list(spec: Any) -> list[EXRChannelInfo]:
-    """Build channel metadata list from an OIIO ImageSpec."""
-    channels: list[EXRChannelInfo] = []
-    for ch_idx in range(spec.nchannels):
-        ch_name = spec.channelnames[ch_idx]
-        ch_format = str(spec.channelformat(ch_idx))
-        pixel_type = _map_oiio_string(_OIIO_PIXEL_TYPE_MAP, ch_format, "pixel type")
-        channels.append(
+def _build_channel_list(exr_channels: dict[str, OpenEXR.Channel]) -> list[EXRChannelInfo]:
+    """Build channel metadata list from an OpenEXR's Part Channels."""
+    result: list[EXRChannelInfo] = []
+    for channel_name, exr_channel in exr_channels.items():
+        result.append(
             EXRChannelInfo(
-                name=ch_name,
-                pixel_type=pixel_type,
-                channel_index=ch_idx,
-                x_sampling=1,
-                y_sampling=1,
+                name=channel_name,
+                pixel_type=_EXR_PIXEL_TYPE_MAP.get(exr_channel.type(), PixelType.FLOAT),
+                x_sampling=exr_channel.xSampling,
+                y_sampling=exr_channel.ySampling,
             )
         )
-    return channels
+    return result
 
 
-def _build_header_from_spec(spec: Any) -> EXRHeader:
-    """Build an EXRHeader from an OIIO ImageSpec.
+def _build_header(part: OpenEXR.Part, header: dict) -> EXRHeader:
+    """Build an EXRHeader from OpenEXR header dictionary
 
     Extracts all required and optional standard EXR attributes. Non-standard
     attributes not covered by typed fields land in EXRHeader.custom.
     """
-    data_window = WindowCoordinates(
-        xmin=spec.x,
-        ymin=spec.y,
-        xmax=spec.x + spec.width - 1,
-        ymax=spec.y + spec.height - 1,
+    # DataWindow
+    exr_data_window = _require_exr_attribute(header, _ATTR_DATA_WINDOW)
+    data_window = _extract_window_coordinates(exr_data_window)
+
+    # DisplayWindow
+    exr_display_window = _require_exr_attribute(header, _ATTR_DISPLAY_WINDOW)
+    display_window = _extract_window_coordinates(exr_display_window)
+
+    # Compression
+    exr_compression = _require_exr_attribute(header, _ATTR_COMPRESSION)
+    compression: CompressionType = _EXR_COMPRESSION_MAP.get(exr_compression, CompressionType.NO_COMPRESSION)
+
+    # Line Order
+    exr_line_order = _require_exr_attribute(header, _ATTR_LINE_ORDER)
+    line_order: LineOrderType = _EXR_LINE_ORDER_MAP.get(exr_line_order, LineOrderType.INCREASING_Y)
+
+    # Storage Type (scanline/tiled)
+    exr_storage_type = _require_exr_attribute(header, _ATTR_STORAGE_TYPE)
+    storage_type = _EXR_STORAGE_TYPE_MAP.get(exr_storage_type, StorageType.SCANLINE_IMAGE)
+    tile_description = (
+        _extract_tile_description(header) if storage_type in (StorageType.TILED_IMAGE, StorageType.DEEP_TILED) else None
     )
-    display_window = WindowCoordinates(
-        xmin=spec.full_x,
-        ymin=spec.full_y,
-        xmax=spec.full_x + spec.full_width - 1,
-        ymax=spec.full_y + spec.full_height - 1,
-    )
 
-    comp_str = _require_string_attribute(spec, _ATTR_COMPRESSION)
-    compression = _map_oiio_string(_OIIO_COMPRESSION_MAP, comp_str, "compression")
+    screen_center = _extract_screen_window_center(header)
+    screen_width = _require_exr_attribute(header, _ATTR_SCREEN_WINDOW_WIDTH)
+    pixel_aspect = _require_exr_attribute(header, _ATTR_PIXEL_ASPECT_RATIO)
 
-    lo_str = _require_string_attribute(spec, _ATTR_LINE_ORDER)
-    line_order = _map_oiio_string(_OIIO_LINE_ORDER_MAP, lo_str, "line order")
-
-    storage_type = _detect_storage_type(spec)
-    tile_description = _extract_tile_description(spec) if spec.tile_width > 0 else None
-
-    screen_center = _extract_screen_window_center(spec)
-    screen_width = spec.get_float_attribute(_ATTR_SCREEN_WINDOW_WIDTH, 1.0)
-    pixel_aspect = spec.get_float_attribute(_ATTR_PIXEL_ASPECT_RATIO, 1.0)
-
-    part_name = spec.get_string_attribute(_ATTR_NAME, "")
-    chunk_count_val = spec.get_int_attribute(_ATTR_CHUNK_COUNT, -1)
+    part_name = part.name()
+    # TODO(DH): The spec states chunkCount is required for multipart/deep EXRs but be lenient for now
+    chunk_count_val = _optional_exr_attribute(header, _ATTR_CHUNK_COUNT, -1)
     chunk_count = chunk_count_val if chunk_count_val >= 0 else None
 
-    chromaticities = _extract_chromaticities(spec)
-    time_code = _extract_time_code(spec)
+    chromaticities = _extract_chromaticities(header)
+    time_code = _extract_time_code(header)
 
-    owner = _get_optional_string(spec, _ATTR_OWNER)
-    comments = _get_optional_string(spec, _ATTR_COMMENTS)
-    capture_date = _get_optional_string(spec, _ATTR_CAP_DATE)
-    software = _get_optional_string(spec, _ATTR_SOFTWARE)
+    owner = _optional_exr_attribute(header, _ATTR_OWNER, "")
+    comments = _optional_exr_attribute(header, _ATTR_COMMENTS, "")
+    capture_date = _optional_exr_attribute(header, _ATTR_CAP_DATE, "")
+    software = _optional_exr_attribute(header, _ATTR_SOFTWARE, "")
 
     custom: dict[str, Any] = {
-        attr.name: _convert_attribute_value(attr.value)
-        for attr in spec.extra_attribs
-        if attr.name not in _HEADER_SKIP_ATTRS
+        attr_name: _convert_attribute_value(header[attr_name])
+        for attr_name in header.keys()
+        if attr_name not in _HEADER_SKIP_ATTRS
     }
 
     return EXRHeader(
@@ -210,94 +201,74 @@ def _build_header_from_spec(spec: Any) -> EXRHeader:
     )
 
 
-def _detect_storage_type(spec: Any) -> StorageType:
-    """Infer storage type from OIIO spec tile dimensions and deep flag."""
-    is_deep = getattr(spec, "deep", False)
-    is_tiled = spec.tile_width > 0
-    if is_deep and is_tiled:
-        return StorageType.DEEP_TILED
-    if is_deep:
-        return StorageType.DEEP_SCANLINE
-    if is_tiled:
-        return StorageType.TILED_IMAGE
-    return StorageType.SCANLINE_IMAGE
-
-
-def _extract_tile_description(spec: Any) -> TileDescription:
-    """Build TileDescription from tiled OIIO spec."""
-    # OIIO doesn't expose level_mode/rounding_mode directly as strings;
-    # derive from presence of mip/rip levels via nativeattrib if available.
-    level_mode = "ONE_LEVEL"
-    rounding_mode = "ROUND_DOWN"
-
-    for attr in spec.extra_attribs:
-        if attr.name == "openexr:levelMode":
-            level_map = {0: "ONE_LEVEL", 1: "MIPMAP_LEVELS", 2: "RIPMAP_LEVELS"}
-            level_mode = level_map.get(int(attr.value), "ONE_LEVEL")
-        elif attr.name == "openexr:roundingMode":
-            rounding_map = {0: "ROUND_DOWN", 1: "ROUND_UP"}
-            rounding_mode = rounding_map.get(int(attr.value), "ROUND_DOWN")
-
-    return TileDescription(
-        tile_width=spec.tile_width,
-        tile_height=spec.tile_height,
-        level_mode=level_mode,
-        rounding_mode=rounding_mode,
+def _extract_window_coordinates(exr_coordinates: tuple[np.ndarray, np.ndarray]) -> WindowCoordinates:
+    return WindowCoordinates(
+        xmin=exr_coordinates[0][0],
+        ymin=exr_coordinates[0][1],
+        xmax=exr_coordinates[1][0],
+        ymax=exr_coordinates[1][1],
     )
 
 
-def _extract_screen_window_center(spec: Any) -> tuple[float, float]:
+def _extract_tile_description(header: dict) -> TileDescription:
+    """Build TileDescription from OpenEXR TileDescription"""
+    exr_tile_description: OpenEXR.TileDescription = _require_exr_attribute(header, _ATTR_TILE_DESCRIPTION)
+
+    return TileDescription(
+        tile_width=exr_tile_description.xSize,
+        tile_height=exr_tile_description.ySize,
+        level_mode=_EXR_LEVEL_MODE_MAP.get(exr_tile_description.mode, LevelModeType.ONE_LEVEL),
+        rounding_mode=_EXR_LEVEL_ROUNDING_MODE_MAP.get(exr_tile_description.roundingMode, LevelRoundingModeType.ROUND_UP),
+    )
+
+
+def _extract_screen_window_center(header: dict[str, Any]) -> tuple[float, float]:
     """Extract screenWindowCenter from extra_attribs."""
-    for attr in spec.extra_attribs:
-        if attr.name == _ATTR_SCREEN_WINDOW_CENTER:
-            v = attr.value
-            return (float(v[0]), float(v[1]))
-    return (0.0, 0.0)
+    exr_screen_window_center = _optional_exr_attribute(header, _ATTR_SCREEN_WINDOW_CENTER, (0.0, 0.0))
+    return exr_screen_window_center[0], exr_screen_window_center[1]
 
 
-def _extract_chromaticities(spec: Any) -> Chromaticities | None:
+def _extract_chromaticities(header: dict[str, Any]) -> Chromaticities | None:
     """Extract chromaticities attribute if present (8 floats: rx ry gx gy bx by wx wy)."""
-    for attr in spec.extra_attribs:
-        if attr.name == _ATTR_CHROMATICITIES:
-            v = attr.value
-            try:
-                floats = [float(x) for x in v]
-                if len(floats) >= 8:  # noqa: PLR2004
-                    return Chromaticities(
-                        red_x=floats[0],
-                        red_y=floats[1],
-                        green_x=floats[2],
-                        green_y=floats[3],
-                        blue_x=floats[4],
-                        blue_y=floats[5],
-                        white_x=floats[6],
-                        white_y=floats[7],
-                    )
-            except (TypeError, ValueError):
-                logger.debug("Could not parse chromaticities attribute: %s", v)
-    return None
+    exr_chromaticities = _optional_exr_attribute(header, _ATTR_CHROMATICITIES, None)
+    if exr_chromaticities is None:
+        return None
+
+    try:
+        if len(exr_chromaticities) >= 8:
+            return Chromaticities(
+                red_x=exr_chromaticities[0],
+                red_y=exr_chromaticities[1],
+                green_x=exr_chromaticities[2],
+                green_y=exr_chromaticities[3],
+                blue_x=exr_chromaticities[4],
+                blue_y=exr_chromaticities[5],
+                white_x=exr_chromaticities[6],
+                white_y=exr_chromaticities[7],
+            )
+        return None
+    except:
+        logger.exception("Could not parse chromaticities attribute: %s", v)
 
 
-def _extract_time_code(spec: Any) -> str | None:
+def _extract_time_code(header: dict[str, Any]) -> str | None:
     """Extract and format timeCode attribute."""
-    for attr in spec.extra_attribs:
-        if attr.name == _ATTR_TIME_CODE:
-            return _format_time_code(attr.value)
-    return None
+    time_code = _optional_exr_attribute(header, _ATTR_TIME_CODE, None)
+    if time_code is None:
+        return None
+    return _format_time_code(time_code)
 
 
-def _require_string_attribute(spec: Any, name: str) -> str:
-    """Get a required string attribute from an OIIO ImageSpec."""
+def _require_exr_attribute(header: dict, name: str) -> Any:
+    """Get a required string attribute from an OpenEXR Part Header."""
     sentinel = "__MISSING__"
-    value = spec.get_string_attribute(name, sentinel)
+    value = header.get(name, sentinel)
     if value == sentinel:
         msg = f"Required EXR header attribute '{name}' is missing"
         raise ValueError(msg)
     return value
 
 
-def _get_optional_string(spec: Any, name: str) -> str | None:
-    """Get an optional string attribute, returning None if absent."""
-    sentinel = "__MISSING__"
-    value = spec.get_string_attribute(name, sentinel)
-    return value if value != sentinel else None
+def _optional_exr_attribute(header: dict[str, Any], name: str, default: Any) -> Any:
+    """Get an optional string attribute from an OpenEXR Part Header."""
+    return header.get(name, default)

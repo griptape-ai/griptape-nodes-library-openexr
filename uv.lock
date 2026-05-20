@@ -300,6 +300,7 @@ source = { editable = "." }
 dependencies = [
     { name = "griptape-nodes" },
     { name = "numpy" },
+    { name = "openexr" },
     { name = "openimageio" },
 ]
 
@@ -316,6 +317,7 @@ dev = [
 requires-dist = [
     { name = "griptape-nodes", git = "https://github.com/griptape-ai/griptape-nodes?rev=latest" },
     { name = "numpy", specifier = ">=1.26.0" },
+    { name = "openexr", specifier = ">=3.3.0" },
     { name = "openimageio", specifier = ">=2.3.0" },
 ]
 

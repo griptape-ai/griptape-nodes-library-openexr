@@ -15,7 +15,8 @@
     "dependencies": {
       "pip_dependencies": [
         "openimageio>=2.3.0",
-        "numpy>=1.26.0"
+        "numpy>=1.26.0",
+        "openexr>=3.3.0"
       ]
     }
   },

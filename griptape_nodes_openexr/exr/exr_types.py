@@ -12,6 +12,8 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, NamedTuple
 
+import OpenEXR
+
 # --- Enums ---
 
 
@@ -49,41 +51,71 @@ class PixelType(StrEnum):
     UINT = "uint"
 
 
-# --- OIIO string → StrEnum mappings ---
+class LevelModeType(StrEnum):
+    ONE_LEVEL = "ONE_LEVEL"
+    MIPMAP_LEVELS = "MIPMAP_LEVELS"
+    RIPMAP_LEVELS = "RIPMAP_LEVELS"
 
-_OIIO_COMPRESSION_MAP: dict[str, CompressionType] = {
-    "none": CompressionType.NO_COMPRESSION,
-    "rle": CompressionType.RLE_COMPRESSION,
-    "zips": CompressionType.ZIPS_COMPRESSION,
-    "zip": CompressionType.ZIP_COMPRESSION,
-    "piz": CompressionType.PIZ_COMPRESSION,
-    "pxr24": CompressionType.PXR24_COMPRESSION,
-    "b44": CompressionType.B44_COMPRESSION,
-    "b44a": CompressionType.B44A_COMPRESSION,
-    "dwaa": CompressionType.DWAA_COMPRESSION,
-    "dwab": CompressionType.DWAB_COMPRESSION,
+
+class LevelRoundingModeType(StrEnum):
+    ROUND_DOWN = "ROUND_DOWN"
+    ROUND_UP = "ROUND_UP"
+
+
+# --- OpenEXR types -> StrEnum mappings ---
+_EXR_COMPRESSION_MAP: dict[OpenEXR.Compression, CompressionType] = {
+    OpenEXR.NO_COMPRESSION: CompressionType.NO_COMPRESSION,
+    OpenEXR.RLE_COMPRESSION: CompressionType.RLE_COMPRESSION,
+    OpenEXR.ZIPS_COMPRESSION: CompressionType.ZIPS_COMPRESSION,
+    OpenEXR.ZIP_COMPRESSION: CompressionType.ZIP_COMPRESSION,
+    OpenEXR.PIZ_COMPRESSION: CompressionType.PIZ_COMPRESSION,
+    OpenEXR.PXR24_COMPRESSION: CompressionType.PXR24_COMPRESSION,
+    OpenEXR.B44_COMPRESSION: CompressionType.B44_COMPRESSION,
+    OpenEXR.B44A_COMPRESSION: CompressionType.B44A_COMPRESSION,
+    OpenEXR.DWAA_COMPRESSION: CompressionType.DWAA_COMPRESSION,
+    OpenEXR.DWAB_COMPRESSION: CompressionType.DWAB_COMPRESSION,
 }
 
-_OIIO_PIXEL_TYPE_MAP: dict[str, PixelType] = {
-    "half": PixelType.HALF,
-    "float": PixelType.FLOAT,
-    "uint32": PixelType.UINT,
-    "uint16": PixelType.UINT,
-    "uint8": PixelType.UINT,
+_EXR_PIXEL_TYPE_MAP: dict[OpenEXR.PixelType, PixelType] = {
+    OpenEXR.PixelType.HALF: PixelType.HALF,
+    OpenEXR.PixelType.FLOAT: PixelType.FLOAT,
+    OpenEXR.PixelType.UINT: PixelType.UINT,
 }
 
-_OIIO_LINE_ORDER_MAP: dict[str, LineOrderType] = {
-    "increasingY": LineOrderType.INCREASING_Y,
-    "decreasingY": LineOrderType.DECREASING_Y,
-    "randomY": LineOrderType.RANDOM_Y,
+_EXR_LINE_ORDER_MAP: dict[OpenEXR.LineOrder, LineOrderType] = {
+    OpenEXR.LineOrder.INCREASING_Y: LineOrderType.INCREASING_Y,
+    OpenEXR.LineOrder.DECREASING_Y: LineOrderType.DECREASING_Y,
+    OpenEXR.LineOrder.RANDOM_Y: LineOrderType.RANDOM_Y,
 }
 
-# OIIO attribute names
+_EXR_STORAGE_TYPE_MAP: dict[OpenEXR.Storage, StorageType] = {
+    OpenEXR.Storage.scanlineimage: StorageType.SCANLINE_IMAGE,
+    OpenEXR.Storage.tiledimage: StorageType.TILED_IMAGE,
+    OpenEXR.Storage.deepscanline: StorageType.DEEP_SCANLINE,
+    OpenEXR.Storage.deeptile: StorageType.DEEP_TILED,
+}
+
+_EXR_LEVEL_MODE_MAP: dict[OpenEXR.LevelMode, LevelModeType] = {
+    OpenEXR.LevelMode.ONE_LEVEL: LevelModeType.ONE_LEVEL,
+    OpenEXR.LevelMode.MIPMAP_LEVELS: LevelModeType.MIPMAP_LEVELS,
+    OpenEXR.LevelMode.RIPMAP_LEVELS: LevelModeType.RIPMAP_LEVELS,
+}
+
+_EXR_LEVEL_ROUNDING_MODE_MAP: dict[OpenEXR.LevelRoundingMode, LevelRoundingModeType] = {
+    OpenEXR.LevelRoundingMode.ROUND_UP: LevelRoundingModeType.ROUND_UP,
+    OpenEXR.LevelRoundingMode.ROUND_DOWN: LevelRoundingModeType.ROUND_DOWN,
+}
+
+# OpenEXR attribute names
+_ATTR_DATA_WINDOW = "dataWindow"
+_ATTR_DISPLAY_WINDOW = "displayWindow"
 _ATTR_COMPRESSION = "compression"
-_ATTR_LINE_ORDER = "openexr:lineOrder"
-_ATTR_CHUNK_COUNT = "openexr:chunkCount"
+_ATTR_LINE_ORDER = "lineOrder"
+_ATTR_STORAGE_TYPE = "type"
+_ATTR_TILE_DESCRIPTION = "tiles"
+_ATTR_CHUNK_COUNT = "chunkCount"
 _ATTR_NAME = "name"
-_ATTR_PIXEL_ASPECT_RATIO = "PixelAspectRatio"
+_ATTR_PIXEL_ASPECT_RATIO = "pixelAspectRatio"
 _ATTR_SCREEN_WINDOW_CENTER = "screenWindowCenter"
 _ATTR_SCREEN_WINDOW_WIDTH = "screenWindowWidth"
 _ATTR_OWNER = "owner"
@@ -95,12 +127,14 @@ _ATTR_CHROMATICITIES = "chromaticities"
 
 # Attributes handled as dedicated fields - excluded from EXRHeader.custom
 _HEADER_SKIP_ATTRS: set[str] = {
+    _ATTR_DATA_WINDOW,
+    _ATTR_DISPLAY_WINDOW,
     _ATTR_COMPRESSION,
     _ATTR_LINE_ORDER,
+    _ATTR_STORAGE_TYPE,
+    _ATTR_TILE_DESCRIPTION,
     _ATTR_CHUNK_COUNT,
     _ATTR_NAME,
-    "oiio:subimagename",
-    "oiio:subimages",
     _ATTR_PIXEL_ASPECT_RATIO,
     _ATTR_SCREEN_WINDOW_CENTER,
     _ATTR_SCREEN_WINDOW_WIDTH,
@@ -108,7 +142,6 @@ _HEADER_SKIP_ATTRS: set[str] = {
     _ATTR_COMMENTS,
     _ATTR_CAP_DATE,
     _ATTR_SOFTWARE,
-    "software",  # OIIO case-insensitive get_string_attribute matches "Software" but raw attr may be lowercase
     _ATTR_TIME_CODE,
     _ATTR_CHROMATICITIES,
 }
@@ -159,8 +192,8 @@ class TileDescription:
 
     tile_width: int
     tile_height: int
-    level_mode: str
-    rounding_mode: str
+    level_mode: LevelModeType
+    rounding_mode: LevelRoundingModeType
 
 
 @dataclass
@@ -191,14 +224,12 @@ class EXRChannelInfo:
     Attributes:
         name: Full channel name as stored in the EXR (e.g. "beauty.R")
         pixel_type: Data type for this channel
-        channel_index: Index in the part's channel list (for OIIO reads)
         x_sampling: Horizontal subsampling factor (1 = full resolution)
         y_sampling: Vertical subsampling factor (1 = full resolution)
     """
 
     name: str
     pixel_type: PixelType
-    channel_index: int
     x_sampling: int
     y_sampling: int
 
@@ -275,15 +306,14 @@ class EXRPart:
         channels: All channels in this part
         layers: Channels grouped by layer prefix (strategy-dependent)
         header: Full header metadata
-        index: Zero-based part index within the file
         width: Image width in pixels
         height: Image height in pixels
     """
 
+    name: str
     channels: list[EXRChannelInfo]
     layers: list[EXRLayer]
     header: EXRHeader
-    index: int
     width: int
     height: int
 
@@ -421,7 +451,7 @@ def _apply_legacy_part_name_prefix(parts: list[EXRPart]) -> None:
 
 
 def _convert_attribute_value(value: Any) -> Any:
-    """Normalise an OIIO attribute value to a plain Python type."""
+    """Normalise an OpenEXR attribute value to a plain Python type."""
     if isinstance(value, (str, int, float, bool)):
         return value
     if isinstance(value, bytes):
