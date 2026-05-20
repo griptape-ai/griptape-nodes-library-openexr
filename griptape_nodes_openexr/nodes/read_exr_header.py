@@ -334,6 +334,7 @@ class ReadEXRHeader(SuccessFailureNode):
             exr_data = scan_exr_header(pathlib.Path(file_path), strategy)
         except (ValueError, RuntimeError) as e:
             logger.error("ReadEXRHeader '%s': Failed to scan '%s': %s", self.name, file_path, e)
+            return
 
         self._cached_exr_data = exr_data
 

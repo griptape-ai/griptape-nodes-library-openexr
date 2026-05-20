@@ -11,7 +11,6 @@ import logging
 import pathlib
 from typing import TYPE_CHECKING, Any
 
-import numpy as np
 import OpenEXR
 
 from griptape_nodes_openexr.exr.exr_types import (
@@ -61,12 +60,12 @@ if TYPE_CHECKING:
 logger = logging.getLogger("griptape_nodes")
 
 
-def scan_exr_header(file_path: pathlib.Path, strategy: ChannelGroupingStrategy) -> EXRData:
+def scan_exr_header(file_path: str | pathlib.Path, strategy: ChannelGroupingStrategy) -> EXRData:
     """Scan an EXR file's headers without loading pixel data.
 
-    Opens the file, iterates all parts via OIIO subimage seeking, and builds
-    the full EXRData structure (headers + channel/layer metadata). Pixel chunks
-    are never touched, making this fast even for large multi-part files.
+    Opens the file, iterates all parts, and builds the full EXRData structure
+    (headers + channel/layer metadata). Pixel chunks are never touched, making
+    this fast even for large multi-part files.
 
     Args:
         file_path: Path to the EXR file
@@ -76,27 +75,20 @@ def scan_exr_header(file_path: pathlib.Path, strategy: ChannelGroupingStrategy) 
         EXRData with metadata for all parts; no pixel data loaded
 
     Raises:
-        ValueError: If file_path is empty or the file has no readable parts
-        RuntimeError: If OIIO cannot open the file
+        ValueError: If file_path is empty
+        RuntimeError: If the file cannot be opened or parsed
     """
+    if not file_path:
+        msg = "file_path must not be empty"
+        raise ValueError(msg)
+
+    path = pathlib.Path(file_path)
+    parts: list[EXRPart] = []
     try:
-        if not file_path:
-            msg = "file_path must not be empty"
-            raise ValueError(msg)
-
-        if not file_path.exists():
-            msg = "file_path does not exist"
-            raise ValueError(msg)
-
-        # Parse the EXR Parts
-        parts: list[EXRPart] = []
-        with OpenEXR.File(str(file_path)) as exr_file:
-            part: OpenEXR.Part = OpenEXR.Part()
+        with OpenEXR.File(str(path)) as exr_file:
             for part in exr_file.parts:
-                # Gather channel info for the channels in this part.
                 channels = _build_channel_list(exr_file.channels(part.part_index))
                 header = _build_header(part, part.header)
-
                 parts.append(
                     EXRPart(
                         name=part.name(),
@@ -107,9 +99,18 @@ def scan_exr_header(file_path: pathlib.Path, strategy: ChannelGroupingStrategy) 
                         channels=channels,
                     )
                 )
-        return EXRData(parts=parts)
-    except:
-        logger.exception('Error parsing EXR')
+    except Exception as e:
+        msg = f"Failed to open EXR file '{path}': {e}"
+        raise RuntimeError(msg) from e
+
+    if not parts:
+        msg = f"EXR file has no parts: {path}"
+        raise ValueError(msg)
+
+    for part in parts:
+        part.layers = strategy.group_into_layers(part.channels)
+    strategy.postprocess_parts(parts)
+    return EXRData(parts=parts)
 
 
 def _build_channel_list(exr_channels: dict[str, OpenEXR.Channel]) -> list[EXRChannelInfo]:
@@ -128,7 +129,7 @@ def _build_channel_list(exr_channels: dict[str, OpenEXR.Channel]) -> list[EXRCha
 
 
 def _build_header(part: OpenEXR.Part, header: dict) -> EXRHeader:
-    """Build an EXRHeader from OpenEXR header dictionary
+    """Build an EXRHeader from OpenEXR header dictionary.
 
     Extracts all required and optional standard EXR attributes. Non-standard
     attributes not covered by typed fields land in EXRHeader.custom.
@@ -161,7 +162,7 @@ def _build_header(part: OpenEXR.Part, header: dict) -> EXRHeader:
     pixel_aspect = _require_exr_attribute(header, _ATTR_PIXEL_ASPECT_RATIO)
 
     part_name = part.name()
-    # TODO(DH): The spec states chunkCount is required for multipart/deep EXRs but be lenient for now
+    # The spec requires chunkCount for multipart/deep EXRs; be lenient for single-part files
     chunk_count_val = _optional_exr_attribute(header, _ATTR_CHUNK_COUNT, -1)
     chunk_count = chunk_count_val if chunk_count_val >= 0 else None
 
@@ -201,7 +202,7 @@ def _build_header(part: OpenEXR.Part, header: dict) -> EXRHeader:
     )
 
 
-def _extract_window_coordinates(exr_coordinates: tuple[np.ndarray, np.ndarray]) -> WindowCoordinates:
+def _extract_window_coordinates(exr_coordinates: Any) -> WindowCoordinates:
     return WindowCoordinates(
         xmin=exr_coordinates[0][0],
         ymin=exr_coordinates[0][1],
@@ -211,7 +212,7 @@ def _extract_window_coordinates(exr_coordinates: tuple[np.ndarray, np.ndarray]) 
 
 
 def _extract_tile_description(header: dict) -> TileDescription:
-    """Build TileDescription from OpenEXR TileDescription"""
+    """Build TileDescription from OpenEXR TileDescription."""
     exr_tile_description: OpenEXR.TileDescription = _require_exr_attribute(header, _ATTR_TILE_DESCRIPTION)
 
     return TileDescription(
@@ -223,7 +224,7 @@ def _extract_tile_description(header: dict) -> TileDescription:
 
 
 def _extract_screen_window_center(header: dict[str, Any]) -> tuple[float, float]:
-    """Extract screenWindowCenter from extra_attribs."""
+    """Extract screenWindowCenter from header attributes."""
     exr_screen_window_center = _optional_exr_attribute(header, _ATTR_SCREEN_WINDOW_CENTER, (0.0, 0.0))
     return exr_screen_window_center[0], exr_screen_window_center[1]
 
@@ -235,7 +236,7 @@ def _extract_chromaticities(header: dict[str, Any]) -> Chromaticities | None:
         return None
 
     try:
-        if len(exr_chromaticities) >= 8:
+        if len(exr_chromaticities) >= 8:  # noqa: PLR2004
             return Chromaticities(
                 red_x=exr_chromaticities[0],
                 red_y=exr_chromaticities[1],
@@ -247,8 +248,9 @@ def _extract_chromaticities(header: dict[str, Any]) -> Chromaticities | None:
                 white_y=exr_chromaticities[7],
             )
         return None
-    except:
-        logger.exception("Could not parse chromaticities attribute: %s", v)
+    except Exception:
+        logger.exception("Could not parse chromaticities attribute: %s", exr_chromaticities)
+        return None
 
 
 def _extract_time_code(header: dict[str, Any]) -> str | None:
@@ -260,7 +262,7 @@ def _extract_time_code(header: dict[str, Any]) -> str | None:
 
 
 def _require_exr_attribute(header: dict, name: str) -> Any:
-    """Get a required string attribute from an OpenEXR Part Header."""
+    """Get a required attribute from an OpenEXR Part Header."""
     sentinel = "__MISSING__"
     value = header.get(name, sentinel)
     if value == sentinel:
@@ -270,5 +272,5 @@ def _require_exr_attribute(header: dict, name: str) -> Any:
 
 
 def _optional_exr_attribute(header: dict[str, Any], name: str, default: Any) -> Any:
-    """Get an optional string attribute from an OpenEXR Part Header."""
+    """Get an optional attribute from an OpenEXR Part Header, returning default if absent."""
     return header.get(name, default)

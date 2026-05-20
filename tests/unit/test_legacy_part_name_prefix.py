@@ -37,25 +37,25 @@ def _make_header(name: str = "", custom: dict | None = None) -> EXRHeader:
     )
 
 
-def _make_part(name: str, channels: list[EXRChannelInfo], idx: int = 0) -> EXRPart:
+def _make_part(name: str, channels: list[EXRChannelInfo]) -> EXRPart:
     return EXRPart(
+        name=name,
         channels=channels,
         layers=[EXRLayer(name="", channels=channels)],
         header=_make_header(name=name),
-        index=idx,
         width=64,
         height=64,
     )
 
 
-def _ch(name: str, idx: int = 0) -> EXRChannelInfo:
-    return EXRChannelInfo(name=name, pixel_type=PixelType.HALF, channel_index=idx, x_sampling=1, y_sampling=1)
+def _ch(name: str) -> EXRChannelInfo:
+    return EXRChannelInfo(name=name, pixel_type=PixelType.HALF, x_sampling=1, y_sampling=1)
 
 
 def test_legacy_multi_part_prefixed() -> None:
     parts = [
-        _make_part("beauty", [_ch("R", 0), _ch("G", 1), _ch("B", 2)], idx=0),
-        _make_part("depth", [_ch("Z", 0)], idx=1),
+        _make_part("beauty", [_ch("R"), _ch("G"), _ch("B")]),
+        _make_part("depth", [_ch("Z")]),
     ]
     _apply_legacy_part_name_prefix(parts)
 
@@ -70,8 +70,8 @@ def test_legacy_multi_part_prefixed() -> None:
 def test_dotted_channels_not_modified() -> None:
     # If any channel already has a dot, skip legacy treatment
     parts = [
-        _make_part("beauty", [_ch("beauty.R", 0), _ch("beauty.G", 1)], idx=0),
-        _make_part("depth", [_ch("depth.Z", 0)], idx=1),
+        _make_part("beauty", [_ch("beauty.R"), _ch("beauty.G")]),
+        _make_part("depth", [_ch("depth.Z")]),
     ]
     original_names = [ch.name for part in parts for ch in part.channels]
     _apply_legacy_part_name_prefix(parts)
@@ -80,7 +80,7 @@ def test_dotted_channels_not_modified() -> None:
 
 def test_full_layer_names_attribute_skips_prefix() -> None:
     parts = [
-        _make_part("beauty", [_ch("R", 0)], idx=0),
+        _make_part("beauty", [_ch("R")]),
     ]
     parts[0].header.custom["fullLayerNames"] = True
     _apply_legacy_part_name_prefix(parts)
@@ -90,8 +90,8 @@ def test_full_layer_names_attribute_skips_prefix() -> None:
 
 def test_unnamed_part_skipped() -> None:
     parts = [
-        _make_part("", [_ch("R", 0)], idx=0),
-        _make_part("", [_ch("Z", 0)], idx=1),
+        _make_part("", [_ch("R")]),
+        _make_part("", [_ch("Z")]),
     ]
     _apply_legacy_part_name_prefix(parts)
     # Empty part names - no prefix applied
