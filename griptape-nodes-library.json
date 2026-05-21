@@ -44,13 +44,5 @@
     }
   ],
   "workflows": [],
-  "settings": [
-    {
-      "category": "openexr",
-      "description": "Additional configuration files to extend OpenEXR file parsing and handling capabilities.",
-      "contents": {
-        "openexr_config": ""
-      }
-    }
-  ]
+  "settings": []
 }

@@ -58,66 +58,6 @@ Replicates Nuke's channel-name-to-layer algorithm:
 
 Presents channels exactly as stored in the file - no parsing, no grouping, no coordinate changes. Each channel appears as its own single-channel layer. Useful for inspecting files from unfamiliar pipelines or debugging unexpected grouping.
 
-## Extending: Custom Channel Styles
-
-Studios can add their own channel grouping strategies without modifying this library.
-
-### 1. Implement the strategy
-
-```python
-# my_studio/exr_strategy.py
-from griptape_nodes_openexr.exr.exr_types import (
-    ChannelNameParts,
-    EXRChannelInfo,
-    EXRLayer,
-    EXRPart,
-)
-
-
-class MyStudioChannelGrouping:
-    name = "my_studio"
-    display_name = "My Studio"
-
-    def parse_channel(self, full_name: str) -> ChannelNameParts:
-        # Example: studio convention uses '_' as the layer separator
-        # e.g. "beauty_R" → layer "beauty", channel "R"
-        if "_" in full_name:
-            layer, _, channel = full_name.rpartition("_")
-            return ChannelNameParts(layer_name=layer, channel_name=channel)
-        return ChannelNameParts(layer_name="", channel_name=full_name)
-
-    def group_into_layers(self, channels: list[EXRChannelInfo]) -> list[EXRLayer]:
-        layers: dict[str, list[EXRChannelInfo]] = {}
-        for ch in channels:
-            layer_name = self.parse_channel(ch.name).layer_name
-            layers.setdefault(layer_name, []).append(ch)
-        result = [EXRLayer(name=name, channels=chs) for name, chs in layers.items()]
-        result.sort(key=lambda l: (l.name != "", l.name))
-        return result
-
-    def postprocess_parts(self, parts: list[EXRPart]) -> None:
-        pass  # No additional post-processing needed
-```
-
-### 2. Register it in a JSON config
-
-```json
-{
-  "strategies": [
-    {
-      "name": "my_studio",
-      "display_name": "My Studio",
-      "module": "my_studio.exr_strategy",
-      "class": "MyStudioChannelGrouping"
-    }
-  ]
-}
-```
-
-### 3. Add the config path in Griptape Nodes settings
-
-Open Griptape Nodes → **Settings → OpenEXR**. Set the absolute path to your JSON file in the `openexr_config` field. Your strategy will appear in the `channel_style` dropdown on every `Read EXR Header` node after restarting. Multiple strategies can be registered in the same JSON file.
-
 ## Development
 
 ### Requirements

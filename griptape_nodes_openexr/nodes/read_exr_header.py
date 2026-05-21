@@ -33,11 +33,13 @@ from griptape_nodes_openexr.exr.exr_header_artifact import (
 )
 from griptape_nodes_openexr.exr.exr_io import scan_exr_header
 from griptape_nodes_openexr.exr.exr_types import EXRData, EXRLayer, EXRPart, parse_channel_name
-from griptape_nodes_openexr.exr.strategies.registry import get_strategy, registered_names
+from griptape_nodes_openexr.exr.strategies.nuke_strategy import NukeChannelGrouping
+from griptape_nodes_openexr.exr.strategies.raw_strategy import RawEXRChannelGrouping
 
 logger = logging.getLogger("griptape_nodes")
 
 _DEFAULT_STRATEGY = "nuke"
+_STRATEGIES = {s.name: s for s in (NukeChannelGrouping(), RawEXRChannelGrouping())}
 _PART_PREFIX = "part_"
 _LAYER_PREFIX = "layer_"
 _CHANNEL_PREFIX = "channel_"
@@ -79,13 +81,11 @@ class ReadEXRHeader(SuccessFailureNode):
 
         # --- Channel style ---
 
-        strategy_names = registered_names()
+        strategy_names = list(_STRATEGIES.keys())
         self._channel_style_param = ParameterString(
             name="channel_style",
             display_name="Channel Style",
-            default_value=_DEFAULT_STRATEGY
-            if _DEFAULT_STRATEGY in strategy_names
-            else (strategy_names[0] if strategy_names else "nuke"),
+            default_value=_DEFAULT_STRATEGY,
             tooltip="How channel names are parsed and grouped into layers",
             allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
         )
@@ -324,10 +324,10 @@ class ReadEXRHeader(SuccessFailureNode):
         if not file_path:
             return
 
-        try:
-            strategy = get_strategy(style)
-        except KeyError as e:
-            logger.error("ReadEXRHeader '%s': %s", self.name, e)
+        strategy = _STRATEGIES.get(style)
+        if strategy is None:
+            available = ", ".join(f"'{n}'" for n in _STRATEGIES)
+            logger.error("ReadEXRHeader '%s': Unknown channel grouping strategy '%s'. Available: %s", self.name, style, available)
             return
 
         try:
