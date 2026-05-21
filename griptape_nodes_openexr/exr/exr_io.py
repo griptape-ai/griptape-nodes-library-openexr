@@ -12,6 +12,7 @@ import pathlib
 from typing import TYPE_CHECKING, Any
 
 import OpenEXR
+from griptape_nodes.files.file import File
 
 from griptape_nodes_openexr.exr.exr_types import (
     _ATTR_CAP_DATE,
@@ -82,10 +83,10 @@ def scan_exr_header(file_path: str | pathlib.Path, strategy: ChannelGroupingStra
         msg = "file_path must not be empty"
         raise ValueError(msg)
 
-    path = pathlib.Path(file_path)
+    resolved_path = File(str(file_path)).resolve()
     parts: list[EXRPart] = []
     try:
-        with OpenEXR.File(str(path)) as exr_file:
+        with OpenEXR.File(resolved_path, header_only=True) as exr_file:
             for part in exr_file.parts:
                 channels = _build_channel_list(exr_file.channels(part.part_index))
                 header = _build_header(part, part.header)
@@ -100,11 +101,11 @@ def scan_exr_header(file_path: str | pathlib.Path, strategy: ChannelGroupingStra
                     )
                 )
     except Exception as e:
-        msg = f"Failed to open EXR file '{path}': {e}"
+        msg = f"Failed to open EXR file '{resolved_path}': {e}"
         raise RuntimeError(msg) from e
 
     if not parts:
-        msg = f"EXR file has no parts: {path}"
+        msg = f"EXR file has no parts: {resolved_path}"
         raise ValueError(msg)
 
     for part in parts:
