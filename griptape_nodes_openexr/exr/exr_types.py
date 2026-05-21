@@ -121,9 +121,10 @@ _ATTR_SCREEN_WINDOW_WIDTH = "screenWindowWidth"
 _ATTR_OWNER = "owner"
 _ATTR_COMMENTS = "comments"
 _ATTR_CAP_DATE = "capDate"
-_ATTR_SOFTWARE = "Software"
+_ATTR_SOFTWARE = "software"
 _ATTR_TIME_CODE = "timeCode"
 _ATTR_CHROMATICITIES = "chromaticities"
+_ATTR_CHANNELS = "channels"
 
 # Attributes handled as dedicated fields - excluded from EXRHeader.custom
 _HEADER_SKIP_ATTRS: set[str] = {
@@ -144,6 +145,9 @@ _HEADER_SKIP_ATTRS: set[str] = {
     _ATTR_SOFTWARE,
     _ATTR_TIME_CODE,
     _ATTR_CHROMATICITIES,
+    _ATTR_CHANNELS,
+    # Some files write "Software" with capital S; exclude both casings
+    "Software",
 }
 
 
@@ -165,15 +169,6 @@ class WindowCoordinates(NamedTuple):
     xmax: int
     ymax: int
 
-
-class ChannelNameParts(NamedTuple):
-    layer_name: str
-    channel_name: str
-
-
-class NormalizedWindows(NamedTuple):
-    data: WindowCoordinates
-    display: WindowCoordinates
 
 
 # --- EXR-specific metadata types ---
@@ -214,7 +209,7 @@ class Chromaticities:
     white_y: float
 
 
-# --- Channel / layer structures ---
+# --- Channel structure ---
 
 
 @dataclass
@@ -232,19 +227,6 @@ class EXRChannelInfo:
     pixel_type: PixelType
     x_sampling: int
     y_sampling: int
-
-
-@dataclass
-class EXRLayer:
-    """Channels grouped by common name prefix.
-
-    Attributes:
-        name: Layer prefix (empty string = default/unnamed layer)
-        channels: Channels belonging to this layer
-    """
-
-    name: str
-    channels: list[EXRChannelInfo]
 
 
 # --- Header ---
@@ -303,8 +285,8 @@ class EXRPart:
     """Single part from an OpenEXR file.
 
     Attributes:
+        name: Part name (empty for single-part or unnamed parts)
         channels: All channels in this part
-        layers: Channels grouped by layer prefix (strategy-dependent)
         header: Full header metadata
         width: Image width in pixels
         height: Image height in pixels
@@ -312,7 +294,6 @@ class EXRPart:
 
     name: str
     channels: list[EXRChannelInfo]
-    layers: list[EXRLayer]
     header: EXRHeader
     width: int
     height: int
@@ -329,122 +310,6 @@ class EXRData:
     """
 
     parts: list[EXRPart]
-
-
-# --- Channel name parsing (Nuke-compatible algorithm) ---
-
-
-def _sanitize_name_part(part: str) -> str:
-    """Strip leading digits and replace non-alphanumeric chars with underscores."""
-    i = 0
-    while i < len(part) and part[i].isdigit():
-        i += 1
-    part = part[i:]
-    return "".join(c if c.isalnum() else "_" for c in part)
-
-
-def parse_channel_name(full_name: str) -> ChannelNameParts:
-    """Parse an EXR channel name into layer and channel components.
-
-    Algorithm matches Nuke's ExrChannelNameToNuke.cpp:
-    - Split on '.' with at most 2 splits (max 3 parts)
-    - Strip leading digits and sanitize each part
-    - All-but-last parts form the layer name (joined with '_')
-    - Last part is the channel name
-    - Layer name "Ci" maps to the default layer (RenderMan convention)
-
-    Examples:
-        "R" → ("", "R")
-        "beauty.R" → ("beauty", "R")
-        "View Layer.AO.R" → ("View_Layer_AO", "R")
-        "Ci.R" → ("", "R")
-    """
-    parts = full_name.split(".", maxsplit=2)
-    sanitized: list[str] = [s for p in parts if (s := _sanitize_name_part(p))]
-
-    if len(sanitized) <= 1:
-        return ChannelNameParts(layer_name="", channel_name=sanitized[0] if sanitized else "unnamed")
-
-    channel_name = sanitized[-1]
-    layer_name = "_".join(sanitized[:-1])
-    if layer_name == "Ci":
-        layer_name = ""
-
-    return ChannelNameParts(layer_name=layer_name, channel_name=channel_name)
-
-
-def group_channels_into_layers(channels: list[EXRChannelInfo]) -> list[EXRLayer]:
-    """Group channels by layer prefix. Default layer (empty name) sorts first."""
-    layers_dict: dict[str, list[EXRChannelInfo]] = {}
-    for channel in channels:
-        layer_name = parse_channel_name(channel.name).layer_name
-        if layer_name not in layers_dict:
-            layers_dict[layer_name] = []
-        layers_dict[layer_name].append(channel)
-
-    layers = [EXRLayer(name=name, channels=chs) for name, chs in layers_dict.items()]
-    layers.sort(key=lambda layer: (layer.name != "", layer.name))
-    return layers
-
-
-# --- Window normalisation ---
-
-
-def _normalize_windows(
-    data_window: WindowCoordinates,
-    display_window: WindowCoordinates,
-) -> NormalizedWindows:
-    """Shift both windows so the display origin lands at (0, 0).
-
-    Matches Nuke's offset_negative_display_window behavior. Preserves the
-    relative offset between data and display windows.
-    """
-    x_offset = display_window.xmin
-    y_offset = display_window.ymin
-
-    if x_offset == 0 and y_offset == 0:
-        return NormalizedWindows(data=data_window, display=display_window)
-
-    return NormalizedWindows(
-        data=WindowCoordinates(
-            xmin=data_window.xmin - x_offset,
-            ymin=data_window.ymin - y_offset,
-            xmax=data_window.xmax - x_offset,
-            ymax=data_window.ymax - y_offset,
-        ),
-        display=WindowCoordinates(
-            xmin=0,
-            ymin=0,
-            xmax=display_window.xmax - x_offset,
-            ymax=display_window.ymax - y_offset,
-        ),
-    )
-
-
-# --- Legacy multi-part handling ---
-
-
-def _apply_legacy_part_name_prefix(parts: list[EXRPart]) -> None:
-    """Prefix part name as layer name for legacy multi-part files.
-
-    Legacy files store the layer name in the part header rather than using
-    dot-notation in channel names. Detected when no channel in any part
-    contains a '.' and no 'fullLayerNames' attribute is set.
-
-    Mutates parts in place, re-grouping layers after renaming channels.
-    """
-    if any(part.header.custom.get("fullLayerNames") for part in parts):
-        return
-    if any("." in ch.name for part in parts for ch in part.channels):
-        return
-
-    for part in parts:
-        part_name = part.header.name
-        if not part_name:
-            continue
-        for ch in part.channels:
-            ch.name = f"{part_name}.{ch.name}"
-        part.layers = group_channels_into_layers(part.channels)
 
 
 # --- Attribute value conversion ---

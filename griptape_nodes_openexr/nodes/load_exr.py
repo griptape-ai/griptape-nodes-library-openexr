@@ -1,7 +1,7 @@
 """LoadEXR node - parse EXR header metadata without loading pixels.
 
 Architecture: Two-phase scanning.
-- Phase 1 (after_value_set on file_path or channel_style): Scan headers only.
+- Phase 1 (after_value_set on file_path): Scan headers only.
   Populates all metadata outputs and dynamic parameter groups.
 - Phase 2 (aprocess): Validate state, set success/failure status.
   No pixel I/O ever occurs in this node.
@@ -24,26 +24,18 @@ from griptape_nodes.exe_types.param_types.parameter_float import ParameterFloat
 from griptape_nodes.exe_types.param_types.parameter_int import ParameterInt
 from griptape_nodes.exe_types.param_types.parameter_string import ParameterString
 from griptape_nodes.traits.file_system_picker import FileSystemPicker
-from griptape_nodes.traits.options import Options
 
 from griptape_nodes_openexr.exr.exr_header_artifact import (
     EXRChannelArtifact,
-    EXRDisplayChannel,
     EXRPartArtifact,
 )
 from griptape_nodes_openexr.exr.exr_io import scan_exr_header
-from griptape_nodes_openexr.exr.exr_types import EXRData, EXRLayer, EXRPart, parse_channel_name
-from griptape_nodes_openexr.exr.strategies.nuke_strategy import NukeChannelGrouping
-from griptape_nodes_openexr.exr.strategies.raw_strategy import RawEXRChannelGrouping
+from griptape_nodes_openexr.exr.exr_types import EXRData, EXRPart
 
 logger = logging.getLogger("griptape_nodes")
 
-_DEFAULT_STRATEGY = "nuke"
-_STRATEGIES = {s.name: s for s in (NukeChannelGrouping(), RawEXRChannelGrouping())}
 _PART_PREFIX = "part_"
-_LAYER_PREFIX = "layer_"
 _CHANNEL_PREFIX = "channel_"
-_DEFAULT_LAYER_LABEL = "default"
 
 
 class LoadEXR(SuccessFailureNode):
@@ -51,10 +43,7 @@ class LoadEXR(SuccessFailureNode):
 
     No pixel data is loaded. Outputs structured artifacts plus scalar
     convenience outputs for common fields (width, height, compression, etc.)
-    and dynamic groups for parts, layers, and channels.
-
-    The Channel Style dropdown controls how channel names are parsed and
-    grouped into layers (Nuke-compatible by default; extensible via JSON config).
+    and dynamic groups for parts and channels.
     """
 
     def __init__(self, name: str, metadata: dict[Any, Any] | None = None) -> None:
@@ -78,19 +67,6 @@ class LoadEXR(SuccessFailureNode):
             )
         )
         self.add_parameter(self._file_path_param)
-
-        # --- Channel style ---
-
-        strategy_names = list(_STRATEGIES.keys())
-        self._channel_style_param = ParameterString(
-            name="channel_style",
-            display_name="Channel Style",
-            default_value=_DEFAULT_STRATEGY,
-            tooltip="How channel names are parsed and grouped into layers",
-            allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
-        )
-        self._channel_style_param.add_trait(Options(choices=strategy_names))
-        self.add_parameter(self._channel_style_param)
 
         # --- EXR Info group (collapsed) ---
 
@@ -116,13 +92,6 @@ class LoadEXR(SuccessFailureNode):
                 display_name="Part Count",
                 default_value=0,
                 tooltip="Number of parts in the EXR file",
-                allowed_modes={ParameterMode.OUTPUT},
-            )
-            self._layer_count_param = ParameterInt(
-                name="layer_count",
-                display_name="Layer Count",
-                default_value=0,
-                tooltip="Total layers across all parts",
                 allowed_modes={ParameterMode.OUTPUT},
             )
             self._channel_count_param = ParameterInt(
@@ -214,26 +183,11 @@ class LoadEXR(SuccessFailureNode):
         )
         self.add_parameter(self._parts_param)
 
-        self._layers_param = Parameter(
-            name="layers",
-            display_name="Layers",
-            type="list[EXRDisplayChannel]",
-            output_type="list[EXRDisplayChannel]",
-            tooltip="All display channels (layers) across all parts",
-            allowed_modes={ParameterMode.OUTPUT},
-            settable=False,
-        )
-        self.add_parameter(self._layers_param)
-
         # --- Dynamic groups ---
 
         self._parts_group = ParameterGroup(name="exr_parts")
         self._parts_group.ui_options = {"display_name": "Parts"}
         self.add_node_element(self._parts_group)
-
-        self._layers_group = ParameterGroup(name="exr_layers")
-        self._layers_group.ui_options = {"display_name": "Layers"}
-        self.add_node_element(self._layers_group)
 
         self._channels_group = ParameterGroup(name="exr_channels")
         self._channels_group.ui_options = {"display_name": "Channels", "collapsed": True}
@@ -248,10 +202,9 @@ class LoadEXR(SuccessFailureNode):
     # --- Lifecycle ---
 
     def after_value_set(self, parameter: Parameter, value: Any) -> None:
-        if parameter is self._file_path_param or parameter is self._channel_style_param:
+        if parameter is self._file_path_param:
             file_path = str(self.get_parameter_value(self._file_path_param.name) or "")
-            style = str(self.get_parameter_value(self._channel_style_param.name) or _DEFAULT_STRATEGY)
-            self._on_inputs_changed(file_path, style)
+            self._on_inputs_changed(file_path)
 
     async def aprocess(self) -> None:
         self._clear_execution_status()
@@ -272,12 +225,10 @@ class LoadEXR(SuccessFailureNode):
         self._populate_structured_outputs(file_path, exr_data)
 
         part = exr_data.parts[0]
-        total_layers = sum(len(p.layers) for p in exr_data.parts)
         total_channels = sum(len(p.channels) for p in exr_data.parts)
         details = (
             f"Loaded {part.width}×{part.height}, "
             f"{len(exr_data.parts)} part(s), "
-            f"{total_layers} layer(s), "
             f"{total_channels} channel(s)"
         )
         self._set_status_results(was_successful=True, result_details=details)
@@ -289,7 +240,6 @@ class LoadEXR(SuccessFailureNode):
         self.parameter_output_values[self._image_width_param.name] = 0
         self.parameter_output_values[self._image_height_param.name] = 0
         self.parameter_output_values[self._part_count_param.name] = 0
-        self.parameter_output_values[self._layer_count_param.name] = 0
         self.parameter_output_values[self._channel_count_param.name] = 0
         self.parameter_output_values[self._compression_param.name] = ""
         self.parameter_output_values[self._storage_type_param.name] = ""
@@ -302,10 +252,9 @@ class LoadEXR(SuccessFailureNode):
         self.parameter_output_values[self._chromaticities_param.name] = ""
         self.parameter_output_values[self._custom_attributes_param.name] = "{}"
         self.parameter_output_values[self._parts_param.name] = []
-        self.parameter_output_values[self._layers_param.name] = []
 
-    def _on_inputs_changed(self, file_path: str, style: str) -> None:
-        """Scan EXR header and refresh all outputs. Called on file or style change."""
+    def _on_inputs_changed(self, file_path: str) -> None:
+        """Scan EXR header and refresh all outputs. Called on file change."""
         self._remove_dynamic_elements()
         self._cached_exr_data = None
         self._clear_static_outputs()
@@ -313,14 +262,8 @@ class LoadEXR(SuccessFailureNode):
         if not file_path:
             return
 
-        strategy = _STRATEGIES.get(style)
-        if strategy is None:
-            available = ", ".join(f"'{n}'" for n in _STRATEGIES)
-            logger.error("LoadEXR '%s': Unknown channel grouping strategy '%s'. Available: %s", self.name, style, available)
-            return
-
         try:
-            exr_data = scan_exr_header(pathlib.Path(file_path), strategy)
+            exr_data = scan_exr_header(pathlib.Path(file_path))
         except (ValueError, RuntimeError) as e:
             logger.error("LoadEXR '%s': Failed to scan '%s': %s", self.name, file_path, e)
             return
@@ -330,7 +273,6 @@ class LoadEXR(SuccessFailureNode):
         self._populate_scalar_outputs(exr_data)
         self._populate_structured_outputs(file_path, exr_data)
         self._populate_parts_group(file_path, exr_data)
-        self._populate_layers_group(file_path, exr_data)
         self._populate_channels_group(file_path, exr_data)
 
     def _populate_scalar_outputs(self, exr_data: EXRData) -> None:
@@ -341,7 +283,6 @@ class LoadEXR(SuccessFailureNode):
         self.parameter_output_values[self._image_width_param.name] = part.width
         self.parameter_output_values[self._image_height_param.name] = part.height
         self.parameter_output_values[self._part_count_param.name] = len(exr_data.parts)
-        self.parameter_output_values[self._layer_count_param.name] = sum(len(p.layers) for p in exr_data.parts)
         self.parameter_output_values[self._channel_count_param.name] = sum(len(p.channels) for p in exr_data.parts)
         self.parameter_output_values[self._compression_param.name] = header.compression.value
         self.parameter_output_values[self._storage_type_param.name] = header.storage_type.value
@@ -381,19 +322,11 @@ class LoadEXR(SuccessFailureNode):
     def _populate_structured_outputs(self, file_path: str, exr_data: EXRData) -> None:
         """Build and set the structured artifact outputs."""
         part_artifacts = [self._build_part_artifact(file_path, i, p) for i, p in enumerate(exr_data.parts)]
-
         self.parameter_output_values[self._parts_param.name] = part_artifacts
-
-        all_layers: list[EXRDisplayChannel] = []
-        for part_artifact in part_artifacts:
-            for layer in part_artifact.layers:
-                all_layers.append(EXRDisplayChannel(part=part_artifact, layer=layer))
-        self.parameter_output_values[self._layers_param.name] = all_layers
 
     def _populate_parts_group(self, file_path: str, exr_data: EXRData) -> None:
         """One output per part; hidden if single-part."""
-        is_multi = len(exr_data.parts) > 1
-        if not is_multi:
+        if len(exr_data.parts) <= 1:
             return
 
         for i, part in enumerate(exr_data.parts):
@@ -410,37 +343,6 @@ class LoadEXR(SuccessFailureNode):
             )
             self._parts_group.add_child(param)
             self.parameter_output_values[param.name] = artifact
-
-    def _populate_layers_group(self, file_path: str, exr_data: EXRData) -> None:
-        """One output per layer across all parts."""
-        is_multi = len(exr_data.parts) > 1
-        seen_keys: set[str] = set()
-
-        for i, part in enumerate(exr_data.parts):
-            part_artifact = self._build_part_artifact(file_path, i, part)
-            prefix = f"p{part.name}_" if is_multi else ""
-
-            for layer in part.layers:
-                display_channel = EXRDisplayChannel(part=part_artifact, layer=layer)
-                key = f"{prefix}{layer.name or _DEFAULT_LAYER_LABEL}"
-                # Deduplicate in case of edge cases
-                if key in seen_keys:
-                    key = f"{key}_{part.name}"
-                seen_keys.add(key)
-
-                display = self._layer_display_name(layer)
-                param = Parameter(
-                    name=f"{_LAYER_PREFIX}{key}",
-                    display_name=display,
-                    type="EXRDisplayChannel",
-                    output_type="EXRDisplayChannel",
-                    tooltip=f"Layer '{layer.name or _DEFAULT_LAYER_LABEL}' - {len(layer.channels)} channel(s)",
-                    allowed_modes={ParameterMode.PROPERTY, ParameterMode.OUTPUT},
-                    settable=False,
-                    hide_property=True,
-                )
-                self._layers_group.add_child(param)
-                self.parameter_output_values[param.name] = display_channel
 
     def _populate_channels_group(self, file_path: str, exr_data: EXRData) -> None:
         """One output per channel as an EXRChannelArtifact."""
@@ -479,7 +381,6 @@ class LoadEXR(SuccessFailureNode):
             height=part.height,
             header=part.header,
             channels=part.channels,
-            layers=part.layers,
         )
 
     def _part_display_name(self, part: EXRPart, *, is_multi: bool) -> str:
@@ -488,14 +389,8 @@ class LoadEXR(SuccessFailureNode):
             return f"{label}: {part.header.name}"
         return label
 
-    def _layer_display_name(self, layer: EXRLayer) -> str:
-        """'beauty (R, G, B, A)' - short channel names after strategy parsing."""
-        label = layer.name or _DEFAULT_LAYER_LABEL
-        short_names = [parse_channel_name(ch.name).channel_name for ch in layer.channels]
-        return f"{label} ({', '.join(short_names)})"
-
     def _remove_dynamic_elements(self) -> None:
-        """Clear all dynamic children from the three dynamic groups."""
-        for group in (self._parts_group, self._layers_group, self._channels_group):
+        """Clear all dynamic children from the two dynamic groups."""
+        for group in (self._parts_group, self._channels_group):
             for child in list(group.children):
                 group.remove_child(child)

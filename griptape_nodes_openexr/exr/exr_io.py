@@ -9,13 +9,14 @@ from __future__ import annotations
 
 import logging
 import pathlib
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import OpenEXR
 from griptape_nodes.files.file import File
 
 from griptape_nodes_openexr.exr.exr_types import (
     _ATTR_CAP_DATE,
+    _ATTR_CHANNELS,
     _ATTR_CHROMATICITIES,
     _ATTR_CHUNK_COUNT,
     _ATTR_COMMENTS,
@@ -55,22 +56,18 @@ from griptape_nodes_openexr.exr.exr_types import (
     _format_time_code,
 )
 
-if TYPE_CHECKING:
-    from griptape_nodes_openexr.exr.strategies.base import ChannelGroupingStrategy
-
 logger = logging.getLogger("griptape_nodes")
 
 
-def scan_exr_header(file_path: str | pathlib.Path, strategy: ChannelGroupingStrategy) -> EXRData:
+def scan_exr_header(file_path: str | pathlib.Path) -> EXRData:
     """Scan an EXR file's headers without loading pixel data.
 
     Opens the file, iterates all parts, and builds the full EXRData structure
-    (headers + channel/layer metadata). Pixel chunks are never touched, making
+    (headers + channel metadata). Pixel chunks are never touched, making
     this fast even for large multi-part files.
 
     Args:
         file_path: Path to the EXR file
-        strategy: Channel grouping strategy controlling name parsing and layer grouping
 
     Returns:
         EXRData with metadata for all parts; no pixel data loaded
@@ -88,14 +85,19 @@ def scan_exr_header(file_path: str | pathlib.Path, strategy: ChannelGroupingStra
     try:
         with OpenEXR.File(resolved_path, header_only=True) as exr_file:
             for part in exr_file.parts:
-                channels = _build_channel_list(exr_file.channels(part.part_index))
-                header = _build_header(part, part.header)
+                # In header_only mode part.width()/height() return 0 and
+                # exr_file.channels() returns {}; read both from the header.
+                raw_header = part.header
+                channels = _build_channel_list_from_header(raw_header.get(_ATTR_CHANNELS, []))
+                header = _build_header(part, raw_header)
+                dw = header.data_window
+                width = int(dw.xmax - dw.xmin + 1)
+                height = int(dw.ymax - dw.ymin + 1)
                 parts.append(
                     EXRPart(
                         name=part.name(),
-                        width=part.width(),
-                        height=part.height(),
-                        layers=[],
+                        width=width,
+                        height=height,
                         header=header,
                         channels=channels,
                     )
@@ -108,20 +110,28 @@ def scan_exr_header(file_path: str | pathlib.Path, strategy: ChannelGroupingStra
         msg = f"EXR file has no parts: {resolved_path}"
         raise ValueError(msg)
 
-    for part in parts:
-        part.layers = strategy.group_into_layers(part.channels)
-    strategy.postprocess_parts(parts)
     return EXRData(parts=parts)
 
 
-def _build_channel_list(exr_channels: dict[str, OpenEXR.Channel]) -> list[EXRChannelInfo]:
-    """Build channel metadata list from an OpenEXR's Part Channels."""
+def _build_channel_list_from_header(exr_channels: list[OpenEXR.Channel]) -> list[EXRChannelInfo]:
+    """Build channel metadata list from the header 'channels' attribute.
+
+    In header_only mode, exr_file.channels() returns an empty dict, so channels
+    are read from part.header['channels'] — a list of Channel objects with
+    .name, .xSampling, .ySampling. Pixel type is not accessible via .type() in
+    this mode (the binding inspects the pixels array, which is empty), so it
+    defaults to HALF, which covers the vast majority of VFX EXR channels.
+    """
     result: list[EXRChannelInfo] = []
-    for channel_name, exr_channel in exr_channels.items():
+    for exr_channel in exr_channels:
+        try:
+            pixel_type = _EXR_PIXEL_TYPE_MAP.get(exr_channel.type(), PixelType.HALF)
+        except Exception:
+            pixel_type = PixelType.HALF
         result.append(
             EXRChannelInfo(
-                name=channel_name,
-                pixel_type=_EXR_PIXEL_TYPE_MAP.get(exr_channel.type(), PixelType.FLOAT),
+                name=exr_channel.name,
+                pixel_type=pixel_type,
                 x_sampling=exr_channel.xSampling,
                 y_sampling=exr_channel.ySampling,
             )
