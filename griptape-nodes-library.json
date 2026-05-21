@@ -32,12 +32,12 @@
   ],
   "nodes": [
     {
-      "class_name": "ReadEXRHeader",
-      "file_path": "griptape_nodes_openexr/nodes/read_exr_header.py",
+      "class_name": "LoadEXR",
+      "file_path": "griptape_nodes_openexr/nodes/load_exr.py",
       "metadata": {
         "category": "exr",
-        "description": "Parse OpenEXR header metadata (parts, layers, channels, attributes) without loading pixels",
-        "display_name": "Read EXR Header",
+        "description": "Load an OpenEXR file and expose its metadata (parts, layers, channels, attributes) without reading pixels",
+        "display_name": "Load EXR",
         "icon": "file-search",
         "group": "load"
       }

@@ -1,4 +1,4 @@
-"""ReadEXRHeader node - parse EXR header metadata without loading pixels.
+"""LoadEXR node - parse EXR header metadata without loading pixels.
 
 Architecture: Two-phase scanning.
 - Phase 1 (after_value_set on file_path or channel_style): Scan headers only.
@@ -27,9 +27,9 @@ from griptape_nodes.traits.file_system_picker import FileSystemPicker
 from griptape_nodes.traits.options import Options
 
 from griptape_nodes_openexr.exr.exr_header_artifact import (
-    EXRHeaderArtifact,
-    EXRLayerArtifact,
-    EXRPartHeaderArtifact,
+    EXRChannelArtifact,
+    EXRDisplayChannel,
+    EXRPartArtifact,
 )
 from griptape_nodes_openexr.exr.exr_io import scan_exr_header
 from griptape_nodes_openexr.exr.exr_types import EXRData, EXRLayer, EXRPart, parse_channel_name
@@ -46,10 +46,10 @@ _CHANNEL_PREFIX = "channel_"
 _DEFAULT_LAYER_LABEL = "default"
 
 
-class ReadEXRHeader(SuccessFailureNode):
+class LoadEXR(SuccessFailureNode):
     """Parse an OpenEXR file's header and expose metadata for downstream nodes.
 
-    No pixel data is loaded. Outputs structured header artifacts plus scalar
+    No pixel data is loaded. Outputs structured artifacts plus scalar
     convenience outputs for common fields (width, height, compression, etc.)
     and dynamic groups for parts, layers, and channels.
 
@@ -203,37 +203,27 @@ class ReadEXRHeader(SuccessFailureNode):
 
         # --- Structured outputs ---
 
-        self._exr_header_param = Parameter(
-            name="exr_header",
-            display_name="EXR Header",
-            type="EXRHeaderArtifact",
-            output_type="EXRHeaderArtifact",
-            tooltip="Full structured metadata descriptor (no pixel data)",
-            allowed_modes={ParameterMode.OUTPUT},
-        )
-        self.add_parameter(self._exr_header_param)
-
-        self._all_parts_param = Parameter(
-            name="all_parts",
-            display_name="All Parts",
-            type="list[EXRPartHeaderArtifact]",
-            output_type="list[EXRPartHeaderArtifact]",
+        self._parts_param = Parameter(
+            name="parts",
+            display_name="Parts",
+            type="list[EXRPartArtifact]",
+            output_type="list[EXRPartArtifact]",
             tooltip="Per-part metadata descriptors",
             allowed_modes={ParameterMode.OUTPUT},
             settable=False,
         )
-        self.add_parameter(self._all_parts_param)
+        self.add_parameter(self._parts_param)
 
-        self._all_layers_param = Parameter(
-            name="all_layers",
-            display_name="All Layers",
-            type="list[EXRLayerArtifact]",
-            output_type="list[EXRLayerArtifact]",
-            tooltip="All layers across all parts",
+        self._layers_param = Parameter(
+            name="layers",
+            display_name="Layers",
+            type="list[EXRDisplayChannel]",
+            output_type="list[EXRDisplayChannel]",
+            tooltip="All display channels (layers) across all parts",
             allowed_modes={ParameterMode.OUTPUT},
             settable=False,
         )
-        self.add_parameter(self._all_layers_param)
+        self.add_parameter(self._layers_param)
 
         # --- Dynamic groups ---
 
@@ -311,9 +301,8 @@ class ReadEXRHeader(SuccessFailureNode):
         self.parameter_output_values[self._owner_param.name] = ""
         self.parameter_output_values[self._chromaticities_param.name] = ""
         self.parameter_output_values[self._custom_attributes_param.name] = "{}"
-        self.parameter_output_values[self._exr_header_param.name] = None
-        self.parameter_output_values[self._all_parts_param.name] = []
-        self.parameter_output_values[self._all_layers_param.name] = []
+        self.parameter_output_values[self._parts_param.name] = []
+        self.parameter_output_values[self._layers_param.name] = []
 
     def _on_inputs_changed(self, file_path: str, style: str) -> None:
         """Scan EXR header and refresh all outputs. Called on file or style change."""
@@ -327,13 +316,13 @@ class ReadEXRHeader(SuccessFailureNode):
         strategy = _STRATEGIES.get(style)
         if strategy is None:
             available = ", ".join(f"'{n}'" for n in _STRATEGIES)
-            logger.error("ReadEXRHeader '%s': Unknown channel grouping strategy '%s'. Available: %s", self.name, style, available)
+            logger.error("LoadEXR '%s': Unknown channel grouping strategy '%s'. Available: %s", self.name, style, available)
             return
 
         try:
             exr_data = scan_exr_header(pathlib.Path(file_path), strategy)
         except (ValueError, RuntimeError) as e:
-            logger.error("ReadEXRHeader '%s': Failed to scan '%s': %s", self.name, file_path, e)
+            logger.error("LoadEXR '%s': Failed to scan '%s': %s", self.name, file_path, e)
             return
 
         self._cached_exr_data = exr_data
@@ -391,17 +380,15 @@ class ReadEXRHeader(SuccessFailureNode):
 
     def _populate_structured_outputs(self, file_path: str, exr_data: EXRData) -> None:
         """Build and set the structured artifact outputs."""
-        part_artifacts = [self._build_part_artifact(file_path, p) for p in exr_data.parts]
+        part_artifacts = [self._build_part_artifact(file_path, i, p) for i, p in enumerate(exr_data.parts)]
 
-        exr_header = EXRHeaderArtifact(file_path=file_path, parts=part_artifacts)
-        self.parameter_output_values[self._exr_header_param.name] = exr_header
-        self.parameter_output_values[self._all_parts_param.name] = part_artifacts
+        self.parameter_output_values[self._parts_param.name] = part_artifacts
 
-        all_layers: list[EXRLayerArtifact] = []
+        all_layers: list[EXRDisplayChannel] = []
         for part_artifact in part_artifacts:
             for layer in part_artifact.layers:
-                all_layers.append(EXRLayerArtifact(part=part_artifact, layer=layer))
-        self.parameter_output_values[self._all_layers_param.name] = all_layers
+                all_layers.append(EXRDisplayChannel(part=part_artifact, layer=layer))
+        self.parameter_output_values[self._layers_param.name] = all_layers
 
     def _populate_parts_group(self, file_path: str, exr_data: EXRData) -> None:
         """One output per part; hidden if single-part."""
@@ -409,14 +396,14 @@ class ReadEXRHeader(SuccessFailureNode):
         if not is_multi:
             return
 
-        for part in exr_data.parts:
-            artifact = self._build_part_artifact(file_path, part)
+        for i, part in enumerate(exr_data.parts):
+            artifact = self._build_part_artifact(file_path, i, part)
             display = self._part_display_name(part, is_multi=True)
             param = Parameter(
                 name=f"{_PART_PREFIX}{part.name}",
                 display_name=display,
-                type="EXRPartHeaderArtifact",
-                output_type="EXRPartHeaderArtifact",
+                type="EXRPartArtifact",
+                output_type="EXRPartArtifact",
                 tooltip=f"Descriptor for part {part.name} ({part.width}×{part.height})",
                 allowed_modes={ParameterMode.OUTPUT},
                 settable=False,
@@ -429,12 +416,12 @@ class ReadEXRHeader(SuccessFailureNode):
         is_multi = len(exr_data.parts) > 1
         seen_keys: set[str] = set()
 
-        for part in exr_data.parts:
-            part_artifact = self._build_part_artifact(file_path, part)
+        for i, part in enumerate(exr_data.parts):
+            part_artifact = self._build_part_artifact(file_path, i, part)
             prefix = f"p{part.name}_" if is_multi else ""
 
             for layer in part.layers:
-                layer_artifact = EXRLayerArtifact(part=part_artifact, layer=layer)
+                display_channel = EXRDisplayChannel(part=part_artifact, layer=layer)
                 key = f"{prefix}{layer.name or _DEFAULT_LAYER_LABEL}"
                 # Deduplicate in case of edge cases
                 if key in seen_keys:
@@ -445,21 +432,21 @@ class ReadEXRHeader(SuccessFailureNode):
                 param = Parameter(
                     name=f"{_LAYER_PREFIX}{key}",
                     display_name=display,
-                    type="EXRLayerArtifact",
-                    output_type="EXRLayerArtifact",
+                    type="EXRDisplayChannel",
+                    output_type="EXRDisplayChannel",
                     tooltip=f"Layer '{layer.name or _DEFAULT_LAYER_LABEL}' - {len(layer.channels)} channel(s)",
                     allowed_modes={ParameterMode.PROPERTY, ParameterMode.OUTPUT},
                     settable=False,
                     hide_property=True,
                 )
                 self._layers_group.add_child(param)
-                self.parameter_output_values[param.name] = layer_artifact
+                self.parameter_output_values[param.name] = display_channel
 
-    def _populate_channels_group(self, file_path: str, exr_data: EXRData) -> None:  # noqa: ARG002
-        """One output per channel showing name, pixel type, and sampling."""
+    def _populate_channels_group(self, file_path: str, exr_data: EXRData) -> None:
+        """One output per channel as an EXRChannelArtifact."""
         is_multi = len(exr_data.parts) > 1
 
-        for part in exr_data.parts:
+        for part_index, part in enumerate(exr_data.parts):
             prefix = f"p{part.name}_" if is_multi else ""
             for ch in part.channels:
                 key = f"{prefix}{ch.name}"
@@ -468,21 +455,25 @@ class ReadEXRHeader(SuccessFailureNode):
                 param = Parameter(
                     name=f"{_CHANNEL_PREFIX}{key}",
                     display_name=display,
-                    type="str",
-                    output_type="str",
-                    default_value=ch.name,
+                    type="EXRChannelArtifact",
+                    output_type="EXRChannelArtifact",
                     tooltip=f"Channel '{ch.name}', type={ch.pixel_type.value}, x_sampling={ch.x_sampling}, y_sampling={ch.y_sampling}",
                     allowed_modes={ParameterMode.OUTPUT},
                     settable=False,
                 )
                 self._channels_group.add_child(param)
-                self.parameter_output_values[param.name] = ch.name
+                self.parameter_output_values[param.name] = EXRChannelArtifact(
+                    file_path=file_path,
+                    part_index=part_index,
+                    channel=ch,
+                )
 
     # --- Private: helpers ---
 
-    def _build_part_artifact(self, file_path: str, part: EXRPart) -> EXRPartHeaderArtifact:
-        return EXRPartHeaderArtifact(
+    def _build_part_artifact(self, file_path: str, part_index: int, part: EXRPart) -> EXRPartArtifact:
+        return EXRPartArtifact(
             file_path=file_path,
+            part_index=part_index,
             name=part.header.name,
             width=part.width,
             height=part.height,
