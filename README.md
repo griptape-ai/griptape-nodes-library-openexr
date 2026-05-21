@@ -4,9 +4,9 @@ Professional OpenEXR support for Griptape Nodes, designed for VFX and HDR pipeli
 
 ## Nodes
 
-### Read EXR Header
+### Load EXR
 
-Parses an EXR file's header and exposes its full structure as typed outputs. No pixel data is ever loaded, making it fast even on large multi-part renders.
+Loads an EXR file and exposes its full structure as typed outputs. No pixel data is ever read, making it fast even on large multi-part renders.
 
 **Inputs**
 
@@ -19,9 +19,8 @@ Parses an EXR file's header and exposes its full structure as typed outputs. No 
 
 | Parameter | Type | Description |
 |---|---|---|
-| `exr_header` | `EXRHeaderArtifact` | Full structured metadata descriptor |
-| `all_parts` | `list[EXRPartHeaderArtifact]` | Per-part descriptors |
-| `all_layers` | `list[EXRLayerArtifact]` | All layers across all parts |
+| `parts` | `list[EXRPartArtifact]` | Per-part metadata descriptors |
+| `layers` | `list[EXRDisplayChannel]` | All display channels (layers) across all parts |
 | `image_width` / `image_height` | `int` | Dimensions from data window |
 | `part_count` / `layer_count` / `channel_count` | `int` | Counts |
 | `compression` | `str` | e.g. `ZIP_COMPRESSION`, `DWAB_COMPRESSION` |
@@ -36,9 +35,9 @@ Parses an EXR file's header and exposes its full structure as typed outputs. No 
 
 Dynamic groups are also populated after scan:
 
-- **Parts** - one `EXRPartHeaderArtifact` output per part (hidden for single-part files)
-- **Layers** - one `EXRLayerArtifact` per layer, labelled `beauty (R, G, B, A)`
-- **Channels** - one output per raw channel with name, pixel type, and sampling
+- **Parts** - one `EXRPartArtifact` output per part (hidden for single-part files)
+- **Layers** - one `EXRDisplayChannel` per layer, labelled `beauty (R, G, B, A)`
+- **Channels** - one `EXRChannelArtifact` per raw channel with name, pixel type, and sampling
 
 ## Channel Style
 
