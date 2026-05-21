@@ -38,12 +38,23 @@ _PART_PREFIX = "part_"
 _CHANNEL_PREFIX = "channel_"
 
 
+def _sanitize_key(name: str) -> str:
+    """Convert an arbitrary string into a valid parameter name segment."""
+    return "".join(c if c.isalnum() or c == "_" else "_" for c in name)
+
+
 class LoadEXR(SuccessFailureNode):
     """Parse an OpenEXR file's header and expose metadata for downstream nodes.
 
     No pixel data is loaded. Outputs structured artifacts plus scalar
     convenience outputs for common fields (width, height, compression, etc.)
-    and dynamic groups for parts and channels.
+    and dynamic groups that adapt to single-part vs multi-part files.
+
+    Single-part: part metadata is shown in the EXR Info group; channels appear
+    directly in the Channels group.
+
+    Multi-part: one collapsible panel per part, each containing that part's
+    EXRPartArtifact output and its individual channel outputs.
     """
 
     def __init__(self, name: str, metadata: dict[Any, Any] | None = None) -> None:
@@ -69,6 +80,9 @@ class LoadEXR(SuccessFailureNode):
         self.add_parameter(self._file_path_param)
 
         # --- EXR Info group (collapsed) ---
+        # Single-part: all metadata lives here.
+        # Multi-part: file-level scalars (part count, channel count) live here;
+        #   per-part detail moves into the per-part panels below.
 
         with ParameterGroup(name="EXR Info") as exr_info_group:
             exr_info_group.ui_options = {"collapsed": True}
@@ -185,10 +199,14 @@ class LoadEXR(SuccessFailureNode):
 
         # --- Dynamic groups ---
 
+        # Multi-part: populated with one collapsible sub-group per part.
+        # Single-part: left empty (nothing to show at part level).
         self._parts_group = ParameterGroup(name="exr_parts")
         self._parts_group.ui_options = {"display_name": "Parts"}
         self.add_node_element(self._parts_group)
 
+        # Single-part only: flat list of channel outputs.
+        # Multi-part: channels live inside each part's sub-group instead.
         self._channels_group = ParameterGroup(name="exr_channels")
         self._channels_group.ui_options = {"display_name": "Channels", "collapsed": True}
         self.add_node_element(self._channels_group)
@@ -226,11 +244,7 @@ class LoadEXR(SuccessFailureNode):
 
         part = exr_data.parts[0]
         total_channels = sum(len(p.channels) for p in exr_data.parts)
-        details = (
-            f"Loaded {part.width}×{part.height}, "
-            f"{len(exr_data.parts)} part(s), "
-            f"{total_channels} channel(s)"
-        )
+        details = f"Loaded {part.width}×{part.height}, {len(exr_data.parts)} part(s), {total_channels} channel(s)"
         self._set_status_results(was_successful=True, result_details=details)
 
     # --- Private: scan and populate ---
@@ -325,50 +339,83 @@ class LoadEXR(SuccessFailureNode):
         self.parameter_output_values[self._parts_param.name] = part_artifacts
 
     def _populate_parts_group(self, file_path: str, exr_data: EXRData) -> None:
-        """One output per part; hidden if single-part."""
+        """Multi-part: one collapsible sub-group per part with artifact + channels.
+
+        Single-part files are skipped; their channels go into _channels_group instead.
+        """
         if len(exr_data.parts) <= 1:
             return
 
         for i, part in enumerate(exr_data.parts):
             artifact = self._build_part_artifact(file_path, i, part)
-            display = self._part_display_name(part, is_multi=True)
-            param = Parameter(
-                name=f"{_PART_PREFIX}{part.name}",
-                display_name=display,
+            part_key = _sanitize_key(part.header.name or str(i))
+            part_label = part.header.name or f"Part {i}"
+
+            part_subgroup = ParameterGroup(name=f"{_PART_PREFIX}{part_key}")
+            part_subgroup.ui_options = {"display_name": part_label, "collapsed": True}
+
+            # Artifact output — the primary connectable output for this part
+            artifact_param = Parameter(
+                name=f"{_PART_PREFIX}{part_key}",
+                display_name=part_label,
                 type="EXRPartArtifact",
                 output_type="EXRPartArtifact",
-                tooltip=f"Descriptor for part {part.name} ({part.width}×{part.height})",
+                tooltip=f"Descriptor for part '{part_label}' ({part.width}×{part.height})",
                 allowed_modes={ParameterMode.OUTPUT},
                 settable=False,
             )
-            self._parts_group.add_child(param)
-            self.parameter_output_values[param.name] = artifact
+            part_subgroup.add_child(artifact_param)
+            self.parameter_output_values[artifact_param.name] = artifact
 
-    def _populate_channels_group(self, file_path: str, exr_data: EXRData) -> None:
-        """One output per channel as an EXRChannelArtifact."""
-        is_multi = len(exr_data.parts) > 1
-
-        for part_index, part in enumerate(exr_data.parts):
-            prefix = f"p{part.name}_" if is_multi else ""
+            # Channel outputs for this part
             for ch in part.channels:
-                key = f"{prefix}{ch.name}"
+                ch_key = _sanitize_key(ch.name)
                 sampling = "" if (ch.x_sampling == 1 and ch.y_sampling == 1) else f" [{ch.x_sampling}×{ch.y_sampling}]"
-                display = f"{ch.name} ({ch.pixel_type.value}{sampling})"
-                param = Parameter(
-                    name=f"{_CHANNEL_PREFIX}{key}",
-                    display_name=display,
+                ch_param = Parameter(
+                    name=f"{_CHANNEL_PREFIX}{part_key}_{ch_key}",
+                    display_name=f"{ch.name} ({ch.pixel_type.value}{sampling})",
                     type="EXRChannelArtifact",
                     output_type="EXRChannelArtifact",
                     tooltip=f"Channel '{ch.name}', type={ch.pixel_type.value}, x_sampling={ch.x_sampling}, y_sampling={ch.y_sampling}",
                     allowed_modes={ParameterMode.OUTPUT},
                     settable=False,
                 )
-                self._channels_group.add_child(param)
-                self.parameter_output_values[param.name] = EXRChannelArtifact(
+                part_subgroup.add_child(ch_param)
+                self.parameter_output_values[ch_param.name] = EXRChannelArtifact(
                     file_path=file_path,
-                    part_index=part_index,
+                    part_index=i,
                     channel=ch,
                 )
+
+            self._parts_group.add_child(part_subgroup)
+
+    def _populate_channels_group(self, file_path: str, exr_data: EXRData) -> None:
+        """Single-part only: flat channel outputs.
+
+        Multi-part channels live inside each part's sub-group in _parts_group.
+        """
+        if len(exr_data.parts) > 1:
+            return
+
+        part = exr_data.parts[0]
+        for ch in part.channels:
+            ch_key = _sanitize_key(ch.name)
+            sampling = "" if (ch.x_sampling == 1 and ch.y_sampling == 1) else f" [{ch.x_sampling}×{ch.y_sampling}]"
+            param = Parameter(
+                name=f"{_CHANNEL_PREFIX}{ch_key}",
+                display_name=f"{ch.name} ({ch.pixel_type.value}{sampling})",
+                type="EXRChannelArtifact",
+                output_type="EXRChannelArtifact",
+                tooltip=f"Channel '{ch.name}', type={ch.pixel_type.value}, x_sampling={ch.x_sampling}, y_sampling={ch.y_sampling}",
+                allowed_modes={ParameterMode.OUTPUT},
+                settable=False,
+            )
+            self._channels_group.add_child(param)
+            self.parameter_output_values[param.name] = EXRChannelArtifact(
+                file_path=file_path,
+                part_index=0,
+                channel=ch,
+            )
 
     # --- Private: helpers ---
 
@@ -383,14 +430,8 @@ class LoadEXR(SuccessFailureNode):
             channels=part.channels,
         )
 
-    def _part_display_name(self, part: EXRPart, *, is_multi: bool) -> str:
-        label = f"Part {part.name}" if is_multi else "Single Part"
-        if part.header.name:
-            return f"{label}: {part.header.name}"
-        return label
-
     def _remove_dynamic_elements(self) -> None:
-        """Clear all dynamic children from the two dynamic groups."""
+        """Clear all dynamic children from both dynamic groups."""
         for group in (self._parts_group, self._channels_group):
             for child in list(group.children):
                 group.remove_child(child)

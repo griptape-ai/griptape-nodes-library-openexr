@@ -230,7 +230,9 @@ def _extract_tile_description(header: dict) -> TileDescription:
         tile_width=exr_tile_description.xSize,
         tile_height=exr_tile_description.ySize,
         level_mode=_EXR_LEVEL_MODE_MAP.get(exr_tile_description.mode, LevelModeType.ONE_LEVEL),
-        rounding_mode=_EXR_LEVEL_ROUNDING_MODE_MAP.get(exr_tile_description.roundingMode, LevelRoundingModeType.ROUND_UP),
+        rounding_mode=_EXR_LEVEL_ROUNDING_MODE_MAP.get(
+            exr_tile_description.roundingMode, LevelRoundingModeType.ROUND_UP
+        ),
     )
 
 

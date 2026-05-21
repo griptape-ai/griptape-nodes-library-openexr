@@ -170,7 +170,6 @@ class WindowCoordinates(NamedTuple):
     ymax: int
 
 
-
 # --- EXR-specific metadata types ---
 
 

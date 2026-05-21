@@ -172,7 +172,7 @@ class TestOverscan:
     def test_part_dimensions_from_data_window(self) -> None:
         # Width/height are derived from data window extents
         part = scan_exr_header(str(self.FILE)).parts[0]
-        assert part.width == 64   # 55 - (-8) + 1
+        assert part.width == 64  # 55 - (-8) + 1
         assert part.height == 64  # 55 - (-8) + 1
 
 
