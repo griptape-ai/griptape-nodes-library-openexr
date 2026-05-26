@@ -38,6 +38,15 @@ logger = logging.getLogger("griptape_nodes")
 _PART_PREFIX = "part_"
 _CHANNEL_PREFIX = "channel_"
 
+_CHROMA_RED_X = "red_x"
+_CHROMA_RED_Y = "red_y"
+_CHROMA_GREEN_X = "green_x"
+_CHROMA_GREEN_Y = "green_y"
+_CHROMA_BLUE_X = "blue_x"
+_CHROMA_BLUE_Y = "blue_y"
+_CHROMA_WHITE_X = "white_x"
+_CHROMA_WHITE_Y = "white_y"
+
 
 def _sanitize_key(name: str) -> str:
     """Convert an arbitrary string into a valid parameter name segment."""
@@ -321,14 +330,14 @@ class LoadEXR(SuccessFailureNode):
         if header.chromaticities:
             c = header.chromaticities
             chroma_dict = {
-                "red_x": c.red_x,
-                "red_y": c.red_y,
-                "green_x": c.green_x,
-                "green_y": c.green_y,
-                "blue_x": c.blue_x,
-                "blue_y": c.blue_y,
-                "white_x": c.white_x,
-                "white_y": c.white_y,
+                _CHROMA_RED_X: c.red_x,
+                _CHROMA_RED_Y: c.red_y,
+                _CHROMA_GREEN_X: c.green_x,
+                _CHROMA_GREEN_Y: c.green_y,
+                _CHROMA_BLUE_X: c.blue_x,
+                _CHROMA_BLUE_Y: c.blue_y,
+                _CHROMA_WHITE_X: c.white_x,
+                _CHROMA_WHITE_Y: c.white_y,
             }
             self.parameter_output_values[self._chromaticities_param.name] = json.dumps(chroma_dict)
         else:
