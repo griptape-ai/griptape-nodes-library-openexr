@@ -137,7 +137,19 @@ def make_nuke_metadata():
     OpenEXR.File(header, channels).write(str(OUT / "nuke_metadata.exr"))
 
 
-# ── 8. legacy_multipart.exr ──────────────────────────────────────────────────
+# ── 8. pixel_types.exr ───────────────────────────────────────────────────────
+def make_pixel_types():
+    """Single-part file with HALF, FLOAT, and UINT channels for pixel-type conversion tests."""
+    channels = {
+        "half_ch": np.full((H, W), 0.5, dtype=np.float16),
+        "float_ch": np.full((H, W), 1.0, dtype=np.float32),
+        "uint_ch": np.full((H, W), 1000, dtype=np.uint32),
+    }
+    header = {"compression": OpenEXR.ZIP_COMPRESSION, "type": OpenEXR.scanlineimage}
+    OpenEXR.File(header, channels).write(str(OUT / "pixel_types.exr"))
+
+
+# ── 9. legacy_multipart.exr ──────────────────────────────────────────────────
 def make_legacy_multipart():
     rgba_part = OpenEXR.Part(
         {"compression": OpenEXR.ZIP_COMPRESSION},
@@ -166,6 +178,7 @@ if __name__ == "__main__":
         ("overscan.exr", make_overscan),
         ("custom_attributes.exr", make_custom_attributes),
         ("nuke_metadata.exr", make_nuke_metadata),
+        ("pixel_types.exr", make_pixel_types),
         ("legacy_multipart.exr", make_legacy_multipart),
     ]
     for name, fn in fixtures:
