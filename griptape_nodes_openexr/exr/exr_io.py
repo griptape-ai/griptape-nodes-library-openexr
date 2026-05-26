@@ -1,8 +1,13 @@
-"""OpenEXR-based EXR header scanning.
+"""OpenEXR-based EXR file scanning.
 
 Two-phase design:
-- scan_exr_header(): reads headers only, no pixel I/O - fast for UI path
-- Pixel loading is intentionally out of scope; downstream nodes call OpenImageIO directly
+- scan_exr_header(): reads metadata for all parts; pixel loading is controlled by the
+  `header_only` flag (configurable via the `openexr.header_only` engine setting).
+- When header_only=True (default): headers are read without touching pixel data — fast
+  even on large multi-part files, but channel pixel types default to HALF when the
+  OpenEXR binding cannot inspect the pixel arrays.
+- When header_only=False: the full file is opened, pixel types are read accurately from
+  the file, at the cost of loading pixel data into memory.
 """
 
 from __future__ import annotations
@@ -59,18 +64,22 @@ from griptape_nodes_openexr.exr.exr_types import (
 logger = logging.getLogger("griptape_nodes")
 
 
-def scan_exr_header(file_path: str | pathlib.Path) -> EXRData:
-    """Scan an EXR file's headers without loading pixel data.
+def scan_exr_header(file_path: str | pathlib.Path, *, header_only: bool = True) -> EXRData:
+    """Scan an EXR file and return metadata for all parts.
 
     Opens the file, iterates all parts, and builds the full EXRData structure
-    (headers + channel metadata). Pixel chunks are never touched, making
-    this fast even for large multi-part files.
+    (headers + channel metadata).
 
     Args:
         file_path: Path to the EXR file
+        header_only: When True (default), only header data is read — pixel chunks are
+            never loaded, making this fast even for large multi-part files.  Channel
+            pixel types default to HALF when the OpenEXR binding cannot inspect the
+            pixel arrays in this mode.  When False, the full file is opened so pixel
+            types are read accurately from the file at the cost of loading pixel data.
 
     Returns:
-        EXRData with metadata for all parts; no pixel data loaded
+        EXRData with metadata for all parts
 
     Raises:
         ValueError: If file_path is empty
@@ -83,7 +92,7 @@ def scan_exr_header(file_path: str | pathlib.Path) -> EXRData:
     resolved_path = File(str(file_path)).resolve()
     parts: list[EXRPart] = []
     try:
-        with OpenEXR.File(resolved_path, header_only=True) as exr_file:
+        with OpenEXR.File(resolved_path, header_only=header_only) as exr_file:
             for part in exr_file.parts:
                 # In header_only mode part.width()/height() return 0 and
                 # exr_file.channels() returns {}; read both from the header.

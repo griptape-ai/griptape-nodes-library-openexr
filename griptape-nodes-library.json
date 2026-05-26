@@ -16,7 +16,7 @@
       "pip_dependencies": [
         "openimageio>=2.3.0",
         "numpy>=1.26.0",
-        "openexr>=3.3.0"
+        "OpenEXR>=3.4.12"
       ]
     }
   },
@@ -44,5 +44,13 @@
     }
   ],
   "workflows": [],
-  "settings": []
+  "settings": [
+    {
+      "category": "openexr",
+      "description": "OpenEXR library settings — controls how the LoadEXR node reads files",
+      "contents": {
+        "header_only": true
+      }
+    }
+  ]
 }

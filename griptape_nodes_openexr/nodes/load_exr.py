@@ -23,6 +23,7 @@ from griptape_nodes.exe_types.node_types import SuccessFailureNode
 from griptape_nodes.exe_types.param_types.parameter_float import ParameterFloat
 from griptape_nodes.exe_types.param_types.parameter_int import ParameterInt
 from griptape_nodes.exe_types.param_types.parameter_string import ParameterString
+from griptape_nodes.retained_mode.griptape_nodes import GriptapeNodes
 from griptape_nodes.traits.file_system_picker import FileSystemPicker
 
 from griptape_nodes_openexr.exr.exr_header_artifact import (
@@ -276,8 +277,12 @@ class LoadEXR(SuccessFailureNode):
         if not file_path:
             return
 
+        header_only: bool = GriptapeNodes.ConfigManager().get_config_value("openexr.header_only")
+        if header_only is None:
+            header_only = True
+
         try:
-            exr_data = scan_exr_header(pathlib.Path(file_path))
+            exr_data = scan_exr_header(pathlib.Path(file_path), header_only=header_only)
         except (ValueError, RuntimeError) as e:
             logger.error("LoadEXR '%s': Failed to scan '%s': %s", self.name, file_path, e)
             return
