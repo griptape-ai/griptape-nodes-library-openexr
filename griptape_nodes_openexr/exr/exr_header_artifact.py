@@ -24,7 +24,9 @@ class EXRPartArtifact:
     separate call using file_path and part_index.
 
     Attributes:
-        file_path: Absolute path to the EXR file
+        file_path: Engine path to the EXR file (may contain macros such as
+            ``{{workspace}}/shot.exr``); call ``File(file_path).resolve()``
+            before opening the file.
         part_index: Zero-based part index within the file
         name: Part name (empty for single-part or unnamed parts)
         width: Image width in pixels
@@ -59,7 +61,9 @@ class EXRChannelArtifact:
     to initiate pixel loading.
 
     Attributes:
-        file_path: Absolute path to the EXR file
+        file_path: Engine path to the EXR file (may contain macros such as
+            ``{{workspace}}/shot.exr``); call ``File(file_path).resolve()``
+            before opening the file.
         part_index: Zero-based part index within the file
         channel: Channel metadata (name, pixel_type, x_sampling, y_sampling)
     """
