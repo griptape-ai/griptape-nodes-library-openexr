@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import json
 import logging
-import pathlib
 from typing import Any
 
 from griptape_nodes.exe_types.core_types import (
@@ -294,7 +293,7 @@ class LoadEXR(SuccessFailureNode):
             header_only = True
 
         try:
-            exr_data = scan_exr_header(pathlib.Path(file_path), header_only=header_only)
+            exr_data = scan_exr_header(file_path, header_only=header_only)
         except (ValueError, RuntimeError) as e:
             logger.error("LoadEXR '%s': Failed to scan '%s': %s", self.name, file_path, e)
             return

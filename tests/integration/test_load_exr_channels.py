@@ -115,9 +115,7 @@ class TestChannelFiltering:
         assert set(channels.keys()) == {"depth.Z"}
 
     def test_filter_multiple_channels(self) -> None:
-        channels = load_exr_channels(
-            str(self.FILE), part_index=0, channel_names=["beauty.R", "beauty.G", "beauty.B"]
-        )
+        channels = load_exr_channels(str(self.FILE), part_index=0, channel_names=["beauty.R", "beauty.G", "beauty.B"])
         assert set(channels.keys()) == {"beauty.R", "beauty.G", "beauty.B"}
 
     def test_filtered_channels_are_float32(self) -> None:

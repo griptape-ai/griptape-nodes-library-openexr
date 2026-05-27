@@ -13,7 +13,6 @@ Two-phase design:
 from __future__ import annotations
 
 import logging
-import pathlib
 from typing import Any
 
 import numpy as np
@@ -65,7 +64,7 @@ from griptape_nodes_openexr.exr.exr_types import (
 logger = logging.getLogger("griptape_nodes")
 
 
-def scan_exr_header(file_path: str | pathlib.Path, *, header_only: bool = True) -> EXRData:
+def scan_exr_header(file_path: str, *, header_only: bool = True) -> EXRData:
     """Scan an EXR file and return metadata for all parts.
 
     Opens the file, iterates all parts, and builds the full EXRData structure
@@ -93,6 +92,7 @@ def scan_exr_header(file_path: str | pathlib.Path, *, header_only: bool = True) 
     resolved_path = File(str(file_path)).resolve()
     parts: list[EXRPart] = []
     try:
+        # TODO: revisit direct file I/O once artifact manager is pluggable https://github.com/griptape-ai/griptape-nodes-library-openexr/issues/9
         with OpenEXR.File(resolved_path, header_only=header_only) as exr_file:
             for part in exr_file.parts:
                 # In header_only mode part.width()/height() return 0 and
@@ -124,14 +124,14 @@ def scan_exr_header(file_path: str | pathlib.Path, *, header_only: bool = True) 
 
 
 def load_exr_channels(
-    file_path: str | pathlib.Path,
+    file_path: str,
     part_index: int,
     channel_names: list[str] | None = None,
 ) -> dict[str, np.ndarray]:
     """Read pixel arrays for one part of an EXR file.
 
     Args:
-        file_path: Engine path (may contain macros like ``{{workspace}}/shot.exr``).
+        file_path: Engine path string (may contain macros like ``{{workspace}}/shot.exr``).
             Resolved via ``File(...).resolve()`` before opening.
         part_index: Zero-based index of the part to read.
         channel_names: Channels to load. ``None`` loads all channels in the part.
@@ -150,6 +150,7 @@ def load_exr_channels(
 
     resolved_path = File(str(file_path)).resolve()
     try:
+        # TODO: revisit direct file I/O once artifact manager is pluggable https://github.com/griptape-ai/griptape-nodes-library-openexr/issues/9
         exr = OpenEXR.File(resolved_path, separate_channels=True)
     except Exception as e:
         msg = f"Failed to read EXR file '{resolved_path}': {e}"
