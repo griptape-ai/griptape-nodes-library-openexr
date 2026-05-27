@@ -52,6 +52,17 @@
         "icon": "image",
         "group": "display"
       }
+    },
+    {
+      "class_name": "DisplayEXRChannel",
+      "file_path": "griptape_nodes_openexr/nodes/display_exr_channel.py",
+      "metadata": {
+        "category": "exr",
+        "description": "Combine 1–3 EXR channel artifacts into an 8-bit sRGB display image with exposure and filmic tone mapping",
+        "display_name": "Display EXR Channel",
+        "icon": "layers",
+        "group": "display"
+      }
     }
   ],
   "workflows": [],
