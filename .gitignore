@@ -207,6 +207,9 @@ cython_debug/
 # PyPI configuration file
 .pypirc
 
+# Generated EXR test fixtures (run: make test/fixtures)
+tests/data/*.exr
+
 # Marimo
 marimo/_static/
 marimo/_lsp/
@@ -214,4 +217,7 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Jetbrains
+.idea/
 

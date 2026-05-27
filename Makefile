@@ -66,6 +66,10 @@ lib['metadata'].setdefault('dependencies', {})['pip_dependencies'] = deps; \
 open('$(LIBRARY_JSON)', 'w').write(json.dumps(lib, indent=4) + '\n'); \
 print(f'Synced {len(deps)} dependencies to $(LIBRARY_JSON)')"
 
+.PHONY: test/fixtures
+test/fixtures: ## Generate EXR test fixtures into tests/data/.
+	@uv run python tests/generate_fixtures.py
+
 .PHONY: install
 install: ## Install all dependencies.
 	@make install/all
