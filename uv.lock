@@ -301,7 +301,6 @@ dependencies = [
     { name = "griptape-nodes" },
     { name = "numpy" },
     { name = "openexr" },
-    { name = "openimageio" },
 ]
 
 [package.dev-dependencies]
@@ -318,7 +317,6 @@ requires-dist = [
     { name = "griptape-nodes", git = "https://github.com/griptape-ai/griptape-nodes?rev=latest" },
     { name = "numpy", specifier = ">=1.26.0" },
     { name = "openexr", specifier = ">=3.3.0" },
-    { name = "openimageio", specifier = ">=2.3.0" },
 ]
 
 [package.metadata.requires-dev]
@@ -673,22 +671,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/40/5e/2c8ccda4effd256beddac2539254342e47805c16cdee9ebad3f56bc2e67c/openexr-3.4.12-cp312-cp312-musllinux_1_2_aarch64.whl", hash = "sha256:3a01ecb034caddde76191944b7965b48179d635ac4cc3bdbf33034b45153a4b4", size = 2159486, upload-time = "2026-05-25T02:07:18.152Z" },
     { url = "https://files.pythonhosted.org/packages/e9/2f/584bdd5975e854195c7e9962495e5dfd06dc189275364930aea3762c275c/openexr-3.4.12-cp312-cp312-musllinux_1_2_x86_64.whl", hash = "sha256:fa3f711c2f8683de7c8150fe6038b5bd4729430bc308826e406b64b718fc86f3", size = 2338558, upload-time = "2026-05-25T02:07:19.999Z" },
     { url = "https://files.pythonhosted.org/packages/44/17/89df2a5e626d7d1dd34402ab7ece0dfdcb2b173e42c46940f18a6242775c/openexr-3.4.12-cp312-cp312-win_amd64.whl", hash = "sha256:8a2eaed1d869fd6c2cecacb4807e8482a5ee30ac39a6d33373ab4718c5e171b3", size = 738743, upload-time = "2026-05-25T02:07:22.033Z" },
-]
-
-[[package]]
-name = "openimageio"
-version = "3.1.13.1"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "numpy" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/53/31/3ac940330a8e71387f407ccfdac4369835b9196a8cb36d864b33152f07e5/openimageio-3.1.13.1.tar.gz", hash = "sha256:a794a2a8d4244e458452499ed2145f3f035c36a316bc1d00a2b88fe4cd5f1477", size = 6598222, upload-time = "2026-05-04T06:44:51.577Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/cc/28/cca12a002fa690674dd9a514c1fe801adbc2c7e39d45eb7c05de6f8541b7/openimageio-3.1.13.1-cp312-cp312-macosx_10_15_x86_64.whl", hash = "sha256:51be3e32347193defcd75f17d09fa3ea8b3a37d99474a3812d7a65e5ea86011a", size = 7032744, upload-time = "2026-05-04T06:44:15.394Z" },
-    { url = "https://files.pythonhosted.org/packages/3d/56/3357e2546315d1f8736d4ca3313e483c794e2aab7c231510b96b12361702/openimageio-3.1.13.1-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:01e863e9a8be09611e3664f206cacd677f2c1a8720a17577dacef92869e93260", size = 6626973, upload-time = "2026-05-04T06:44:17.204Z" },
-    { url = "https://files.pythonhosted.org/packages/60/ac/b5f8c55c2ce416c146242d4b27c830c1913e8d6c253ae132e60efc615423/openimageio-3.1.13.1-cp312-cp312-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:6c9adab39bfecd2973352fa0bba90f41b838be4da0b3fd2943a1d4a1a64ffcba", size = 6584698, upload-time = "2026-05-04T06:44:18.841Z" },
-    { url = "https://files.pythonhosted.org/packages/27/be/013e373f7c8046375bc9cfa677a9ae1e37f85bb107c5e0c9fb50e22daf9d/openimageio-3.1.13.1-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:55b7d453c651bf61681b7e310a3abdd97449ab9d14247648263285f43e48f8cf", size = 6874407, upload-time = "2026-05-04T06:44:20.699Z" },
-    { url = "https://files.pythonhosted.org/packages/27/00/d1444f57d59155c7f66096cda964df6301cca5384af2c865e48c83d37584/openimageio-3.1.13.1-cp312-cp312-win_amd64.whl", hash = "sha256:969fc403e2377be1379072cd8e1debff5e4b9e29058a03658afa3686a9853b92", size = 7654180, upload-time = "2026-05-04T06:44:22.937Z" },
 ]
 
 [[package]]

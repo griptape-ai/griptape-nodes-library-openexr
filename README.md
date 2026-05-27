@@ -1,28 +1,25 @@
 # OpenEXR Library for Griptape Nodes
 
-Professional OpenEXR support for Griptape Nodes, designed for VFX and HDR pipelines. Parses EXR headers, extracts metadata, and exposes per-part and per-layer structure for downstream nodes - without loading pixel data.
+Professional OpenEXR support for Griptape Nodes, designed for VFX and HDR pipelines. Parses EXR headers, extracts metadata, and exposes per-part and per-channel structure for downstream nodes - without loading pixel data.
 
 ## Nodes
 
 ### Load EXR
 
-Loads an EXR file and exposes its full structure as typed outputs. No pixel data is ever read, making it fast even on large multi-part renders.
+Loads an EXR file and exposes its full structure as typed outputs. Pixel loading is off by default (`header_only=True`), making it fast even on large multi-part renders. This is configurable via the `openexr.header_only` engine setting.
 
 **Inputs**
 
 | Parameter | Description |
 |---|---|
 | `file_path` | Path to the `.exr` file |
-| `channel_style` | How channels are parsed and grouped into layers (see below) |
 
 **Outputs**
 
 | Parameter | Type | Description |
 |---|---|---|
-| `parts` | `list[EXRPartArtifact]` | Per-part metadata descriptors |
-| `layers` | `list[EXRDisplayChannel]` | All display channels (layers) across all parts |
 | `image_width` / `image_height` | `int` | Dimensions from data window |
-| `part_count` / `layer_count` / `channel_count` | `int` | Counts |
+| `part_count` / `channel_count` | `int` | Counts |
 | `compression` | `str` | e.g. `ZIP_COMPRESSION`, `DWAB_COMPRESSION` |
 | `storage_type` | `str` | `scanlineimage`, `tiledimage`, `deepscanline`, `deeptiled` |
 | `pixel_aspect_ratio` | `float` | |
@@ -36,26 +33,7 @@ Loads an EXR file and exposes its full structure as typed outputs. No pixel data
 Dynamic groups are also populated after scan:
 
 - **Parts** - one `EXRPartArtifact` output per part (hidden for single-part files)
-- **Layers** - one `EXRDisplayChannel` per layer, labelled `beauty (R, G, B, A)`
 - **Channels** - one `EXRChannelArtifact` per raw channel with name, pixel type, and sampling
-
-## Channel Style
-
-The `channel_style` dropdown controls how channel names are parsed and grouped into layers. Two styles are built in:
-
-### `nuke` (default)
-
-Replicates Nuke's channel-name-to-layer algorithm:
-
-- Channels are split on `.` (max two splits) - `beauty.R` → layer `beauty`, channel `R`
-- Leading digits are stripped and non-alphanumeric characters replaced with `_`
-- The `Ci` prefix (RenderMan default layer) maps to the unnamed default layer
-- Multi-part files where no channels use dot notation have the part name prepended as a layer prefix (legacy Blender/Maya/Katana pattern)
-- Display window is normalised to a `(0, 0)` origin; data window is shifted to match
-
-### `raw`
-
-Presents channels exactly as stored in the file - no parsing, no grouping, no coordinate changes. Each channel appears as its own single-channel layer. Useful for inspecting files from unfamiliar pipelines or debugging unexpected grouping.
 
 ## Development
 

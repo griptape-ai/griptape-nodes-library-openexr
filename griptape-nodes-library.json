@@ -14,7 +14,6 @@
     ],
     "dependencies": {
       "pip_dependencies": [
-        "openimageio>=2.3.0",
         "numpy>=1.26.0",
         "OpenEXR>=3.4.12"
       ]
@@ -36,7 +35,7 @@
       "file_path": "griptape_nodes_openexr/nodes/load_exr.py",
       "metadata": {
         "category": "exr",
-        "description": "Load an OpenEXR file and expose its metadata (parts, layers, channels, attributes) without reading pixels",
+        "description": "Load an OpenEXR file and expose its metadata (parts, channels, attributes) without reading pixels",
         "display_name": "Load EXR",
         "icon": "file-search",
         "group": "load"

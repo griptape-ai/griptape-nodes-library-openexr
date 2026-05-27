@@ -192,7 +192,7 @@ def _build_header(part: OpenEXR.Part, header: dict) -> EXRHeader:
     owner = _optional_exr_attribute(header, _ATTR_OWNER, "")
     comments = _optional_exr_attribute(header, _ATTR_COMMENTS, "")
     capture_date = _optional_exr_attribute(header, _ATTR_CAP_DATE, "")
-    software = _optional_exr_attribute(header, _ATTR_SOFTWARE, "")
+    software = _optional_exr_attribute(header, _ATTR_SOFTWARE, "") or _optional_exr_attribute(header, "Software", "")
 
     custom: dict[str, Any] = {
         attr_name: _convert_attribute_value(header[attr_name])

@@ -4,7 +4,10 @@ Architecture: Two-phase scanning.
 - Phase 1 (after_value_set on file_path): Scan headers only.
   Populates all metadata outputs and dynamic parameter groups.
 - Phase 2 (aprocess): Validate state, set success/failure status.
-  No pixel I/O ever occurs in this node.
+
+Pixel loading is off by default (header_only=True). This is user-configurable
+via the `openexr.header_only` engine setting — set to False to read accurate
+pixel types at the cost of loading pixel data into memory.
 """
 
 from __future__ import annotations

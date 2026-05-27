@@ -2,7 +2,6 @@
 
 Core types ported from griptape-nodes-library-opencolorio (James C),
 extended with TileDescription, Chromaticities, and richer EXRHeader fields.
-Uses OpenImageIO for I/O - no pixel data is loaded here.
 """
 
 from __future__ import annotations
