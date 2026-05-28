@@ -12,13 +12,12 @@ Tests cover:
 from __future__ import annotations
 
 import asyncio
+import json
 import shutil
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-
-import json
 
 from griptape_nodes_openexr.nodes.load_exr import LoadEXR, _compute_file_hash, _sanitize_for_json
 
