@@ -12,8 +12,10 @@ pixel types at the cost of loading pixel data into memory.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
+import os
 from typing import Any
 
 from griptape_nodes.exe_types.core_types import (
@@ -25,6 +27,7 @@ from griptape_nodes.exe_types.node_types import SuccessFailureNode
 from griptape_nodes.exe_types.param_types.parameter_float import ParameterFloat
 from griptape_nodes.exe_types.param_types.parameter_int import ParameterInt
 from griptape_nodes.exe_types.param_types.parameter_string import ParameterString
+from griptape_nodes.files.file import File, FileLoadError
 from griptape_nodes.retained_mode.griptape_nodes import GriptapeNodes
 from griptape_nodes.traits.file_system_picker import FileSystemPicker
 
@@ -53,6 +56,18 @@ _CHROMA_WHITE_Y = "white_y"
 def _sanitize_key(name: str) -> str:
     """Convert an arbitrary string into a valid parameter name segment."""
     return "".join(c if c.isalnum() or c == "_" else "_" for c in name)
+
+
+def _compute_file_hash(path: str) -> str | None:
+    """Return SHA-256 hex digest of the file at *path*, or None on any OSError."""
+    try:
+        h = hashlib.sha256()
+        with open(path, "rb") as fh:
+            for chunk in iter(lambda: fh.read(65536), b""):
+                h.update(chunk)
+        return h.hexdigest()
+    except OSError:
+        return None
 
 
 class LoadEXR(SuccessFailureNode):
@@ -229,19 +244,58 @@ class LoadEXR(SuccessFailureNode):
             parameter_group_initially_collapsed=True,
         )
 
+        # Restore dynamic parameters from saved metadata.
+        # after_value_set is skipped during reload (initial_setup=True), so dynamic
+        # params must be recreated here before connections are restored.
+        # File().resolve() is NOT used here — the saved path is already resolved.
+        self._file_content_changed: bool = False
+        saved_path: str = self.metadata.get("_file_path", "")
+        if saved_path and os.path.exists(saved_path):
+            self._on_inputs_changed(saved_path)
+        elif saved_path:
+            logger.warning(
+                "LoadEXR '%s': saved file path '%s' no longer exists on disk.",
+                self.name,
+                saved_path,
+            )
+
     # --- Lifecycle ---
+
+    def _resolve_file_path_param(self) -> str:
+        """Resolve the file_path parameter value, handling Griptape macro paths."""
+        raw = self.get_parameter_value(self._file_path_param.name)
+        if not raw:
+            return ""
+        try:
+            return File(str(raw)).resolve()
+        except FileLoadError:
+            return ""
 
     def after_value_set(self, parameter: Parameter, value: Any) -> None:
         if parameter is self._file_path_param:
-            file_path = str(self.get_parameter_value(self._file_path_param.name) or "")
+            raw = str(value) if value else ""
+            if raw:
+                try:
+                    file_path = File(raw).resolve()
+                except FileLoadError:
+                    file_path = ""
+            else:
+                file_path = ""
+            self.metadata["_file_path"] = file_path
+            self.metadata["_file_hash"] = (_compute_file_hash(file_path) or "") if file_path else ""
+            self._file_content_changed = False
             self._on_inputs_changed(file_path)
 
     async def aprocess(self) -> None:
         self._clear_execution_status()
 
-        file_path = self.get_parameter_value(self._file_path_param.name)
+        file_path = self._resolve_file_path_param()
         if not file_path:
             self._set_status_results(was_successful=False, result_details="No file path provided")
+            return
+
+        if not os.path.exists(file_path):
+            self._set_status_results(was_successful=False, result_details=f"File not found: {file_path}")
             return
 
         if not self._cached_exr_data:
@@ -249,7 +303,6 @@ class LoadEXR(SuccessFailureNode):
             return
 
         exr_data = self._cached_exr_data
-        file_path = str(file_path)
 
         self._populate_scalar_outputs(exr_data)
         self._populate_structured_outputs(file_path, exr_data)
@@ -257,6 +310,17 @@ class LoadEXR(SuccessFailureNode):
         part = exr_data.parts[0]
         total_channels = sum(len(p.channels) for p in exr_data.parts)
         details = f"Loaded {part.width}×{part.height}, {len(exr_data.parts)} part(s), {total_channels} channel(s)"
+
+        saved_hash = self.metadata.get("_file_hash", "")
+        if saved_hash:
+            current_hash = _compute_file_hash(file_path)
+            if current_hash and current_hash != saved_hash:
+                self._file_content_changed = True
+                details = (
+                    "Warning: file contents have changed since this workflow was saved. "
+                    "Channel connections may no longer be valid.\n" + details
+                )
+
         self._set_status_results(was_successful=True, result_details=details)
 
     # --- Private: scan and populate ---
