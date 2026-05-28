@@ -15,7 +15,8 @@
     "dependencies": {
       "pip_dependencies": [
         "numpy>=1.26.0",
-        "OpenEXR>=3.4.12"
+        "OpenEXR>=3.4.12",
+        "pillow>=11.2.1"
       ]
     }
   },
@@ -39,6 +40,17 @@
         "display_name": "Load EXR",
         "icon": "file-search",
         "group": "load"
+      }
+    },
+    {
+      "class_name": "DisplayEXRPart",
+      "file_path": "griptape_nodes_openexr/nodes/display_exr_part.py",
+      "metadata": {
+        "category": "exr",
+        "description": "Display an EXR part as an 8-bit sRGB image with exposure and filmic tone mapping",
+        "display_name": "Display EXR Part",
+        "icon": "image",
+        "group": "display"
       }
     }
   ],
