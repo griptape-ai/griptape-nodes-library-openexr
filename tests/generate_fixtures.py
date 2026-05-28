@@ -169,6 +169,23 @@ def make_legacy_multipart():
     OpenEXR.File([rgba_part, diffuse_part, depth_part]).write(str(OUT / "legacy_multipart.exr"))
 
 
+# ── 10. infinity_attributes.exr ──────────────────────────────────────────────
+def make_infinity_attributes():
+    """Single-part EXR with custom float attributes set to non-finite values.
+
+    Reproduces the bug where json.dumps serialises float('inf') as the bare
+    token 'Infinity', which is not valid JSON and crashes JSON.parse.
+    """
+    header = {
+        "compression": OpenEXR.ZIP_COMPRESSION,
+        "type": OpenEXR.scanlineimage,
+        "focus": float("inf"),     # positive infinity — triggers the bug
+        "near_clip": float("-inf"),  # negative infinity
+    }
+    channels = {"R": _gray(0.0)}
+    OpenEXR.File(header, channels).write(str(OUT / "infinity_attributes.exr"))
+
+
 if __name__ == "__main__":
     fixtures = [
         ("single_part_rgba.exr", make_single_part_rgba),
@@ -180,6 +197,7 @@ if __name__ == "__main__":
         ("nuke_metadata.exr", make_nuke_metadata),
         ("pixel_types.exr", make_pixel_types),
         ("legacy_multipart.exr", make_legacy_multipart),
+        ("infinity_attributes.exr", make_infinity_attributes),
     ]
     for name, fn in fixtures:
         fn()

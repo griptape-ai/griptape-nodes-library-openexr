@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 _DATA_DIR = Path(__file__).parent / "data"
-_MARKER = _DATA_DIR / "single_part_rgba.exr"
+_MARKER = _DATA_DIR / "infinity_attributes.exr"
 
 
 @pytest.fixture(scope="session", autouse=True)
