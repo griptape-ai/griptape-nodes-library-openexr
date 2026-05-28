@@ -6,6 +6,7 @@ extended with TileDescription, Chromaticities, and richer EXRHeader fields.
 
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass
 from enum import StrEnum
@@ -315,7 +316,13 @@ class EXRData:
 
 def _convert_attribute_value(value: Any) -> Any:
     """Normalise an OpenEXR attribute value to a plain Python type."""
-    if isinstance(value, (str, int, float, bool)):
+    if isinstance(value, float):
+        if math.isnan(value):
+            return "NaN"
+        if math.isinf(value):
+            return "Infinity" if value > 0 else "-Infinity"
+        return value
+    if isinstance(value, (str, int, bool)):
         return value
     if isinstance(value, bytes):
         return value.decode("utf-8", errors="replace")

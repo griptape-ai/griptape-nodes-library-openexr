@@ -285,3 +285,24 @@ def test_empty_path_raises() -> None:
 def test_missing_file_raises() -> None:
     with pytest.raises(RuntimeError, match="Failed to open EXR file"):
         scan_exr_header("/nonexistent/file.exr")
+
+
+# ---------------------------------------------------------------------------
+# infinity_attributes.exr — non-finite float custom attributes
+# ---------------------------------------------------------------------------
+
+
+class TestInfinityAttributes:
+    FILE = DATA / "infinity_attributes.exr"
+
+    def test_focus_attribute_present(self) -> None:
+        data = scan_exr_header(str(self.FILE))
+        assert "focus" in data.parts[0].header.custom
+
+    def test_focus_value_is_positive_infinity(self) -> None:
+        custom = scan_exr_header(str(self.FILE)).parts[0].header.custom
+        assert custom["focus"] == "Infinity"
+
+    def test_near_clip_is_negative_infinity(self) -> None:
+        custom = scan_exr_header(str(self.FILE)).parts[0].header.custom
+        assert custom["near_clip"] == "-Infinity"
