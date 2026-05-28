@@ -35,7 +35,7 @@ class DisplayEXRChannel(SuccessFailureNode):
     Channels may originate from different EXR files or different parts.
     At least one RGB slot must be connected; the alpha slot is always optional.
 
-    Single RGB channel → grayscale. Missing RGB slots → zero-filled plane.
+    Single RGB channel → placed in its colour plane (R-only → red, etc.). Missing RGB slots → zero-filled plane.
     Connected alpha slot → RGBA output PNG.
     """
 
@@ -194,10 +194,14 @@ class DisplayEXRChannel(SuccessFailureNode):
 
         uint8 = _compose_alpha(uint8_rgb, alpha_plane.reshape(height, width) if alpha_plane is not None else None)
 
-        png_bytes = _ndarray_to_png(uint8)
-        dest = self._output_file.build_file()
-        saved = dest.write_bytes(png_bytes)
-        artifact = ImageUrlArtifact(saved.location)
+        try:
+            png_bytes = _ndarray_to_png(uint8)
+            dest = self._output_file.build_file()
+            saved = dest.write_bytes(png_bytes)
+            artifact = ImageUrlArtifact(saved.location)
+        except Exception as e:
+            self._set_status_results(was_successful=False, result_details=f"Failed to save image: {e}")
+            return
 
         self.parameter_output_values[self._image_param.name] = artifact
         self.publish_update_to_parameter(self._image_param.name, artifact)
@@ -249,7 +253,12 @@ def _compose_alpha(uint8_rgb: np.ndarray, alpha_plane: np.ndarray | None) -> np.
 
 
 def _ndarray_to_png(uint8: np.ndarray) -> bytes:
-    """Encode a (H, W, 3) or (H, W, 4) uint8 array as PNG bytes."""
+    """Encode a (H, W, 3) or (H, W, 4) uint8 array as PNG bytes.
+
+    Caller guarantees exactly 3 (RGB) or 4 (RGBA) channels — _build_rgb always
+    produces 3-channel output; alpha is optionally appended as a 4th channel.
+    """
+    assert uint8.ndim == 3 and uint8.shape[2] in (3, 4), uint8.shape  # noqa: S101
     mode = "RGBA" if uint8.shape[2] == 4 else "RGB"  # noqa: PLR2004
     buf = io.BytesIO()
     Image.fromarray(uint8, mode=mode).save(buf, format="PNG")
