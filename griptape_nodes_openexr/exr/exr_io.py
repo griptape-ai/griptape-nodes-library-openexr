@@ -13,9 +13,9 @@ Two-phase design:
 from __future__ import annotations
 
 import logging
-import pathlib
 from typing import Any
 
+import numpy as np
 import OpenEXR
 from griptape_nodes.files.file import File
 
@@ -64,7 +64,7 @@ from griptape_nodes_openexr.exr.exr_types import (
 logger = logging.getLogger("griptape_nodes")
 
 
-def scan_exr_header(file_path: str | pathlib.Path, *, header_only: bool = True) -> EXRData:
+def scan_exr_header(file_path: str, *, header_only: bool = True) -> EXRData:
     """Scan an EXR file and return metadata for all parts.
 
     Opens the file, iterates all parts, and builds the full EXRData structure
@@ -92,6 +92,7 @@ def scan_exr_header(file_path: str | pathlib.Path, *, header_only: bool = True) 
     resolved_path = File(str(file_path)).resolve()
     parts: list[EXRPart] = []
     try:
+        # TODO: revisit direct file I/O once artifact manager is pluggable https://github.com/griptape-ai/griptape-nodes-library-openexr/issues/9
         with OpenEXR.File(resolved_path, header_only=header_only) as exr_file:
             for part in exr_file.parts:
                 # In header_only mode part.width()/height() return 0 and
@@ -120,6 +121,61 @@ def scan_exr_header(file_path: str | pathlib.Path, *, header_only: bool = True) 
         raise ValueError(msg)
 
     return EXRData(parts=parts)
+
+
+def load_exr_channels(
+    file_path: str,
+    part_index: int,
+    channel_names: list[str] | None = None,
+) -> dict[str, np.ndarray]:
+    """Read pixel arrays for one part of an EXR file.
+
+    Args:
+        file_path: Engine path string (may contain macros like ``{{workspace}}/shot.exr``).
+            Resolved via ``File(...).resolve()`` before opening.
+        part_index: Zero-based index of the part to read.
+        channel_names: Channels to load. ``None`` loads all channels in the part.
+
+    Returns:
+        Mapping of channel name to float32 array of shape ``(height, width)``.
+
+    Raises:
+        ValueError: For empty ``file_path``, out-of-range ``part_index``, or
+            unknown ``channel_names``.
+        RuntimeError: If the file cannot be opened or read.
+    """
+    if not file_path:
+        msg = "file_path must not be empty"
+        raise ValueError(msg)
+
+    resolved_path = File(str(file_path)).resolve()
+    try:
+        # TODO: revisit direct file I/O once artifact manager is pluggable https://github.com/griptape-ai/griptape-nodes-library-openexr/issues/9
+        exr = OpenEXR.File(resolved_path, separate_channels=True)
+    except Exception as e:
+        msg = f"Failed to read EXR file '{resolved_path}': {e}"
+        raise RuntimeError(msg) from e
+
+    with exr as exr_file:
+        # Validate the parts and channels before doing any pixel conversion.
+        parts = exr_file.parts
+        if part_index < 0 or part_index >= len(parts):
+            msg = f"part_index {part_index} is out of range (file has {len(parts)} part(s))"
+            raise ValueError(msg)
+
+        part = parts[part_index]
+        if channel_names is not None:
+            unknown = set(channel_names) - part.channels.keys()
+            if unknown:
+                msg = f"Unknown channel(s) {sorted(unknown)!r} in part {part_index}"
+                raise ValueError(msg)
+
+        names_to_load = channel_names if channel_names is not None else list(part.channels)
+        try:
+            return {name: part.channels[name].pixels.astype(np.float32, copy=False) for name in names_to_load}
+        except Exception as e:
+            msg = f"Failed to read EXR file '{resolved_path}': {e}"
+            raise RuntimeError(msg) from e
 
 
 def _build_channel_list_from_header(exr_channels: list[OpenEXR.Channel]) -> list[EXRChannelInfo]:
