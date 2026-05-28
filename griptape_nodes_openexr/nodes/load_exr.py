@@ -425,9 +425,7 @@ class LoadEXR(SuccessFailureNode):
                 _CHROMA_WHITE_X: c.white_x,
                 _CHROMA_WHITE_Y: c.white_y,
             }
-            self.parameter_output_values[self._chromaticities_param.name] = json.dumps(
-                _sanitize_for_json(chroma_dict)
-            )
+            self.parameter_output_values[self._chromaticities_param.name] = json.dumps(_sanitize_for_json(chroma_dict))
         else:
             self.parameter_output_values[self._chromaticities_param.name] = ""
 

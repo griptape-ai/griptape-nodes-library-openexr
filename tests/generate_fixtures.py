@@ -179,7 +179,7 @@ def make_infinity_attributes():
     header = {
         "compression": OpenEXR.ZIP_COMPRESSION,
         "type": OpenEXR.scanlineimage,
-        "focus": float("inf"),     # positive infinity — triggers the bug
+        "focus": float("inf"),  # positive infinity — triggers the bug
         "near_clip": float("-inf"),  # negative infinity
     }
     channels = {"R": _gray(0.0)}
