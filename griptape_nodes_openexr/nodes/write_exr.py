@@ -10,11 +10,12 @@ from typing import Any
 
 import numpy as np
 import OpenEXR
-from griptape.artifacts import ImageArtifact
+from griptape.artifacts import ImageArtifact, ImageUrlArtifact
 from griptape_nodes.exe_types.core_types import Parameter, ParameterMode
 from griptape_nodes.exe_types.node_types import SuccessFailureNode
 from griptape_nodes.exe_types.param_components.project_file_parameter import ProjectFileParameter
 from griptape_nodes.exe_types.param_types.parameter_string import ParameterString
+from griptape_nodes.files.file import File
 from griptape_nodes.traits.options import Options
 from PIL import Image
 
@@ -79,7 +80,7 @@ class WriteEXR(SuccessFailureNode):
 
         self._image_in_param = Parameter(
             name="image_in",
-            input_types=["ImageArtifact"],
+            input_types=["ImageArtifact", "ImageUrlArtifact"],
             type="ImageArtifact",
             tooltip="8-bit image to convert to EXR (Mode A). Ignored when any channel slot is connected.",
             allowed_modes={ParameterMode.INPUT},
@@ -166,7 +167,7 @@ class WriteEXR(SuccessFailureNode):
         self._clear_execution_status()
         self.parameter_output_values[self._output_part_param.name] = None
 
-        image_in: ImageArtifact | None = self.get_parameter_value(self._image_in_param.name)
+        image_in: ImageArtifact | ImageUrlArtifact | None = self.get_parameter_value(self._image_in_param.name)
         channel_r: EXRChannelArtifact | None = self.get_parameter_value(self._channel_r_param.name)
         channel_g: EXRChannelArtifact | None = self.get_parameter_value(self._channel_g_param.name)
         channel_b: EXRChannelArtifact | None = self.get_parameter_value(self._channel_b_param.name)
@@ -256,11 +257,15 @@ class WriteEXR(SuccessFailureNode):
 
     @staticmethod
     def _gather_mode_a_channels(
-        image_in: ImageArtifact,
+        image_in: ImageArtifact | ImageUrlArtifact,
     ) -> tuple[dict[str, np.ndarray], int, int, str] | str:
-        """Decode an ImageArtifact and return normalised float32 R, G, B channels."""
+        """Decode an ImageArtifact or ImageUrlArtifact and return normalised float32 R, G, B channels."""
         try:
-            img = Image.open(io.BytesIO(image_in.value)).convert("RGB")
+            if isinstance(image_in, ImageUrlArtifact):
+                image_bytes = File(image_in.value).read_bytes()
+            else:
+                image_bytes = image_in.value
+            img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
         except Exception as e:
             return f"Failed to decode image: {e}"
         arr = np.array(img, dtype=np.float32) / 255.0

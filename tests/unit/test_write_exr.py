@@ -222,6 +222,19 @@ class TestWriteEXRModeA:
         assert part.width == W
         assert part.height == H
 
+    def test_mode_a_accepts_image_url_artifact(self, mock_project_file: Path, tmp_path: Path) -> None:
+        from griptape.artifacts import ImageUrlArtifact
+
+        png_path = tmp_path / "test.png"
+        png_path.write_bytes(_make_png_bytes())
+
+        node = _make_node(mock_project_file)
+        node.set_parameter_value("image_in", ImageUrlArtifact(str(png_path)))
+        asyncio.run(node.aprocess())
+        assert _was_successful(node) is True, _result_details(node)
+        loaded = load_exr_channels(str(mock_project_file), 0, ["R", "G", "B"])
+        assert set(loaded.keys()) == {"R", "G", "B"}
+
 
 # ---------------------------------------------------------------------------
 # WriteEXR node — Mode B (EXRChannelArtifact inputs)
