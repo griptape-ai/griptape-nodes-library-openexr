@@ -11,8 +11,9 @@ from griptape.artifacts import ImageUrlArtifact
 from griptape_nodes.exe_types.core_types import Parameter, ParameterMode
 from griptape_nodes.exe_types.node_types import SuccessFailureNode
 from griptape_nodes.exe_types.param_components.project_file_parameter import ProjectFileParameter
-from griptape_nodes.exe_types.param_types.parameter_bool import ParameterBool
 from griptape_nodes.exe_types.param_types.parameter_float import ParameterFloat
+from griptape_nodes.exe_types.param_types.parameter_string import ParameterString
+from griptape_nodes.traits.options import Options
 from PIL import Image
 
 from griptape_nodes_openexr.exr.channel_selection import select_alpha_channel, select_display_channels
@@ -58,13 +59,14 @@ class DisplayEXRPart(SuccessFailureNode):
         )
         self.add_parameter(self._exposure_param)
 
-        self._use_filmic_param = ParameterBool(
-            name="use_filmic",
-            default_value=True,
-            tooltip="Apply filmic tone curve (Narkowicz 2015); when False, values are clamped to [0, 1]",
+        self._tone_mapping_param = ParameterString(
+            name="tone_mapping",
+            default_value="filmic",
+            tooltip="Tone mapping mode. 'filmic' applies Narkowicz 2015 curve; 'linear' clamps to [0, 1].",
             allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
         )
-        self.add_parameter(self._use_filmic_param)
+        self._tone_mapping_param.add_trait(Options(choices=["filmic", "linear"]))
+        self.add_parameter(self._tone_mapping_param)
 
         self._image_param = Parameter(
             name="image",
@@ -120,10 +122,10 @@ class DisplayEXRPart(SuccessFailureNode):
             return
 
         ev = float(self.get_parameter_value(self._exposure_param.name) or 0.0)
-        use_filmic = bool(self.get_parameter_value(self._use_filmic_param.name))
+        tone_mapping = str(self.get_parameter_value(self._tone_mapping_param.name) or "filmic")
 
         rgb = apply_exposure(rgb, ev)
-        rgb = apply_filmic(rgb) if use_filmic else np.clip(rgb, 0.0, 1.0).astype(np.float32)
+        rgb = apply_filmic(rgb) if tone_mapping == "filmic" else np.clip(rgb, 0.0, 1.0).astype(np.float32)
         uint8_rgb = to_uint8_srgb(rgb)
 
         if alpha_channel:
@@ -133,14 +135,18 @@ class DisplayEXRPart(SuccessFailureNode):
         else:
             uint8 = uint8_rgb
 
-        png_bytes = _ndarray_to_png(uint8)
-        dest = self._output_file.build_file()
-        saved = dest.write_bytes(png_bytes)
-        artifact = ImageUrlArtifact(saved.location)
+        try:
+            png_bytes = _ndarray_to_png(uint8)
+            dest = self._output_file.build_file()
+            saved = dest.write_bytes(png_bytes)
+            artifact = ImageUrlArtifact(saved.location)
+        except Exception as e:
+            self._set_status_results(was_successful=False, result_details=f"Failed to save image: {e}")
+            return
 
         self.parameter_output_values[self._image_param.name] = artifact
         self.publish_update_to_parameter(self._image_param.name, artifact)
-        tone_mode = "filmic" if use_filmic else "linear"
+        tone_mode = tone_mapping
         label = part.name or f"part {part.part_index}"
         alpha_info = f", alpha: {alpha_channel}" if alpha_channel else ""
         details = f"Rendered '{label}' — {part.width}×{part.height}, channels: {selected}{alpha_info}, EV={ev:+.1f}, {tone_mode}"
@@ -165,7 +171,12 @@ class DisplayEXRPart(SuccessFailureNode):
 
 
 def _ndarray_to_png(uint8: np.ndarray) -> bytes:
-    """Encode a (H, W, 3) or (H, W, 4) uint8 array as PNG bytes."""
+    """Encode a (H, W, 3) or (H, W, 4) uint8 array as PNG bytes.
+
+    Caller guarantees exactly 3 (RGB) or 4 (RGBA) channels — _build_rgb always
+    produces 3-channel output; alpha is optionally appended as a 4th channel.
+    """
+    assert uint8.ndim == 3 and uint8.shape[2] in (3, 4), uint8.shape  # noqa: S101
     mode = "RGBA" if uint8.shape[2] == 4 else "RGB"  # noqa: PLR2004
     buf = io.BytesIO()
     Image.fromarray(uint8, mode=mode).save(buf, format="PNG")
