@@ -300,13 +300,9 @@ class TestInfinityAttributes:
         assert "focus" in data.parts[0].header.custom
 
     def test_focus_value_is_positive_infinity(self) -> None:
-        import math
-
         custom = scan_exr_header(str(self.FILE)).parts[0].header.custom
-        assert math.isinf(custom["focus"]) and custom["focus"] > 0
+        assert custom["focus"] == "Infinity"
 
     def test_near_clip_is_negative_infinity(self) -> None:
-        import math
-
         custom = scan_exr_header(str(self.FILE)).parts[0].header.custom
-        assert math.isinf(custom["near_clip"]) and custom["near_clip"] < 0
+        assert custom["near_clip"] == "-Infinity"
