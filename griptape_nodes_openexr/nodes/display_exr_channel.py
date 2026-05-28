@@ -207,9 +207,7 @@ class DisplayEXRChannel(SuccessFailureNode):
         self.publish_update_to_parameter(self._image_param.name, artifact)
 
         tone_mode = tone_mapping
-        slot_info = ", ".join(
-            f"{slot}={rgb_slots[slot].channel.name}" for slot in sorted(rgb_slots)
-        )
+        slot_info = ", ".join(f"{slot}={rgb_slots[slot].channel.name}" for slot in sorted(rgb_slots))
         alpha_info = f", A={channel_a.channel.name}" if channel_a else ""
         details = f"Rendered {width}×{height}, channels: [{slot_info}{alpha_info}], EV={ev:+.1f}, {tone_mode}"
         self._set_status_results(was_successful=True, result_details=details)
