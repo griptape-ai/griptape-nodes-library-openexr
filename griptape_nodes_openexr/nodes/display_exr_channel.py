@@ -226,13 +226,9 @@ class DisplayEXRChannel(SuccessFailureNode):
 def _build_rgb(pixels: dict[str, np.ndarray], height: int, width: int) -> np.ndarray:
     """Stack slot pixel data into a (H, W, 3) float32 RGB array.
 
-    Single slot → grayscale (channel broadcast to all three planes).
-    Two or three slots → zero-fill missing slots.
+    Each slot is placed in its corresponding colour plane; missing slots are zero-filled.
+    R-only → red image, G-only → green, B-only → blue.
     """
-    if len(pixels) == 1:
-        ch = next(iter(pixels.values())).reshape(height, width)
-        return np.stack([ch, ch, ch], axis=-1)
-
     zero = np.zeros((height, width), dtype=np.float32)
     r = pixels.get("R", zero).reshape(height, width)
     g = pixels.get("G", zero).reshape(height, width)
