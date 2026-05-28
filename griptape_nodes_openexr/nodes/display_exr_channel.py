@@ -11,8 +11,9 @@ from griptape.artifacts import ImageUrlArtifact
 from griptape_nodes.exe_types.core_types import Parameter, ParameterMode
 from griptape_nodes.exe_types.node_types import SuccessFailureNode
 from griptape_nodes.exe_types.param_components.project_file_parameter import ProjectFileParameter
-from griptape_nodes.exe_types.param_types.parameter_bool import ParameterBool
 from griptape_nodes.exe_types.param_types.parameter_float import ParameterFloat
+from griptape_nodes.exe_types.param_types.parameter_string import ParameterString
+from griptape_nodes.traits.options import Options
 from PIL import Image
 
 from griptape_nodes_openexr.exr.exr_header_artifact import EXRChannelArtifact
@@ -23,6 +24,8 @@ logger = logging.getLogger("griptape_nodes")
 
 _EV_MIN = -10.0
 _EV_MAX = 10.0
+_TONE_FILMIC = "filmic"
+_TONE_LINEAR = "linear"
 
 
 class DisplayEXRChannel(SuccessFailureNode):
@@ -87,13 +90,14 @@ class DisplayEXRChannel(SuccessFailureNode):
         )
         self.add_parameter(self._exposure_param)
 
-        self._use_filmic_param = ParameterBool(
-            name="use_filmic",
-            default_value=True,
-            tooltip="Apply filmic tone curve (Narkowicz 2015); when False, values are clamped to [0, 1]",
+        self._tone_mapping_param = ParameterString(
+            name="tone_mapping",
+            default_value=_TONE_FILMIC,
+            tooltip="Tone mapping mode. 'filmic' applies Narkowicz 2015 curve; 'linear' clamps to [0, 1].",
             allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
         )
-        self.add_parameter(self._use_filmic_param)
+        self._tone_mapping_param.add_trait(Options(choices=[_TONE_FILMIC, _TONE_LINEAR]))
+        self.add_parameter(self._tone_mapping_param)
 
         self._image_param = Parameter(
             name="image",
@@ -178,10 +182,14 @@ class DisplayEXRChannel(SuccessFailureNode):
             return
 
         ev = float(self.get_parameter_value(self._exposure_param.name) or 0.0)
-        use_filmic = bool(self.get_parameter_value(self._use_filmic_param.name))
+        tone_mapping = str(self.get_parameter_value(self._tone_mapping_param.name) or _TONE_FILMIC)
 
         rgb = apply_exposure(rgb, ev)
-        rgb = apply_filmic(rgb) if use_filmic else np.clip(rgb, 0.0, 1.0).astype(np.float32)
+        try:
+            rgb = self._apply_tone_mapping(rgb, tone_mapping)
+        except ValueError as e:
+            self._set_status_results(was_successful=False, result_details=str(e))
+            return
         uint8_rgb = to_uint8_srgb(rgb)
 
         uint8 = _compose_alpha(uint8_rgb, alpha_plane.reshape(height, width) if alpha_plane is not None else None)
@@ -194,7 +202,7 @@ class DisplayEXRChannel(SuccessFailureNode):
         self.parameter_output_values[self._image_param.name] = artifact
         self.publish_update_to_parameter(self._image_param.name, artifact)
 
-        tone_mode = "filmic" if use_filmic else "linear"
+        tone_mode = tone_mapping
         slot_info = ", ".join(
             f"{slot}={rgb_slots[slot].channel.name}" for slot in sorted(rgb_slots)
         )
@@ -202,6 +210,17 @@ class DisplayEXRChannel(SuccessFailureNode):
         details = f"Rendered {width}×{height}, channels: [{slot_info}{alpha_info}], EV={ev:+.1f}, {tone_mode}"
         self._set_status_results(was_successful=True, result_details=details)
         logger.info("DisplayEXRChannel '%s': %s", self.name, details)
+
+    @staticmethod
+    def _apply_tone_mapping(rgb: np.ndarray, tone_mapping: str) -> np.ndarray:
+        match tone_mapping.lower():
+            case "filmic":
+                return apply_filmic(rgb)
+            case "linear":
+                return np.clip(rgb, 0.0, 1.0).astype(np.float32)
+            case unsupported:
+                msg = f"Unsupported tone mapping: {unsupported!r}"
+                raise ValueError(msg)
 
 
 def _build_rgb(pixels: dict[str, np.ndarray], height: int, width: int) -> np.ndarray:
