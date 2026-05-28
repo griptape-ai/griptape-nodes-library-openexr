@@ -15,28 +15,33 @@ def _plane(value: float) -> np.ndarray:
 
 
 # ---------------------------------------------------------------------------
-# _build_rgb — single channel → grayscale
+# _build_rgb — single channel → placed in its colour plane, others zero
 # ---------------------------------------------------------------------------
 
 
 class TestBuildRgbSingleChannel:
-    def test_r_slot_produces_grayscale(self) -> None:
+    def test_r_slot_produces_red(self) -> None:
         rgb = _build_rgb({"R": _plane(0.5)}, H, W)
         assert rgb.shape == (H, W, 3)
-        np.testing.assert_array_equal(rgb[..., 0], rgb[..., 1])
-        np.testing.assert_array_equal(rgb[..., 1], rgb[..., 2])
+        np.testing.assert_array_almost_equal(rgb[..., 0], 0.5)
+        np.testing.assert_array_equal(rgb[..., 1], np.zeros((H, W)))
+        np.testing.assert_array_equal(rgb[..., 2], np.zeros((H, W)))
 
-    def test_g_slot_produces_grayscale(self) -> None:
+    def test_g_slot_produces_green(self) -> None:
         rgb = _build_rgb({"G": _plane(0.3)}, H, W)
         assert rgb.shape == (H, W, 3)
-        np.testing.assert_array_equal(rgb[..., 0], rgb[..., 1])
+        np.testing.assert_array_equal(rgb[..., 0], np.zeros((H, W)))
+        np.testing.assert_array_almost_equal(rgb[..., 1], 0.3)
+        np.testing.assert_array_equal(rgb[..., 2], np.zeros((H, W)))
 
-    def test_b_slot_produces_grayscale(self) -> None:
+    def test_b_slot_produces_blue(self) -> None:
         rgb = _build_rgb({"B": _plane(0.8)}, H, W)
         assert rgb.shape == (H, W, 3)
-        np.testing.assert_array_equal(rgb[..., 0], rgb[..., 2])
+        np.testing.assert_array_equal(rgb[..., 0], np.zeros((H, W)))
+        np.testing.assert_array_equal(rgb[..., 1], np.zeros((H, W)))
+        np.testing.assert_array_almost_equal(rgb[..., 2], 0.8)
 
-    def test_grayscale_values_match_input(self) -> None:
+    def test_r_value_placed_correctly(self) -> None:
         rgb = _build_rgb({"R": _plane(0.7)}, H, W)
         np.testing.assert_array_almost_equal(rgb[..., 0], 0.7)
 
