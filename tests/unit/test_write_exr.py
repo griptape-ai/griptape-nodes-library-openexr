@@ -97,6 +97,15 @@ class TestWriteExrChannelsHelper:
             ch = f.parts[0].channels["R"]
             assert ch.pixels.dtype == np.float32
 
+    def test_non_contiguous_array_written_correctly(self, tmp_path: Path) -> None:
+        """Non-contiguous slice of a (H, W, 3) array must not corrupt channel data."""
+        out = str(tmp_path / "out.exr")
+        base = np.zeros((H, W, 3), dtype=np.float32)
+        base[..., 0] = 1.0  # R=1, G=0, B=0; arr[..., 0] is non-contiguous
+        write_exr_channels(out, {"R": base[..., 0]}, pixel_type="float")
+        loaded = load_exr_channels(out, 0, ["R"])
+        np.testing.assert_allclose(loaded["R"], 1.0, atol=1e-6)
+
     def test_zip_compression(self, tmp_path: Path) -> None:
         out = str(tmp_path / "out.exr")
         write_exr_channels(out, {"R": _ramp()}, compression=OpenEXR.ZIP_COMPRESSION)

@@ -207,7 +207,7 @@ def write_exr_channels(
         compression = OpenEXR.ZIP_COMPRESSION
 
     dtype = np.float16 if pixel_type == "half" else np.float32
-    converted = {name: arr.astype(dtype, copy=False) for name, arr in channels.items()}
+    converted = {name: np.ascontiguousarray(arr.astype(dtype, copy=False)) for name, arr in channels.items()}
 
     header = {
         "compression": compression,
