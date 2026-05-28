@@ -63,6 +63,17 @@
         "icon": "layers",
         "group": "display"
       }
+    },
+    {
+      "class_name": "WriteEXR",
+      "file_path": "griptape_nodes_openexr/nodes/write_exr.py",
+      "metadata": {
+        "category": "exr",
+        "description": "Write an EXR file from an image artifact or EXR channel artifacts",
+        "display_name": "Write EXR",
+        "icon": "file-output",
+        "group": "write"
+      }
     }
   ],
   "workflows": [],
