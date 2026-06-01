@@ -1,4 +1,4 @@
-"""WriteEXR node — write EXR files from image or channel data."""
+"""SaveEXR node — save EXR files from image or channel data."""
 
 from __future__ import annotations
 
@@ -71,8 +71,8 @@ _PIXEL_TYPE_TO_ENUM: dict[str, PixelType] = {
 }
 
 
-class WriteEXR(SuccessFailureNode):
-    """Write a single-part EXR file from an image or EXR channel artifacts.
+class SaveEXR(SuccessFailureNode):
+    """Save a single-part EXR file from an image or EXR channel artifacts.
 
     Mode A (image input): accepts an ImageArtifact (8-bit PNG/JPEG), normalises
     pixel values from [0, 255] to [0.0, 1.0], and writes R, G, B channels.
@@ -266,7 +266,7 @@ class WriteEXR(SuccessFailureNode):
         channel_names = [ch.name for ch in channel_infos]
         details = f"Wrote {width}×{height} EXR ({mode}), channels: {channel_names}, {compression_key}, {pixel_type_key}"
         self._set_status_results(was_successful=True, result_details=details)
-        logger.info("WriteEXR '%s': %s", self.name, details)
+        logger.info("SaveEXR '%s': %s", self.name, details)
 
     @staticmethod
     def _gather_mode_a_channels(
@@ -335,7 +335,7 @@ def _write_to_bytes(
     finally:
         delete_result = GriptapeNodes.handle_request(DeleteFileRequest(path=tmp_path, workspace_only=False))
         if isinstance(delete_result, DeleteFileResultFailure):
-            logger.warning("WriteEXR: failed to clean up temp file '%s': %s", tmp_path, delete_result.failure_reason)
+            logger.warning("SaveEXR: failed to clean up temp file '%s': %s", tmp_path, delete_result.failure_reason)
 
     channel_infos = [
         EXRChannelInfo(name=name, pixel_type=pixel_type_enum, x_sampling=1, y_sampling=1) for name in channels

@@ -1,4 +1,4 @@
-"""Unit tests for write_exr_channels() helper and WriteEXR node."""
+"""Unit tests for write_exr_channels() helper and SaveEXR node."""
 
 from __future__ import annotations
 
@@ -144,45 +144,61 @@ class TestWriteExrChannelsHelper:
 
 
 # ---------------------------------------------------------------------------
-# WriteEXR node — shared fixture for mocking ProjectFileParameter
+# SaveEXR node — shared fixture for mocking ProjectFileParameter
 # ---------------------------------------------------------------------------
 
 
 @pytest.fixture()
 def mock_project_file(tmp_path: Path):
-    """Patch ProjectFileParameter so WriteEXR can run without the engine runtime."""
+    """Patch ProjectFileParameter and GriptapeNodes so SaveEXR runs without the engine."""
+    from griptape_nodes.retained_mode.events.os_events import (
+        DeleteFileRequest,
+        ReadFileRequest,
+        ReadFileResultSuccess,
+        WriteFileRequest,
+        WriteFileResultSuccess,
+    )
+    from griptape_nodes.retained_mode.griptape_nodes import GriptapeNodes
+
     output_path = tmp_path / "output.exr"
 
-    saved = MagicMock()
-    saved.location = str(output_path)
-
     dest = MagicMock()
-
-    def _write_bytes(data: bytes):
-        output_path.write_bytes(data)
-        return saved
-
-    dest.write_bytes.side_effect = _write_bytes
+    dest.resolve.return_value = str(output_path)
 
     instance = MagicMock()
     instance.build_file.return_value = dest
 
-    with patch("griptape_nodes_openexr.nodes.write_exr.ProjectFileParameter", return_value=instance):
+    def _handle_request(request):
+        if isinstance(request, WriteFileRequest):
+            Path(request.file_path).write_bytes(request.content)
+            return WriteFileResultSuccess(final_file_path=request.file_path, bytes_written=len(request.content), result_details="")
+        if isinstance(request, ReadFileRequest):
+            data = Path(request.file_path).read_bytes()
+            return ReadFileResultSuccess(content=data, file_size=len(data), mime_type="application/octet-stream", encoding=None, result_details="")
+        if isinstance(request, DeleteFileRequest):
+            Path(request.path).unlink(missing_ok=True)
+            return MagicMock()
+        return MagicMock()
+
+    with (
+        patch("griptape_nodes_openexr.nodes.save_exr.ProjectFileParameter", return_value=instance),
+        patch.object(GriptapeNodes, "handle_request", side_effect=_handle_request),
+    ):
         yield output_path
 
 
 def _make_node(mock_project_file):  # noqa: ANN001
-    from griptape_nodes_openexr.nodes.write_exr import WriteEXR
+    from griptape_nodes_openexr.nodes.save_exr import SaveEXR
 
-    return WriteEXR("test_write_exr")
+    return SaveEXR("test_save_exr")
 
 
 # ---------------------------------------------------------------------------
-# WriteEXR node — Mode A (ImageArtifact input)
+# SaveEXR node — Mode A (ImageArtifact input)
 # ---------------------------------------------------------------------------
 
 
-class TestWriteEXRModeA:
+class TestSaveEXRModeA:
     def test_no_input_fails(self, mock_project_file: Path) -> None:
         node = _make_node(mock_project_file)
         asyncio.run(node.aprocess())
@@ -246,11 +262,11 @@ class TestWriteEXRModeA:
 
 
 # ---------------------------------------------------------------------------
-# WriteEXR node — Mode B (EXRChannelArtifact inputs)
+# SaveEXR node — Mode B (EXRChannelArtifact inputs)
 # ---------------------------------------------------------------------------
 
 
-class TestWriteEXRModeB:
+class TestSaveEXRModeB:
     def test_mode_b_single_channel_succeeds(self, mock_project_file: Path) -> None:
         node = _make_node(mock_project_file)
         node.set_parameter_value("channel_r", _make_channel_artifact("R"))
@@ -304,11 +320,11 @@ class TestWriteEXRModeB:
 
 
 # ---------------------------------------------------------------------------
-# WriteEXR node — mode priority and error cases
+# SaveEXR node — mode priority and error cases
 # ---------------------------------------------------------------------------
 
 
-class TestWriteEXRModePriority:
+class TestSaveEXRModePriority:
     def test_channel_takes_priority_over_image(self, mock_project_file: Path) -> None:
         """Mode B takes priority when any channel slot is connected."""
         node = _make_node(mock_project_file)
@@ -332,7 +348,7 @@ class TestWriteEXRModePriority:
         assert node.parameter_output_values.get("output_part") is None
 
 
-class TestWriteEXRShapeMismatch:
+class TestSaveEXRShapeMismatch:
     def test_mismatched_channel_shapes_fails(self, mock_project_file: Path, tmp_path: Path) -> None:
         """channel_r and channel_g from different-sized images → failure."""
         # Create a small EXR to use as a mismatched source
@@ -355,11 +371,11 @@ class TestWriteEXRShapeMismatch:
 
 
 # ---------------------------------------------------------------------------
-# WriteEXR node — compression and pixel_type parameters
+# SaveEXR node — compression and pixel_type parameters
 # ---------------------------------------------------------------------------
 
 
-class TestWriteEXRParameters:
+class TestSaveEXRParameters:
     @pytest.mark.parametrize("compression", ["ZIP", "ZIPS", "PIZ", "DWAA", "NONE"])
     def test_compression_options_all_succeed(self, mock_project_file: Path, compression: str) -> None:
         node = _make_node(mock_project_file)

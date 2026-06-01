@@ -65,11 +65,11 @@
       }
     },
     {
-      "class_name": "WriteEXR",
-      "file_path": "griptape_nodes_openexr/nodes/write_exr.py",
+      "class_name": "SaveEXR",
+      "file_path": "griptape_nodes_openexr/nodes/save_exr.py",
       "metadata": {
         "category": "exr",
-        "description": "Write an EXR file from an image artifact or EXR channel artifacts",
+        "description": "Save an EXR file from an image artifact or EXR channel artifacts",
         "display_name": "Save EXR",
         "icon": "file-output",
         "group": "write"
