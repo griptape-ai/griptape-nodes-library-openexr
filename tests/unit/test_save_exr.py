@@ -170,12 +170,23 @@ def mock_project_file(tmp_path: Path):
 
     def _handle_request(request):
         if isinstance(request, WriteFileRequest):
+            assert isinstance(request.file_path, str) and isinstance(request.content, bytes)
             Path(request.file_path).write_bytes(request.content)
-            return WriteFileResultSuccess(final_file_path=request.file_path, bytes_written=len(request.content), result_details="")
+            return WriteFileResultSuccess(
+                final_file_path=request.file_path, bytes_written=len(request.content), result_details=""
+            )
         if isinstance(request, ReadFileRequest):
+            assert request.file_path is not None
             data = Path(request.file_path).read_bytes()
-            return ReadFileResultSuccess(content=data, file_size=len(data), mime_type="application/octet-stream", encoding=None, result_details="")
+            return ReadFileResultSuccess(
+                content=data,
+                file_size=len(data),
+                mime_type="application/octet-stream",
+                encoding=None,
+                result_details="",
+            )
         if isinstance(request, DeleteFileRequest):
+            assert request.path is not None
             Path(request.path).unlink(missing_ok=True)
             return MagicMock()
         return MagicMock()
