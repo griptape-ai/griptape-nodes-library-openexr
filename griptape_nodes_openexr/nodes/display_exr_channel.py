@@ -267,13 +267,26 @@ def _load_background_rgb(artifact: Any, width: int, height: int) -> np.ndarray:
             msg = f"Unsupported background artifact type: {type(artifact)}"
             raise RuntimeError(msg)
         img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
-        img = img.resize((width, height), Image.LANCZOS)
+        img = img.resize((width, height), Image.Resampling.LANCZOS)
         return np.asarray(img, dtype=np.float32) / 255.0
     except (RuntimeError, FileLoadError):
         raise
     except Exception as e:
         msg = f"Failed to load background: {e}"
         raise RuntimeError(msg) from e
+
+
+def _compose_alpha(uint8_rgb: np.ndarray, alpha_plane: np.ndarray | None) -> np.ndarray:
+    """Append an alpha channel to a uint8 RGB array, or return it unchanged.
+
+    When alpha_plane is None the input is returned as-is (RGB).
+    When alpha_plane is provided it is clamped to [0, 1], scaled to uint8, and
+    appended as a 4th channel (RGBA).
+    """
+    if alpha_plane is None:
+        return uint8_rgb
+    alpha_uint8 = (np.clip(alpha_plane, 0.0, 1.0) * 255.0 + 0.5).astype(np.uint8)[..., np.newaxis]
+    return np.concatenate([uint8_rgb, alpha_uint8], axis=-1)
 
 
 def _composite(
@@ -284,8 +297,7 @@ def _composite(
     if alpha_plane is None:
         return uint8_rgb
     if bg_rgb_f32 is None:
-        alpha_uint8 = (np.clip(alpha_plane, 0.0, 1.0) * 255.0 + 0.5).astype(np.uint8)[..., np.newaxis]
-        return np.concatenate([uint8_rgb, alpha_uint8], axis=-1)
+        return _compose_alpha(uint8_rgb, alpha_plane)
     a = np.clip(alpha_plane, 0.0, 1.0)[..., np.newaxis]
     fg = uint8_rgb.astype(np.float32) / 255.0
     out = np.clip(fg * a + bg_rgb_f32 * (1.0 - a), 0.0, 1.0)
