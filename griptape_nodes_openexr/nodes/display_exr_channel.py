@@ -103,6 +103,15 @@ class DisplayEXRChannel(SuccessFailureNode):
         self._tone_mapping_param.add_trait(Options(choices=[TONE_FILMIC, TONE_LINEAR]))
         self.add_parameter(self._tone_mapping_param)
 
+        self._background_param = Parameter(
+            name="background",
+            input_types=["ImageArtifact", "ImageUrlArtifact", "str"],
+            type="ImageArtifact",
+            tooltip="Background image for alpha compositing (A-over-B). Ignored when no alpha channel is connected.",
+            allowed_modes={ParameterMode.INPUT},
+        )
+        self.add_parameter(self._background_param)
+
         self._image_param = Parameter(
             name="image",
             type="ImageUrlArtifact",
@@ -134,6 +143,7 @@ class DisplayEXRChannel(SuccessFailureNode):
         channel_g: EXRChannelArtifact | None = self.get_parameter_value(self._channel_g_param.name)
         channel_b: EXRChannelArtifact | None = self.get_parameter_value(self._channel_b_param.name)
         channel_a: EXRChannelArtifact | None = self.get_parameter_value(self._channel_a_param.name)
+        background = self.get_parameter_value(self._background_param.name)
 
         rgb_slots: dict[str, EXRChannelArtifact] = {
             slot: artifact
@@ -196,7 +206,20 @@ class DisplayEXRChannel(SuccessFailureNode):
             return
         uint8_rgb = to_uint8_srgb(rgb)
 
-        uint8 = _compose_alpha(uint8_rgb, alpha_plane.reshape(height, width) if alpha_plane is not None else None)
+        alpha_f32 = alpha_plane.reshape(height, width) if alpha_plane is not None else None
+
+        bg_rgb_f32: np.ndarray | None = None
+        if background is not None:
+            if alpha_f32 is None:
+                logger.warning("DisplayEXRChannel '%s': background ignored — no alpha channel connected", self.name)
+            else:
+                try:
+                    bg_rgb_f32 = _load_background_rgb(background, width, height)
+                except RuntimeError as e:
+                    self._set_status_results(was_successful=False, result_details=str(e))
+                    return
+
+        uint8 = _composite(uint8_rgb, alpha_f32, bg_rgb_f32)
 
         try:
             png_bytes = _ndarray_to_png(uint8)
@@ -213,7 +236,8 @@ class DisplayEXRChannel(SuccessFailureNode):
         tone_mode = tone_mapping
         slot_info = ", ".join(f"{slot}={rgb_slots[slot].channel.name}" for slot in sorted(rgb_slots))
         alpha_info = f", A={channel_a.channel.name}" if channel_a else ""
-        details = f"Rendered {width}×{height}, channels: [{slot_info}{alpha_info}], EV={ev:+.1f}, {tone_mode}"
+        bg_info = ", bg=composite" if bg_rgb_f32 is not None else ""
+        details = f"Rendered {width}×{height}, channels: [{slot_info}{alpha_info}]{bg_info}, EV={ev:+.1f}, {tone_mode}"
         self._set_status_results(was_successful=True, result_details=details)
         logger.info("DisplayEXRChannel '%s': %s", self.name, details)
 
@@ -231,16 +255,44 @@ def _build_rgb(pixels: dict[str, np.ndarray], height: int, width: int) -> np.nda
     return np.stack([r, g, b], axis=-1)
 
 
-def _compose_alpha(uint8_rgb: np.ndarray, alpha_plane: np.ndarray | None) -> np.ndarray:
-    """Optionally append an alpha plane to a uint8 RGB array.
+def _load_background_rgb(artifact: Any, width: int, height: int) -> np.ndarray:
+    from griptape.artifacts import ImageArtifact, ImageUrlArtifact
+    from griptape_nodes.files.file import File, FileLoadError
 
-    Returns (H, W, 3) when alpha_plane is None, (H, W, 4) otherwise.
-    Alpha values are clamped to [0, 1] before scaling to uint8.
-    """
+    try:
+        if isinstance(artifact, ImageArtifact):
+            img_bytes = artifact.value
+        elif isinstance(artifact, ImageUrlArtifact):
+            img_bytes = File(artifact.value).read_bytes()
+        elif isinstance(artifact, str):
+            img_bytes = File(artifact).read_bytes()
+        else:
+            msg = f"Unsupported background artifact type: {type(artifact)}"
+            raise RuntimeError(msg)
+        img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
+        img = img.resize((width, height), Image.LANCZOS)
+        return np.asarray(img, dtype=np.float32) / 255.0
+    except (RuntimeError, FileLoadError):
+        raise
+    except Exception as e:
+        msg = f"Failed to load background: {e}"
+        raise RuntimeError(msg) from e
+
+
+def _composite(
+    uint8_rgb: np.ndarray,
+    alpha_plane: np.ndarray | None,
+    bg_rgb_f32: np.ndarray | None,
+) -> np.ndarray:
     if alpha_plane is None:
         return uint8_rgb
-    alpha_uint8 = (np.clip(alpha_plane, 0.0, 1.0) * 255.0 + 0.5).astype(np.uint8)[..., np.newaxis]
-    return np.concatenate([uint8_rgb, alpha_uint8], axis=-1)
+    if bg_rgb_f32 is None:
+        alpha_uint8 = (np.clip(alpha_plane, 0.0, 1.0) * 255.0 + 0.5).astype(np.uint8)[..., np.newaxis]
+        return np.concatenate([uint8_rgb, alpha_uint8], axis=-1)
+    a = np.clip(alpha_plane, 0.0, 1.0)[..., np.newaxis]
+    fg = uint8_rgb.astype(np.float32) / 255.0
+    out = np.clip(fg * a + bg_rgb_f32 * (1.0 - a), 0.0, 1.0)
+    return (out * 255.0 + 0.5).astype(np.uint8)
 
 
 def _ndarray_to_png(uint8: np.ndarray) -> bytes:
