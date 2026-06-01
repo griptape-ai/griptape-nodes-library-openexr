@@ -7,6 +7,7 @@ import numpy as np
 TONE_FILMIC = "filmic"
 TONE_LINEAR = "linear"
 
+
 def apply_exposure(arr: np.ndarray, ev: float) -> np.ndarray:
     """Scale pixel values by 2^ev (EV stops).
 
