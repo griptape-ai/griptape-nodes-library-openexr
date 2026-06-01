@@ -1,4 +1,4 @@
-"""DisplayEXRChannel node — combine 1–3 channel artifacts into a display image."""
+"""DisplayEXRChannel node — combine 1–4 channel artifacts into a display image."""
 
 from __future__ import annotations
 
@@ -33,7 +33,7 @@ _EV_MAX = 10.0
 
 
 class DisplayEXRChannel(SuccessFailureNode):
-    """Combine 1–3 EXR channel artifacts into an 8-bit sRGB (or RGBA) PNG.
+    """Combine 1–4 EXR channel artifacts into an 8-bit sRGB (or RGBA) PNG.
 
     Each of the R, G, B, A input slots accepts an optional EXRChannelArtifact.
     Channels may originate from different EXR files or different parts.
@@ -135,9 +135,12 @@ class DisplayEXRChannel(SuccessFailureNode):
             parameter_group_initially_collapsed=True,
         )
 
+    def _on_fail_handler(self, details: str) -> None:
+        self.parameter_output_values[self._image_param.name] = None
+        self._set_status_results(was_successful=False, result_details=details)
+
     async def aprocess(self) -> None:
         self._clear_execution_status()
-        self.parameter_output_values[self._image_param.name] = None
 
         channel_r: EXRChannelArtifact | None = self.get_parameter_value(self._channel_r_param.name)
         channel_g: EXRChannelArtifact | None = self.get_parameter_value(self._channel_g_param.name)
@@ -151,10 +154,7 @@ class DisplayEXRChannel(SuccessFailureNode):
             if artifact is not None
         }
         if not rgb_slots:
-            self._set_status_results(
-                was_successful=False,
-                result_details="At least one RGB channel slot must be connected",
-            )
+            self._on_fail_handler("At least one RGB channel slot must be connected")
             return
 
         pixels: dict[str, np.ndarray] = {}
@@ -162,7 +162,7 @@ class DisplayEXRChannel(SuccessFailureNode):
             try:
                 loaded = load_exr_channels(artifact.file_path, artifact.part_index, [artifact.channel.name])
             except (ValueError, RuntimeError) as e:
-                self._set_status_results(was_successful=False, result_details=f"Failed to load {slot} channel: {e}")
+                self._on_fail_handler(f"Failed to load {slot} channel: {e}")
                 return
             pixels[slot] = loaded[artifact.channel.name]
 
@@ -171,7 +171,7 @@ class DisplayEXRChannel(SuccessFailureNode):
             try:
                 loaded_a = load_exr_channels(channel_a.file_path, channel_a.part_index, [channel_a.channel.name])
             except (ValueError, RuntimeError) as e:
-                self._set_status_results(was_successful=False, result_details=f"Failed to load A channel: {e}")
+                self._on_fail_handler(f"Failed to load A channel: {e}")
                 return
             alpha_plane = loaded_a[channel_a.channel.name]
 
@@ -181,10 +181,7 @@ class DisplayEXRChannel(SuccessFailureNode):
             shape_detail = {slot: arr.shape for slot, arr in pixels.items()}
             if alpha_plane is not None:
                 shape_detail["A"] = alpha_plane.shape
-            self._set_status_results(
-                was_successful=False,
-                result_details=f"Channel dimensions do not match: {shape_detail}",
-            )
+            self._on_fail_handler(f"Channel dimensions do not match: {shape_detail}")
             return
 
         height, width = shapes[0]
@@ -192,7 +189,7 @@ class DisplayEXRChannel(SuccessFailureNode):
         try:
             rgb = _build_rgb(pixels, height, width)
         except Exception as e:
-            self._set_status_results(was_successful=False, result_details=f"Failed to build RGB: {e}")
+            self._on_fail_handler(f"Failed to build RGB: {e}")
             return
 
         ev = float(self.get_parameter_value(self._exposure_param.name) or 0.0)
@@ -202,7 +199,7 @@ class DisplayEXRChannel(SuccessFailureNode):
         try:
             rgb = apply_tone_mapping(rgb, tone_mapping)
         except ValueError as e:
-            self._set_status_results(was_successful=False, result_details=str(e))
+            self._on_fail_handler(str(e))
             return
         uint8_rgb = to_uint8_srgb(rgb)
 
@@ -216,7 +213,7 @@ class DisplayEXRChannel(SuccessFailureNode):
                 try:
                     bg_rgb_f32 = _load_background_rgb(background, width, height)
                 except RuntimeError as e:
-                    self._set_status_results(was_successful=False, result_details=str(e))
+                    self._on_fail_handler(str(e))
                     return
 
         uint8 = _composite(uint8_rgb, alpha_f32, bg_rgb_f32)
@@ -227,7 +224,7 @@ class DisplayEXRChannel(SuccessFailureNode):
             saved = dest.write_bytes(png_bytes)
             artifact = ImageUrlArtifact(saved.location)
         except Exception as e:
-            self._set_status_results(was_successful=False, result_details=f"Failed to save image: {e}")
+            self._on_fail_handler(f"Failed to save image: {e}")
             return
 
         self.parameter_output_values[self._image_param.name] = artifact
