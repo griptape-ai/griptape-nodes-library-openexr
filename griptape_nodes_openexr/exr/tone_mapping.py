@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import numpy as np
 
+TONE_FILMIC = "filmic"
+TONE_LINEAR = "linear"
+
 
 def apply_exposure(arr: np.ndarray, ev: float) -> np.ndarray:
     """Scale pixel values by 2^ev (EV stops).
@@ -37,6 +40,18 @@ def apply_filmic(arr: np.ndarray) -> np.ndarray:
     numerator = x * (2.51 * x + 0.03)
     denominator = x * (2.43 * x + 0.59) + 0.14
     return np.clip(numerator / denominator, 0.0, 1.0).astype(np.float32)
+
+
+def apply_tone_mapping(rgb: np.ndarray, tone_mapping: str) -> np.ndarray:
+    """Apply tone mapping to a float32 RGB array."""
+    tone = tone_mapping.lower()
+    if tone == TONE_FILMIC:
+        return apply_filmic(rgb)
+    elif tone == TONE_LINEAR:
+        return np.clip(rgb, 0.0, 1.0).astype(np.float32)
+    else:
+        msg = f"Unsupported tone mapping: {tone!r}"
+        raise ValueError(msg)
 
 
 def to_uint8_srgb(rgb: np.ndarray) -> np.ndarray:

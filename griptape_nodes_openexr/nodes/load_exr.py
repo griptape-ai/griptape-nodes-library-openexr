@@ -326,6 +326,7 @@ class LoadEXR(SuccessFailureNode):
 
         self._populate_scalar_outputs(exr_data)
         self._populate_structured_outputs(file_path, exr_data)
+        self._repopulate_dynamic_output_values(file_path, exr_data)
 
         part = exr_data.parts[0]
         total_channels = sum(len(p.channels) for p in exr_data.parts)
@@ -529,6 +530,41 @@ class LoadEXR(SuccessFailureNode):
             header=part.header,
             channels=part.channels,
         )
+
+    def _repopulate_dynamic_output_values(self, file_path: str, exr_data: EXRData) -> None:
+        """Re-write parameter_output_values for dynamic groups after the engine clears them.
+
+        The parallel resolution engine calls parameter_output_values.silent_clear() before
+        running aprocess(). Dynamic channel/part parameters are populated during after_value_set
+        but not during aprocess(), so they deliver None to downstream nodes after execution.
+        This restores the output values for all existing dynamic parameters.
+        """
+        is_multi = len(exr_data.parts) > 1
+        for i, part in enumerate(exr_data.parts):
+            if is_multi:
+                part_key = _sanitize_key(part.header.name or str(i))
+                artifact_name = f"{_PART_PREFIX}{part_key}"
+                if self.get_parameter_by_name(artifact_name) is not None:
+                    self.parameter_output_values[artifact_name] = self._build_part_artifact(file_path, i, part)
+                for ch in part.channels:
+                    ch_key = _sanitize_key(ch.name)
+                    param_name = f"{_CHANNEL_PREFIX}{part_key}_{ch_key}"
+                    if self.get_parameter_by_name(param_name) is not None:
+                        self.parameter_output_values[param_name] = EXRChannelArtifact(
+                            file_path=file_path,
+                            part_index=i,
+                            channel=ch,
+                        )
+            else:
+                for ch in part.channels:
+                    ch_key = _sanitize_key(ch.name)
+                    param_name = f"{_CHANNEL_PREFIX}{ch_key}"
+                    if self.get_parameter_by_name(param_name) is not None:
+                        self.parameter_output_values[param_name] = EXRChannelArtifact(
+                            file_path=file_path,
+                            part_index=0,
+                            channel=ch,
+                        )
 
     def _remove_dynamic_elements(self) -> None:
         """Clear all dynamic children from both dynamic groups."""

@@ -19,14 +19,18 @@ from PIL import Image
 from griptape_nodes_openexr.exr.channel_selection import select_alpha_channel, select_display_channels
 from griptape_nodes_openexr.exr.exr_header_artifact import EXRPartArtifact
 from griptape_nodes_openexr.exr.exr_io import load_exr_channels
-from griptape_nodes_openexr.exr.tone_mapping import apply_exposure, apply_filmic, to_uint8_srgb
+from griptape_nodes_openexr.exr.tone_mapping import (
+    TONE_FILMIC,
+    TONE_LINEAR,
+    apply_exposure,
+    apply_tone_mapping,
+    to_uint8_srgb,
+)
 
 logger = logging.getLogger("griptape_nodes")
 
 _EV_MIN = -10.0
 _EV_MAX = 10.0
-_TONE_FILMIC = "filmic"
-_TONE_LINEAR = "linear"
 
 
 class DisplayEXRPart(SuccessFailureNode):
@@ -63,11 +67,11 @@ class DisplayEXRPart(SuccessFailureNode):
 
         self._tone_mapping_param = ParameterString(
             name="tone_mapping",
-            default_value=_TONE_FILMIC,
+            default_value=TONE_FILMIC,
             tooltip="Tone mapping mode. 'filmic' applies Narkowicz 2015 curve; 'linear' clamps to [0, 1].",
             allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
         )
-        self._tone_mapping_param.add_trait(Options(choices=[_TONE_FILMIC, _TONE_LINEAR]))
+        self._tone_mapping_param.add_trait(Options(choices=[TONE_FILMIC, TONE_LINEAR]))
         self.add_parameter(self._tone_mapping_param)
 
         self._image_param = Parameter(
@@ -124,11 +128,11 @@ class DisplayEXRPart(SuccessFailureNode):
             return
 
         ev = float(self.get_parameter_value(self._exposure_param.name) or 0.0)
-        tone_mapping = str(self.get_parameter_value(self._tone_mapping_param.name) or _TONE_FILMIC)
+        tone_mapping = str(self.get_parameter_value(self._tone_mapping_param.name) or TONE_FILMIC)
 
         rgb = apply_exposure(rgb, ev)
         try:
-            rgb = self._apply_tone_mapping(rgb, tone_mapping)
+            rgb = apply_tone_mapping(rgb, tone_mapping)
         except ValueError as e:
             self._set_status_results(was_successful=False, result_details=str(e))
             return
@@ -158,17 +162,6 @@ class DisplayEXRPart(SuccessFailureNode):
         details = f"Rendered '{label}' — {part.width}×{part.height}, channels: {selected}{alpha_info}, EV={ev:+.1f}, {tone_mode}"
         self._set_status_results(was_successful=True, result_details=details)
         logger.info("DisplayEXRPart '%s': %s", self.name, details)
-
-    @staticmethod
-    def _apply_tone_mapping(rgb: np.ndarray, tone_mapping: str) -> np.ndarray:
-        match tone_mapping.lower():
-            case "filmic":
-                return apply_filmic(rgb)
-            case "linear":
-                return np.clip(rgb, 0.0, 1.0).astype(np.float32)
-            case unsupported:
-                msg = f"Unsupported tone mapping: {unsupported!r}"
-                raise ValueError(msg)
 
     @staticmethod
     def _build_rgb(
