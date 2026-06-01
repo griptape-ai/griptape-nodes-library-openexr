@@ -215,7 +215,9 @@ def write_exr_channels(
     }
 
     try:
-        # TODO: revisit direct file I/O once artifact manager is pluggable https://github.com/griptape-ai/griptape-nodes-library-openexr/issues/9
+        # OpenEXR binding requires a real filesystem path — no in-memory API. Callers
+        # pass a temp path here; the final destination write goes through WriteFileRequest.
+        # TODO: revisit once artifact manager is pluggable https://github.com/griptape-ai/griptape-nodes-library-openexr/issues/9
         OpenEXR.File(header, converted).write(output_path)
     except Exception as e:
         msg = f"Failed to write EXR file '{output_path}': {e}"

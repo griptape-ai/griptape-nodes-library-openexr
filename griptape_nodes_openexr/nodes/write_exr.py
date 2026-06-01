@@ -5,7 +5,6 @@ from __future__ import annotations
 import io
 import logging
 import tempfile
-from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -16,6 +15,15 @@ from griptape_nodes.exe_types.node_types import SuccessFailureNode
 from griptape_nodes.exe_types.param_components.project_file_parameter import ProjectFileParameter
 from griptape_nodes.exe_types.param_types.parameter_string import ParameterString
 from griptape_nodes.files.file import File
+from griptape_nodes.retained_mode.events.os_events import (
+    DeleteFileRequest,
+    DeleteFileResultFailure,
+    ReadFileRequest,
+    ReadFileResultSuccess,
+    WriteFileRequest,
+    WriteFileResultSuccess,
+)
+from griptape_nodes.retained_mode.griptape_nodes import GriptapeNodes
 from griptape_nodes.traits.options import Options
 from PIL import Image
 
@@ -211,9 +219,14 @@ class WriteEXR(SuccessFailureNode):
 
         try:
             dest = self._output_file.build_file()
-            saved = dest.write_bytes(exr_bytes)
+            dest_path = dest.resolve()
         except Exception as e:
-            self._set_status_results(was_successful=False, result_details=f"Failed to save output file: {e}")
+            self._set_status_results(was_successful=False, result_details=f"Failed to resolve output path: {e}")
+            return
+
+        write_result = GriptapeNodes.handle_request(WriteFileRequest(file_path=dest_path, content=exr_bytes))
+        if not isinstance(write_result, WriteFileResultSuccess):
+            self._set_status_results(was_successful=False, result_details="Failed to save output file")
             return
 
         window = WindowCoordinates(xmin=0, ymin=0, xmax=width - 1, ymax=height - 1)
@@ -238,7 +251,7 @@ class WriteEXR(SuccessFailureNode):
             custom={},
         )
         output_part = EXRPartArtifact(
-            file_path=saved.location,
+            file_path=write_result.final_file_path,
             part_index=0,
             name="",
             width=width,
@@ -306,14 +319,23 @@ def _write_to_bytes(
     pixel_type_enum: PixelType,
 ) -> tuple[bytes, list[EXRChannelInfo]]:
     """Write channels to a temp file, read back as bytes, return (bytes, channel_infos)."""
+    # OpenEXR's Python binding only accepts a filesystem path — no in-memory write API.
     with tempfile.NamedTemporaryFile(suffix=".exr", delete=False) as tmp:
         tmp_path = tmp.name
 
     try:
         write_exr_channels(tmp_path, channels, compression=compression, pixel_type=pixel_type)
-        exr_bytes = Path(tmp_path).read_bytes()
+        read_result = GriptapeNodes.handle_request(ReadFileRequest(file_path=tmp_path, workspace_only=False))
+        if not isinstance(read_result, ReadFileResultSuccess):
+            raise RuntimeError(f"Failed to read temp EXR: {tmp_path}")
+        raw = read_result.content
+        if not isinstance(raw, bytes):
+            raise RuntimeError(f"Expected bytes from temp EXR, got {type(raw)}")
+        exr_bytes = raw
     finally:
-        Path(tmp_path).unlink(missing_ok=True)
+        delete_result = GriptapeNodes.handle_request(DeleteFileRequest(path=tmp_path, workspace_only=False))
+        if isinstance(delete_result, DeleteFileResultFailure):
+            logger.warning("WriteEXR: failed to clean up temp file '%s': %s", tmp_path, delete_result.failure_reason)
 
     channel_infos = [
         EXRChannelInfo(name=name, pixel_type=pixel_type_enum, x_sampling=1, y_sampling=1) for name in channels

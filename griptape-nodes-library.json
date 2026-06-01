@@ -70,7 +70,7 @@
       "metadata": {
         "category": "exr",
         "description": "Write an EXR file from an image artifact or EXR channel artifacts",
-        "display_name": "Write EXR",
+        "display_name": "Save EXR",
         "icon": "file-output",
         "group": "write"
       }
