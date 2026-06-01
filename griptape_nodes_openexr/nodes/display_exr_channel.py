@@ -103,6 +103,8 @@ class DisplayEXRChannel(SuccessFailureNode):
         self._tone_mapping_param.add_trait(Options(choices=[TONE_FILMIC, TONE_LINEAR]))
         self.add_parameter(self._tone_mapping_param)
 
+        # TODO(DH): Add some preset backgrounds, "black"/"magenta"/"checkerboard"/"custom" when selecting custom,
+        # the "background" input would be revealed.
         self._background_param = Parameter(
             name="background",
             input_types=["ImageArtifact", "ImageUrlArtifact", "str"],
