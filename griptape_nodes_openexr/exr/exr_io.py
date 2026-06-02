@@ -183,6 +183,7 @@ def write_exr_channels(
     channels: dict[str, np.ndarray],
     compression: OpenEXR.Compression | None = None,
     pixel_type: str = "half",
+    extra_header: dict[str, Any] | None = None,
 ) -> None:
     """Write a dict of channel arrays to a single-part scanline EXR file.
 
@@ -194,6 +195,8 @@ def write_exr_channels(
         compression: OpenEXR compression constant (e.g. ``OpenEXR.ZIP_COMPRESSION``).
             Defaults to ``OpenEXR.ZIP_COMPRESSION`` when ``None``.
         pixel_type: ``"half"`` (float16, default) or ``"float"`` (float32).
+        extra_header: Optional additional header attributes (owner, comments, etc.)
+            merged into the header dict before writing.
 
     Raises:
         ValueError: If ``output_path`` is empty.
@@ -209,10 +212,12 @@ def write_exr_channels(
     dtype = np.float16 if pixel_type == "half" else np.float32
     converted = {name: np.ascontiguousarray(arr.astype(dtype, copy=False)) for name, arr in channels.items()}
 
-    header = {
+    header: dict[str, Any] = {
         "compression": compression,
         "type": OpenEXR.scanlineimage,
     }
+    if extra_header:
+        header.update(extra_header)
 
     try:
         # OpenEXR binding requires a real filesystem path — no in-memory API. Callers

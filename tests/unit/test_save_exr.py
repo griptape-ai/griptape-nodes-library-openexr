@@ -410,3 +410,86 @@ class TestSaveEXRParameters:
         asyncio.run(node.aprocess())
         with OpenEXR.File(str(mock_project_file), separate_channels=True) as f:
             assert f.parts[0].channels["R"].pixels.dtype == np.float32
+
+
+# ---------------------------------------------------------------------------
+# SaveEXR node — metadata parameters
+# ---------------------------------------------------------------------------
+
+
+class TestSaveEXRMetadata:
+    def test_metadata_fields_stored_in_artifact(self, mock_project_file: Path) -> None:
+        from griptape_nodes_openexr.exr.exr_header_artifact import EXRPartArtifact
+
+        node = _make_node(mock_project_file)
+        node.set_parameter_value("image_in", _make_image_artifact())
+        node.set_parameter_value("metadata_part_name", "beauty")
+        node.set_parameter_value("metadata_owner", "test-owner")
+        node.set_parameter_value("metadata_comments", "test comment")
+        node.set_parameter_value("metadata_software", "pytest")
+        node.set_parameter_value("metadata_pixel_aspect_ratio", 2.0)
+        asyncio.run(node.aprocess())
+
+        assert _was_successful(node), _result_details(node)
+        part = node.parameter_output_values.get("output_part")
+        assert isinstance(part, EXRPartArtifact)
+        assert part.name == "beauty"
+        assert part.header.owner == "test-owner"
+        assert part.header.comments == "test comment"
+        assert part.header.software == "pytest"
+        assert part.header.pixel_aspect_ratio == 2.0
+
+    def test_metadata_custom_dict(self, mock_project_file: Path) -> None:
+        from griptape_nodes_openexr.exr.exr_header_artifact import EXRPartArtifact
+
+        node = _make_node(mock_project_file)
+        node.set_parameter_value("image_in", _make_image_artifact())
+        node.set_parameter_value("metadata_custom", {"shot": "001", "take": 3})
+        asyncio.run(node.aprocess())
+
+        assert _was_successful(node), _result_details(node)
+        part = node.parameter_output_values.get("output_part")
+        assert isinstance(part, EXRPartArtifact)
+        assert part.header.custom == {"shot": "001", "take": 3}
+
+    def test_metadata_custom_json_string(self, mock_project_file: Path) -> None:
+        from griptape_nodes_openexr.exr.exr_header_artifact import EXRPartArtifact
+
+        node = _make_node(mock_project_file)
+        node.set_parameter_value("image_in", _make_image_artifact())
+        node.set_parameter_value("metadata_custom", '{"key": "value"}')
+        asyncio.run(node.aprocess())
+
+        assert _was_successful(node), _result_details(node)
+        part = node.parameter_output_values.get("output_part")
+        assert isinstance(part, EXRPartArtifact)
+        assert part.header.custom == {"key": "value"}
+
+    def test_metadata_empty_strings_become_none(self, mock_project_file: Path) -> None:
+        from griptape_nodes_openexr.exr.exr_header_artifact import EXRPartArtifact
+
+        node = _make_node(mock_project_file)
+        node.set_parameter_value("image_in", _make_image_artifact())
+        asyncio.run(node.aprocess())
+
+        part = node.parameter_output_values.get("output_part")
+        assert isinstance(part, EXRPartArtifact)
+        assert part.header.owner is None
+        assert part.header.comments is None
+        assert part.header.software is None
+
+    def test_metadata_written_to_exr_file(self, mock_project_file: Path) -> None:
+        """Metadata must be present in the actual EXR bytes, not just the artifact descriptor."""
+        node = _make_node(mock_project_file)
+        node.set_parameter_value("image_in", _make_image_artifact())
+        node.set_parameter_value("metadata_owner", "file-owner")
+        node.set_parameter_value("metadata_comments", "file-comment")
+        node.set_parameter_value("metadata_software", "file-software")
+        asyncio.run(node.aprocess())
+
+        assert _was_successful(node), _result_details(node)
+        with OpenEXR.File(str(mock_project_file)) as f:
+            hdr = f.parts[0].header
+            assert hdr.get("owner") == "file-owner"
+            assert hdr.get("comments") == "file-comment"
+            assert hdr.get("software") == "file-software"

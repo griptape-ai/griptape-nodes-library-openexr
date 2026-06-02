@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import json
 import logging
 import tempfile
 from typing import Any
@@ -10,9 +11,10 @@ from typing import Any
 import numpy as np
 import OpenEXR
 from griptape.artifacts import ImageArtifact, ImageUrlArtifact
-from griptape_nodes.exe_types.core_types import Parameter, ParameterMode
+from griptape_nodes.exe_types.core_types import Parameter, ParameterGroup, ParameterMode
 from griptape_nodes.exe_types.node_types import SuccessFailureNode
 from griptape_nodes.exe_types.param_components.project_file_parameter import ProjectFileParameter
+from griptape_nodes.exe_types.param_types.parameter_float import ParameterFloat
 from griptape_nodes.exe_types.param_types.parameter_string import ParameterString
 from griptape_nodes.files.file import File
 from griptape_nodes.retained_mode.events.os_events import (
@@ -30,6 +32,13 @@ from PIL import Image
 from griptape_nodes_openexr.exr.exr_header_artifact import EXRChannelArtifact, EXRPartArtifact
 from griptape_nodes_openexr.exr.exr_io import load_exr_channels, write_exr_channels
 from griptape_nodes_openexr.exr.exr_types import (
+    _ATTR_CAP_DATE,
+    _ATTR_COMMENTS,
+    _ATTR_NAME,
+    _ATTR_OWNER,
+    _ATTR_PIXEL_ASPECT_RATIO,
+    _ATTR_SOFTWARE,
+    _ATTR_TIME_CODE,
     CompressionType,
     EXRChannelInfo,
     EXRHeader,
@@ -149,6 +158,76 @@ class SaveEXR(SuccessFailureNode):
         self._pixel_type_param.add_trait(Options(choices=_PIXEL_TYPE_OPTIONS))
         self.add_parameter(self._pixel_type_param)
 
+        with ParameterGroup(name="Metadata", ui_options={"collapsed": True}) as metadata_group:
+            self._metadata_part_name_param = ParameterString(
+                name="metadata_part_name",
+                display_name="Part Name",
+                default_value="",
+                tooltip="Name for this EXR part (useful for multi-part workflows).",
+                allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
+            )
+
+            self._metadata_pixel_aspect_ratio_param = ParameterFloat(
+                name="metadata_pixel_aspect_ratio",
+                display_name="Pixel Aspect Ratio",
+                default_value=1.0,
+                tooltip="Pixel width/height ratio (1.0 = square pixels).",
+                allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
+            )
+
+            self._metadata_owner_param = ParameterString(
+                name="metadata_owner",
+                display_name="Owner",
+                default_value="",
+                tooltip="Asset owner, empty if absent.",
+                allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
+
+            )
+
+            self._metadata_comments_param = ParameterString(
+                name="metadata_comments",
+                display_name="Comments",
+                default_value="",
+                tooltip="Free-text comments embedded in the EXR header.",
+                allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
+            )
+
+            self._metadata_capture_date_param = ParameterString(
+                name="metadata_capture_date",
+                display_name="Capture Date",
+                default_value="",
+                tooltip="Capture date (e.g. 2025-01-01T12:00:00), empty if absent.",
+                allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
+            )
+
+            self._metadata_software_param = ParameterString(
+                name="metadata_software",
+                display_name="Software",
+                default_value="",
+                tooltip="Authoring application name, empty if absent.",
+                allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
+            )
+
+            self._metadata_time_code_param = ParameterString(
+                name="metadata_time_code",
+                display_name="Time Code",
+                default_value="",
+                tooltip="Editorial timecode (HH:MM:SS:FF), empty if absent.",
+                allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
+            )
+
+            self._metadata_custom_param = Parameter(
+                name="metadata_custom",
+                display_name="Custom Attributes",
+                input_types=["json", "str", "dict"],
+                type="json",
+                default_value={},
+                tooltip="Non-standard header attributes as a JSON object.",
+                allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
+            )
+
+        self.add_node_element(metadata_group)
+
         self._output_file = ProjectFileParameter(
             node=self,
             name="output_file",
@@ -165,11 +244,38 @@ class SaveEXR(SuccessFailureNode):
         )
         self.add_parameter(self._output_part_param)
 
+
         self._create_status_parameters(
             result_details_tooltip="Details about the EXR write result",
             result_details_placeholder="Write details will appear here.",
             parameter_group_initially_collapsed=True,
         )
+
+    def _read_metadata(self) -> dict:
+        def _opt(val: str | None) -> str | None:
+            return (val or "").strip() or None
+
+        custom_val = self.get_parameter_value(self._metadata_custom_param.name) or {}
+        if isinstance(custom_val, str):
+            try:
+                custom_val = json.loads(custom_val)
+            except (ValueError, TypeError):
+                logger.warning("SaveEXR: metadata_custom is not valid JSON — using {}")
+                custom_val = {}
+        custom = custom_val if isinstance(custom_val, dict) else {}
+
+        return {
+            "name": self.get_parameter_value(self._metadata_part_name_param.name) or "",
+            "pixel_aspect_ratio": float(
+                self.get_parameter_value(self._metadata_pixel_aspect_ratio_param.name) or 1.0
+            ),
+            "owner": _opt(self.get_parameter_value(self._metadata_owner_param.name)),
+            "comments": _opt(self.get_parameter_value(self._metadata_comments_param.name)),
+            "capture_date": _opt(self.get_parameter_value(self._metadata_capture_date_param.name)),
+            "software": _opt(self.get_parameter_value(self._metadata_software_param.name)),
+            "time_code": _opt(self.get_parameter_value(self._metadata_time_code_param.name)),
+            "custom": custom,
+        }
 
     def _on_fail_handler(self, details: str) -> None:
         self.parameter_output_values[self._output_part_param.name] = None
@@ -212,8 +318,13 @@ class SaveEXR(SuccessFailureNode):
 
         channels, width, height, mode = result
 
+        meta = self._read_metadata()
+        extra_header = _build_extra_header(meta)
+
         try:
-            exr_bytes, channel_infos = _write_to_bytes(channels, oxr_compression, pixel_type_str, pixel_type_enum)
+            exr_bytes, channel_infos = _write_to_bytes(
+                channels, oxr_compression, pixel_type_str, pixel_type_enum, extra_header
+            )
         except Exception as e:
             self._on_fail_handler(f"Failed to write EXR: {e}")
             return
@@ -236,25 +347,26 @@ class SaveEXR(SuccessFailureNode):
             line_order=LineOrderType.INCREASING_Y,
             data_window=window,
             display_window=window,
-            pixel_aspect_ratio=1.0,
+            pixel_aspect_ratio=meta["pixel_aspect_ratio"],
             screen_window_center=(0.0, 0.0),
             screen_window_width=1.0,
             storage_type=StorageType.SCANLINE_IMAGE,
-            name="",
+            name=meta["name"],
             chunk_count=None,
             tile_description=None,
+            # TODO: expose chromaticities (8 floats: red/green/blue/white x,y) for HDR/wide-gamut workflows
             chromaticities=None,
-            time_code=None,
-            owner=None,
-            comments=None,
-            capture_date=None,
-            software=None,
-            custom={},
+            time_code=meta["time_code"],
+            owner=meta["owner"],
+            comments=meta["comments"],
+            capture_date=meta["capture_date"],
+            software=meta["software"],
+            custom=meta["custom"],
         )
         output_part = EXRPartArtifact(
             file_path=write_result.final_file_path,
             part_index=0,
-            name="",
+            name=meta["name"],
             width=width,
             height=height,
             header=header,
@@ -313,11 +425,34 @@ class SaveEXR(SuccessFailureNode):
         return channels, width, height, "channels"
 
 
+def _build_extra_header(meta: dict) -> dict:
+    """Build the optional header attributes dict from _read_metadata() output."""
+    attrs: dict = {}
+    if meta["name"]:
+        attrs[_ATTR_NAME] = meta["name"]
+    if meta["pixel_aspect_ratio"] != 1.0:
+        attrs[_ATTR_PIXEL_ASPECT_RATIO] = meta["pixel_aspect_ratio"]
+    if meta["owner"]:
+        attrs[_ATTR_OWNER] = meta["owner"]
+    if meta["comments"]:
+        attrs[_ATTR_COMMENTS] = meta["comments"]
+    if meta["capture_date"]:
+        attrs[_ATTR_CAP_DATE] = meta["capture_date"]
+    if meta["software"]:
+        attrs[_ATTR_SOFTWARE] = meta["software"]
+    if meta["time_code"]:
+        attrs[_ATTR_TIME_CODE] = meta["time_code"]
+    if meta["custom"]:
+        attrs.update(meta["custom"])
+    return attrs
+
+
 def _write_to_bytes(
     channels: dict[str, np.ndarray],
     compression: OpenEXR.Compression,
     pixel_type: str,
     pixel_type_enum: PixelType,
+    extra_header: dict | None = None,
 ) -> tuple[bytes, list[EXRChannelInfo]]:
     """Write channels to a temp file, read back as bytes, return (bytes, channel_infos)."""
     # OpenEXR's Python binding only accepts a filesystem path — no in-memory write API.
@@ -325,7 +460,7 @@ def _write_to_bytes(
         tmp_path = tmp.name
 
     try:
-        write_exr_channels(tmp_path, channels, compression=compression, pixel_type=pixel_type)
+        write_exr_channels(tmp_path, channels, compression=compression, pixel_type=pixel_type, extra_header=extra_header)
         # Read it back but skip any attempt to generate thumbnail for now until we add ArtfiactManager support.
         read_result = GriptapeNodes.handle_request(
             ReadFileRequest(file_path=tmp_path,
