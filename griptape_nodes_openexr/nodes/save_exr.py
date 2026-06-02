@@ -325,7 +325,11 @@ def _write_to_bytes(
 
     try:
         write_exr_channels(tmp_path, channels, compression=compression, pixel_type=pixel_type)
-        read_result = GriptapeNodes.handle_request(ReadFileRequest(file_path=tmp_path, workspace_only=False))
+        # Read it back but skip any attempt to generate thumbnail for now until we add ArtfiactManager support.
+        read_result = GriptapeNodes.handle_request(
+            ReadFileRequest(file_path=tmp_path,
+                            should_transform_image_content_to_thumbnail=False,
+                            workspace_only=False))
         if not isinstance(read_result, ReadFileResultSuccess):
             raise RuntimeError(f"Failed to read temp EXR: {tmp_path}")
         raw = read_result.content
