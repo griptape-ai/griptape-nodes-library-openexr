@@ -210,6 +210,9 @@ cython_debug/
 # Generated EXR test fixtures (run: make test/fixtures)
 tests/data/*.exr
 
+# Stray files from MagicMock paths used as filenames during test runs
+MagicMock/
+
 # Marimo
 marimo/_static/
 marimo/_lsp/

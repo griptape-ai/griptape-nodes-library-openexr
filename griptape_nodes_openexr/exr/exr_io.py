@@ -178,6 +178,57 @@ def load_exr_channels(
             raise RuntimeError(msg) from e
 
 
+def write_exr_channels(
+    output_path: str,
+    channels: dict[str, np.ndarray],
+    compression: OpenEXR.Compression | None = None,
+    pixel_type: str = "half",
+    extra_header: dict[str, Any] | None = None,
+) -> None:
+    """Write a dict of channel arrays to a single-part scanline EXR file.
+
+    Args:
+        output_path: Filesystem path for the output file.
+        channels: Mapping of channel name to float32 (or any numeric) array of
+            shape ``(height, width)``.  Arrays are converted to float16 or float32
+            depending on ``pixel_type`` before writing.
+        compression: OpenEXR compression constant (e.g. ``OpenEXR.ZIP_COMPRESSION``).
+            Defaults to ``OpenEXR.ZIP_COMPRESSION`` when ``None``.
+        pixel_type: ``"half"`` (float16, default) or ``"float"`` (float32).
+        extra_header: Optional additional header attributes (owner, comments, etc.)
+            merged into the header dict before writing.
+
+    Raises:
+        ValueError: If ``output_path`` is empty.
+        RuntimeError: If the file cannot be written.
+    """
+    if not output_path:
+        msg = "output_path must not be empty"
+        raise ValueError(msg)
+
+    if compression is None:
+        compression = OpenEXR.ZIP_COMPRESSION
+
+    dtype = np.float16 if pixel_type == "half" else np.float32
+    converted = {name: np.ascontiguousarray(arr.astype(dtype, copy=False)) for name, arr in channels.items()}
+
+    header: dict[str, Any] = {
+        "compression": compression,
+        "type": OpenEXR.scanlineimage,
+    }
+    if extra_header:
+        header.update(extra_header)
+
+    try:
+        # OpenEXR binding requires a real filesystem path — no in-memory API. Callers
+        # pass a temp path here; the final destination write goes through WriteFileRequest.
+        # TODO: revisit once artifact manager is pluggable https://github.com/griptape-ai/griptape-nodes-library-openexr/issues/9
+        OpenEXR.File(header, converted).write(output_path)
+    except Exception as e:
+        msg = f"Failed to write EXR file '{output_path}': {e}"
+        raise RuntimeError(msg) from e
+
+
 def _build_channel_list_from_header(exr_channels: list[OpenEXR.Channel]) -> list[EXRChannelInfo]:
     """Build channel metadata list from the header 'channels' attribute.
 

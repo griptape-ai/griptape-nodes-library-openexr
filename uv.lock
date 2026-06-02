@@ -234,6 +234,15 @@ wheels = [
 ]
 
 [[package]]
+name = "fileseq"
+version = "3.2.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/69/6b/193ce3cf5d097b03be9b4965ecd952b60e183758a41f44f9d44530b54dc6/fileseq-3.2.0.tar.gz", hash = "sha256:afe858d6d312ff3e4df147c0fc16cfca7c412b37d1be0624f87285accd368dca", size = 2167970, upload-time = "2026-04-19T04:05:16.436Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/25/d9/af7357aabd5b69bf3696567c5d08a1aa6ac08ba2662a94181d75cec919ec/fileseq-3.2.0-py3-none-any.whl", hash = "sha256:8ae0dc525742b3f86d4261fa2e03b2ed1622f93a72c87db5cb788f9f0ee8d1d1", size = 202127, upload-time = "2026-04-19T04:05:14.589Z" },
+]
+
+[[package]]
 name = "filetype"
 version = "1.2.0"
 source = { registry = "https://pypi.org/simple" }
@@ -253,7 +262,7 @@ wheels = [
 
 [[package]]
 name = "griptape"
-version = "1.10.1"
+version = "1.10.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "attrs" },
@@ -275,21 +284,22 @@ dependencies = [
     { name = "urllib3" },
     { name = "wrapt" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/29/db/692266e10c4edb7bec607efd9b2c637f4f5e931e8ca92cee4b183630700c/griptape-1.10.1.tar.gz", hash = "sha256:3f17f25620698cf8ba5f0afd62e0ffec11b9a6cd395e3379c60627f893e55cd3", size = 193212, upload-time = "2026-05-07T19:29:30.983Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/d9/42/5ec69e425170663aafccc279650a3b6ab4d434e1b19a2623f17111621d11/griptape-1.10.2.tar.gz", hash = "sha256:328635fea90898159da802b131ebb2c8c67750ef787178d9c3e0b62a5c8efb8e", size = 193254, upload-time = "2026-05-28T00:58:46.449Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/82/7c/7e053a48b1bbaf22db0dfc8767e115d572a014042fadc211df8348d759da/griptape-1.10.1-py3-none-any.whl", hash = "sha256:aea696a2977b82cadae15aaef1c1a10da0a05b5422474ddb6beea1891e6dfedb", size = 428625, upload-time = "2026-05-07T19:29:32.715Z" },
+    { url = "https://files.pythonhosted.org/packages/e2/e3/a670f53187c85545b739a0a90b398dd746a1b7e8cf03a8158dfe7cacf2c3/griptape-1.10.2-py3-none-any.whl", hash = "sha256:cde9c0c3c1e596ca360cc063c7a2583aa5fb2c6fcc3b33eba95aae32f0f6daef", size = 428674, upload-time = "2026-05-28T00:58:48.028Z" },
 ]
 
 [[package]]
 name = "griptape-nodes-engine"
-version = "0.85.0"
-source = { registry = "https://pypi.org/simple" }
+version = "0.85.3"
+source = { git = "https://github.com/griptape-ai/griptape-nodes?rev=latest#2151da59f7259a8797332387ed8b594c77440f20" }
 dependencies = [
     { name = "anyio" },
     { name = "asyncio-thread-runner" },
     { name = "binaryornot" },
     { name = "cattrs" },
     { name = "fastapi" },
+    { name = "fileseq" },
     { name = "griptape" },
     { name = "httpx" },
     { name = "huggingface-hub" },
@@ -317,10 +327,6 @@ dependencies = [
     { name = "websockets" },
     { name = "xdg-base-dirs" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/e1/37/f0aa051c811b9c147fc55e0613136d8ece0bd31082091beb17a8245c7e77/griptape_nodes_engine-0.85.0.tar.gz", hash = "sha256:13f2eb1e01b2025d5f9b0b3faaedd7a02764f0fadb6332d35f3b01f7398b2c05", size = 789732, upload-time = "2026-05-26T18:11:41.103Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/2b/a7/b4e0735b58374e23c72404a1dfd16a107c60c07996c14c3fb37c50a4fee9/griptape_nodes_engine-0.85.0-py3-none-any.whl", hash = "sha256:030f05e313cdfc6147f1ef3eda3974596d4df0a19789038955ab81b6e8645708", size = 1004071, upload-time = "2026-05-26T18:11:42.503Z" },
-]
 
 [[package]]
 name = "griptape-nodes-library-openexr"
@@ -345,7 +351,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "griptape-nodes-engine", specifier = ">=0.82.0" },
+    { name = "griptape-nodes-engine", git = "https://github.com/griptape-ai/griptape-nodes?rev=latest" },
     { name = "numpy", specifier = ">=1.26.0" },
     { name = "openexr", specifier = ">=3.3.0" },
     { name = "pillow", specifier = ">=11.2.1" },
