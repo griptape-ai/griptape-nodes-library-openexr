@@ -181,7 +181,6 @@ class SaveEXR(SuccessFailureNode):
                 default_value="",
                 tooltip="Asset owner, empty if absent.",
                 allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
-
             )
 
             self._metadata_comments_param = ParameterString(
@@ -244,7 +243,6 @@ class SaveEXR(SuccessFailureNode):
         )
         self.add_parameter(self._output_part_param)
 
-
         self._create_status_parameters(
             result_details_tooltip="Details about the EXR write result",
             result_details_placeholder="Write details will appear here.",
@@ -266,9 +264,7 @@ class SaveEXR(SuccessFailureNode):
 
         return {
             "name": self.get_parameter_value(self._metadata_part_name_param.name) or "",
-            "pixel_aspect_ratio": float(
-                self.get_parameter_value(self._metadata_pixel_aspect_ratio_param.name) or 1.0
-            ),
+            "pixel_aspect_ratio": float(self.get_parameter_value(self._metadata_pixel_aspect_ratio_param.name) or 1.0),
             "owner": _opt(self.get_parameter_value(self._metadata_owner_param.name)),
             "comments": _opt(self.get_parameter_value(self._metadata_comments_param.name)),
             "capture_date": _opt(self.get_parameter_value(self._metadata_capture_date_param.name)),
@@ -463,12 +459,13 @@ def _write_to_bytes(
         tmp_path = tmp.name
 
     try:
-        write_exr_channels(tmp_path, channels, compression=compression, pixel_type=pixel_type, extra_header=extra_header)
+        write_exr_channels(
+            tmp_path, channels, compression=compression, pixel_type=pixel_type, extra_header=extra_header
+        )
         # Read it back but skip any attempt to generate thumbnail for now until we add ArtfiactManager support.
         read_result = GriptapeNodes.handle_request(
-            ReadFileRequest(file_path=tmp_path,
-                            should_transform_image_content_to_thumbnail=False,
-                            workspace_only=False))
+            ReadFileRequest(file_path=tmp_path, should_transform_image_content_to_thumbnail=False, workspace_only=False)
+        )
         if not isinstance(read_result, ReadFileResultSuccess):
             raise RuntimeError(f"Failed to read temp EXR: {tmp_path}")
         raw = read_result.content
