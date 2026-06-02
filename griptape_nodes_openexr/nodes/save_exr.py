@@ -171,9 +171,12 @@ class SaveEXR(SuccessFailureNode):
             parameter_group_initially_collapsed=True,
         )
 
+    def _on_fail_handler(self, details: str) -> None:
+        self.parameter_output_values[self._output_part_param.name] = None
+        self._set_status_results(was_successful=False, result_details=details)
+
     async def aprocess(self) -> None:
         self._clear_execution_status()
-        self.parameter_output_values[self._output_part_param.name] = None
 
         image_in: ImageArtifact | ImageUrlArtifact | None = self.get_parameter_value(self._image_in_param.name)
         channel_r: EXRChannelArtifact | None = self.get_parameter_value(self._channel_r_param.name)
@@ -200,13 +203,11 @@ class SaveEXR(SuccessFailureNode):
         elif image_in is not None:
             result = self._gather_mode_a_channels(image_in)
         else:
-            self._set_status_results(
-                was_successful=False, result_details="No input connected: connect image_in or at least one channel slot"
-            )
+            self._on_fail_handler("No input connected: connect image_in or at least one channel slot")
             return
 
         if isinstance(result, str):
-            self._set_status_results(was_successful=False, result_details=result)
+            self._on_fail_handler(result)
             return
 
         channels, width, height, mode = result
@@ -214,19 +215,19 @@ class SaveEXR(SuccessFailureNode):
         try:
             exr_bytes, channel_infos = _write_to_bytes(channels, oxr_compression, pixel_type_str, pixel_type_enum)
         except Exception as e:
-            self._set_status_results(was_successful=False, result_details=f"Failed to write EXR: {e}")
+            self._on_fail_handler(f"Failed to write EXR: {e}")
             return
 
         try:
             dest = self._output_file.build_file()
             dest_path = dest.resolve()
         except Exception as e:
-            self._set_status_results(was_successful=False, result_details=f"Failed to resolve output path: {e}")
+            self._on_fail_handler(f"Failed to resolve output path: {e}")
             return
 
         write_result = GriptapeNodes.handle_request(WriteFileRequest(file_path=dest_path, content=exr_bytes))
         if not isinstance(write_result, WriteFileResultSuccess):
-            self._set_status_results(was_successful=False, result_details="Failed to save output file")
+            self._on_fail_handler("Failed to save output file")
             return
 
         window = WindowCoordinates(xmin=0, ymin=0, xmax=width - 1, ymax=height - 1)
