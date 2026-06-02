@@ -456,6 +456,9 @@ def _write_to_bytes(
 ) -> tuple[bytes, list[EXRChannelInfo]]:
     """Write channels to a temp file, read back as bytes, return (bytes, channel_infos)."""
     # OpenEXR's Python binding only accepts a filesystem path — no in-memory write API.
+    # TODO: use a Project Situation for temp file placement so the directory is
+    # configurable per-project rather than defaulting to the OS temp dir.
+    # Tracked: https://github.com/griptape-ai/griptape-nodes-library-openexr/issues/17
     with tempfile.NamedTemporaryFile(suffix=".exr", delete=False) as tmp:
         tmp_path = tmp.name
 
