@@ -5,7 +5,8 @@ from __future__ import annotations
 import io
 import json
 import logging
-import tempfile
+import uuid
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -17,6 +18,7 @@ from griptape_nodes.exe_types.param_components.project_file_parameter import Pro
 from griptape_nodes.exe_types.param_types.parameter_float import ParameterFloat
 from griptape_nodes.exe_types.param_types.parameter_string import ParameterString
 from griptape_nodes.files.file import File
+from griptape_nodes.files.project_file import ProjectFileDestination
 from griptape_nodes.retained_mode.events.os_events import (
     DeleteFileRequest,
     DeleteFileResultFailure,
@@ -452,11 +454,14 @@ def _write_to_bytes(
 ) -> tuple[bytes, list[EXRChannelInfo]]:
     """Write channels to a temp file, read back as bytes, return (bytes, channel_infos)."""
     # OpenEXR's Python binding only accepts a filesystem path — no in-memory write API.
-    # TODO: use a Project Situation for temp file placement so the directory is
-    # configurable per-project rather than defaulting to the OS temp dir.
-    # Tracked: https://github.com/griptape-ai/griptape-nodes-library-openexr/issues/17
-    with tempfile.NamedTemporaryFile(suffix=".exr", delete=False) as tmp:
-        tmp_path = tmp.name
+    # Use the save_temp_file situation so the temp directory is configurable per-project.
+    dest = ProjectFileDestination.from_situation(f"scratch-{uuid.uuid4().hex}.exr", "save_temp_file")
+    tmp_path = str(dest.resolve())
+    # The save_temp_file situation carries create_dirs=True, but that flag is only
+    # honoured inside the engine's WriteFileRequest handler. write_exr_channels()
+    # calls the OpenEXR C binding directly, which requires the directory to already
+    # exist on disk — so we mkdir explicitly here.
+    Path(tmp_path).parent.mkdir(parents=True, exist_ok=True)
 
     try:
         write_exr_channels(

@@ -493,3 +493,142 @@ class TestSaveEXRMetadata:
             assert hdr.get("owner") == "file-owner"
             assert hdr.get("comments") == "file-comment"
             assert hdr.get("software") == "file-software"
+
+
+# ---------------------------------------------------------------------------
+# _write_to_bytes — temp file placement via Project Situation
+# ---------------------------------------------------------------------------
+
+
+class TestWriteToBytesUsesSituation:
+    def _handle_request(self, scratch: Path):
+        from griptape_nodes.retained_mode.events.os_events import ReadFileRequest, ReadFileResultSuccess
+
+        def _handler(request):
+            if isinstance(request, ReadFileRequest):
+                assert request.file_path is not None
+                data = Path(request.file_path).read_bytes()
+                return ReadFileResultSuccess(
+                    content=data,
+                    file_size=len(data),
+                    mime_type="application/octet-stream",
+                    encoding=None,
+                    result_details="",
+                )
+            return MagicMock()
+
+        return _handler
+
+    def test_uses_save_temp_file_situation(self, tmp_path: Path) -> None:
+        from griptape_nodes.retained_mode.griptape_nodes import GriptapeNodes
+
+        from griptape_nodes_openexr.nodes.save_exr import _write_to_bytes
+
+        scratch = tmp_path / "scratch.exr"
+        dest = MagicMock()
+        dest.resolve.return_value = str(scratch)
+
+        with (
+            patch("griptape_nodes_openexr.nodes.save_exr.ProjectFileDestination") as mock_pfd,
+            patch.object(GriptapeNodes, "handle_request", side_effect=self._handle_request(scratch)),
+        ):
+            mock_pfd.from_situation.return_value = dest
+            _write_to_bytes({"R": _ramp()}, OpenEXR.NO_COMPRESSION, "half", PixelType.HALF)
+
+        mock_pfd.from_situation.assert_called_once()
+        call_args = mock_pfd.from_situation.call_args
+        positional = call_args.args
+        keyword = call_args.kwargs
+        filename_used = positional[0] if positional else keyword.get("filename", "")
+        situation_used = positional[1] if len(positional) > 1 else keyword.get("situation")
+        assert situation_used == "save_temp_file"
+        assert isinstance(filename_used, str)
+        assert filename_used.startswith("scratch-")
+        assert filename_used.endswith(".exr")
+
+    def test_returns_valid_exr_bytes(self, tmp_path: Path) -> None:
+        from griptape_nodes.retained_mode.griptape_nodes import GriptapeNodes
+
+        from griptape_nodes_openexr.nodes.save_exr import _write_to_bytes
+
+        scratch = tmp_path / "scratch.exr"
+        dest = MagicMock()
+        dest.resolve.return_value = str(scratch)
+
+        with (
+            patch("griptape_nodes_openexr.nodes.save_exr.ProjectFileDestination") as mock_pfd,
+            patch.object(GriptapeNodes, "handle_request", side_effect=self._handle_request(scratch)),
+        ):
+            mock_pfd.from_situation.return_value = dest
+            exr_bytes, channel_infos = _write_to_bytes({"R": _ramp()}, OpenEXR.NO_COMPRESSION, "half", PixelType.HALF)
+
+        assert isinstance(exr_bytes, bytes)
+        assert len(exr_bytes) > 0
+        assert len(channel_infos) == 1
+        assert channel_infos[0].name == "R"
+
+    def test_creates_parent_directory_if_missing(self, tmp_path: Path) -> None:
+        from griptape_nodes.retained_mode.griptape_nodes import GriptapeNodes
+
+        from griptape_nodes_openexr.nodes.save_exr import _write_to_bytes
+
+        # Resolve to a path whose parent does not yet exist
+        scratch = tmp_path / "temp" / "scratch.exr"
+        assert not scratch.parent.exists()
+
+        dest = MagicMock()
+        dest.resolve.return_value = str(scratch)
+
+        with (
+            patch("griptape_nodes_openexr.nodes.save_exr.ProjectFileDestination") as mock_pfd,
+            patch.object(GriptapeNodes, "handle_request", side_effect=self._handle_request(scratch)),
+        ):
+            mock_pfd.from_situation.return_value = dest
+            exr_bytes, _ = _write_to_bytes({"R": _ramp()}, OpenEXR.NO_COMPRESSION, "half", PixelType.HALF)
+
+        assert isinstance(exr_bytes, bytes) and len(exr_bytes) > 0
+
+    def test_unique_filename_per_invocation(self, tmp_path: Path) -> None:
+        from griptape_nodes.retained_mode.griptape_nodes import GriptapeNodes
+
+        from griptape_nodes_openexr.nodes.save_exr import _write_to_bytes
+
+        scratch1 = tmp_path / "scratch1.exr"
+        scratch2 = tmp_path / "scratch2.exr"
+        dest1, dest2 = MagicMock(), MagicMock()
+        dest1.resolve.return_value = str(scratch1)
+        dest2.resolve.return_value = str(scratch2)
+        filenames: list[str] = []
+
+        def _side_effect(filename: str, situation: str) -> MagicMock:
+            filenames.append(filename)
+            return dest1 if len(filenames) == 1 else dest2
+
+        def _handle(scratch_ref: list[Path]):
+            from griptape_nodes.retained_mode.events.os_events import ReadFileRequest, ReadFileResultSuccess
+
+            def _handler(request):
+                if isinstance(request, ReadFileRequest):
+                    assert request.file_path is not None
+                    data = Path(request.file_path).read_bytes()
+                    return ReadFileResultSuccess(
+                        content=data,
+                        file_size=len(data),
+                        mime_type="application/octet-stream",
+                        encoding=None,
+                        result_details="",
+                    )
+                return MagicMock()
+
+            return _handler
+
+        with (
+            patch("griptape_nodes_openexr.nodes.save_exr.ProjectFileDestination") as mock_pfd,
+            patch.object(GriptapeNodes, "handle_request", side_effect=_handle([])),
+        ):
+            mock_pfd.from_situation.side_effect = _side_effect
+            _write_to_bytes({"R": _ramp()}, OpenEXR.NO_COMPRESSION, "half", PixelType.HALF)
+            _write_to_bytes({"R": _ramp()}, OpenEXR.NO_COMPRESSION, "half", PixelType.HALF)
+
+        assert len(filenames) == 2
+        assert filenames[0] != filenames[1]
