@@ -13,6 +13,8 @@ from griptape_nodes.exe_types.node_types import SuccessFailureNode
 from griptape_nodes.exe_types.param_components.project_file_parameter import ProjectFileParameter
 from griptape_nodes.exe_types.param_types.parameter_float import ParameterFloat
 from griptape_nodes.exe_types.param_types.parameter_string import ParameterString
+from griptape_nodes.node_library.library_registry import LibraryRegistry
+from griptape_nodes.retained_mode.griptape_nodes import GriptapeNodes
 from griptape_nodes.traits.options import Options
 from PIL import Image
 
@@ -33,12 +35,98 @@ _EV_MIN = -10.0
 _EV_MAX = 10.0
 
 
+def _find_colorspace_transform_request_type() -> type | None:
+    """Discover ColorspaceTransformRequest from any loaded library — no hard import."""
+    try:
+        for lib_name in LibraryRegistry.list_libraries():
+            library = LibraryRegistry.get_library(lib_name)
+            for req_type in library.get_registered_request_handler_types():  # type: ignore[attr-defined]
+                if req_type.__name__ == "ColorspaceTransformRequest":
+                    logger.info("DisplayEXRPart: found ColorspaceTransformRequest handler in library %r", lib_name)
+                    return req_type
+        logger.info("DisplayEXRPart: ColorspaceTransformRequest handler not found in any loaded library")
+    except Exception:
+        logger.info("DisplayEXRPart: error scanning LibraryRegistry for ColorspaceTransformRequest", exc_info=True)
+    return None
+
+
+def _apply_color_management(
+    rgb: np.ndarray,
+    source_colorspace: str,
+    display: str,
+    view: str,
+    tone_mapping: str,
+) -> tuple[np.ndarray, str]:
+    """Try the OCIO service; fall back to local tone mapping.
+
+    Returns (output_pixels, mode_label). When OCIO succeeds the label is
+    'ocio:<source>→<display>/<view>'; on fallback it is the tone_mapping value.
+    """
+    if source_colorspace and display and view:
+        logger.info(
+            "DisplayEXRPart: attempting OCIO transform — source=%r display=%r view=%r",
+            source_colorspace,
+            display,
+            view,
+        )
+        req_type = _find_colorspace_transform_request_type()
+        if req_type is not None:
+            req = req_type(
+                pixels=rgb,
+                source_colorspace=source_colorspace,
+                display=display,
+                view=view,
+            )
+            try:
+                result = GriptapeNodes.handle_request(req)
+                if result.succeeded():
+                    logger.info(
+                        "DisplayEXRPart: OCIO transform succeeded (%s→%s/%s)",
+                        source_colorspace,
+                        display,
+                        view,
+                    )
+                    return result.pixels, f"ocio:{source_colorspace}→{display}/{view}"  # type: ignore[attr-defined]
+                logger.warning(
+                    "DisplayEXRPart: OCIO transform failed — %s; falling back to %r",
+                    result.result_details,
+                    tone_mapping,
+                )
+            except TypeError:
+                # The framework raises TypeError ("No manager found") when no handler is
+                # registered for the request type. All other handler exceptions are caught
+                # internally by the framework and returned as a failed ResultPayload.
+                logger.info(
+                    "DisplayEXRPart: ColorspaceTransformRequest handler not registered (TypeError); falling back to %r",
+                    tone_mapping,
+                )
+        else:
+            logger.info(
+                "DisplayEXRPart: no OCIO handler found; falling back to %r tone mapping",
+                tone_mapping,
+            )
+    else:
+        logger.info(
+            "DisplayEXRPart: OCIO params incomplete (source=%r display=%r view=%r); using %r tone mapping",
+            source_colorspace,
+            display,
+            view,
+            tone_mapping,
+        )
+    return apply_tone_mapping(rgb, tone_mapping), tone_mapping
+
+
 class DisplayEXRPart(SuccessFailureNode):
     """Display an EXR part as an 8-bit sRGB PNG.
 
     Accepts an EXRPartArtifact, auto-selects RGB channels, applies exposure
     and optional filmic tone mapping, and outputs an ImageUrlArtifact
     saved via the project's save_node_output situation.
+
+    When source_colorspace, display, and view are all set, the OpenColorIO
+    library's ColorspaceTransformService is used instead of local tone mapping,
+    with automatic fallback to the tone_mapping setting if the service is
+    unavailable.
     """
 
     def __init__(self, name: str, metadata: dict[Any, Any] | None = None) -> None:
@@ -48,7 +136,7 @@ class DisplayEXRPart(SuccessFailureNode):
             name="part",
             input_types=["EXRPartArtifact"],
             type="EXRPartArtifact",
-            tooltip="EXR part to display. Assumes scene-linear HDR data. Gamut conversion is not applied.",
+            tooltip="EXR part to display. Assumes scene-linear HDR data.",
             allowed_modes={ParameterMode.INPUT},
         )
         self.add_parameter(self._part_param)
@@ -60,7 +148,7 @@ class DisplayEXRPart(SuccessFailureNode):
             max_val=_EV_MAX,
             step=0.1,
             slider=True,
-            tooltip="Exposure in EV stops applied before tone mapping",
+            tooltip="Exposure in EV stops applied before tone mapping or OCIO transform",
             allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
         )
         self.add_parameter(self._exposure_param)
@@ -68,11 +156,35 @@ class DisplayEXRPart(SuccessFailureNode):
         self._tone_mapping_param = ParameterString(
             name="tone_mapping",
             default_value=TONE_FILMIC,
-            tooltip="Tone mapping mode. 'filmic' applies Narkowicz 2015 curve; 'linear' clamps to [0, 1].",
+            tooltip="Fallback tone mapping when OCIO is not configured. 'filmic' applies Narkowicz 2015 curve; 'linear' clamps to [0, 1].",
             allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
         )
         self._tone_mapping_param.add_trait(Options(choices=[TONE_FILMIC, TONE_LINEAR]))
         self.add_parameter(self._tone_mapping_param)
+
+        self._source_colorspace_param = ParameterString(
+            name="source_colorspace",
+            default_value="",
+            tooltip="OCIO source colourspace (e.g. 'ACEScg'). When this, Display, and View are all set and the OpenColorIO library is loaded, OCIO is used instead of local tone mapping.",
+            allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
+        )
+        self.add_parameter(self._source_colorspace_param)
+
+        self._display_param = ParameterString(
+            name="display",
+            default_value="",
+            tooltip="OCIO display target (e.g. 'sRGB'). Required for OCIO path.",
+            allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
+        )
+        self.add_parameter(self._display_param)
+
+        self._view_param = ParameterString(
+            name="view",
+            default_value="",
+            tooltip="OCIO view (e.g. 'ACES'). Required for OCIO path.",
+            allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
+        )
+        self.add_parameter(self._view_param)
 
         self._image_param = Parameter(
             name="image",
@@ -129,10 +241,13 @@ class DisplayEXRPart(SuccessFailureNode):
 
         ev = float(self.get_parameter_value(self._exposure_param.name) or 0.0)
         tone_mapping = str(self.get_parameter_value(self._tone_mapping_param.name) or TONE_FILMIC)
+        source_colorspace = str(self.get_parameter_value(self._source_colorspace_param.name) or "")
+        display_cs = str(self.get_parameter_value(self._display_param.name) or "")
+        view_cs = str(self.get_parameter_value(self._view_param.name) or "")
 
         rgb = apply_exposure(rgb, ev)
         try:
-            rgb = apply_tone_mapping(rgb, tone_mapping)
+            rgb, tone_mode = _apply_color_management(rgb, source_colorspace, display_cs, view_cs, tone_mapping)
         except ValueError as e:
             self._set_status_results(was_successful=False, result_details=str(e))
             return
@@ -156,7 +271,6 @@ class DisplayEXRPart(SuccessFailureNode):
 
         self.parameter_output_values[self._image_param.name] = artifact
         self.publish_update_to_parameter(self._image_param.name, artifact)
-        tone_mode = tone_mapping
         label = part.name or f"part {part.part_index}"
         alpha_info = f", alpha: {alpha_channel}" if alpha_channel else ""
         details = f"Rendered '{label}' — {part.width}×{part.height}, channels: {selected}{alpha_info}, EV={ev:+.1f}, {tone_mode}"
@@ -172,7 +286,6 @@ class DisplayEXRPart(SuccessFailureNode):
     ) -> np.ndarray:
         """Stack selected channels into a (H, W, 3) float32 array."""
         if len(selected) == 1:
-            # Grayscale: broadcast single channel to all three planes
             ch = pixels[selected[0]].reshape(height, width)
             return np.stack([ch, ch, ch], axis=-1)
 
@@ -181,12 +294,10 @@ class DisplayEXRPart(SuccessFailureNode):
 
 
 def _ndarray_to_png(uint8: np.ndarray) -> bytes:
-    """Encode a (H, W, 3) or (H, W, 4) uint8 array as PNG bytes.
-
-    Caller guarantees exactly 3 (RGB) or 4 (RGBA) channels — _build_rgb always
-    produces 3-channel output; alpha is optionally appended as a 4th channel.
-    """
-    assert uint8.ndim == 3 and uint8.shape[2] in (3, 4), uint8.shape  # noqa: S101
+    """Encode a (H, W, 3) or (H, W, 4) uint8 array as PNG bytes."""
+    if uint8.ndim != 3 or uint8.shape[2] not in (3, 4):  # noqa: PLR2004
+        msg = f"expected (H, W, 3|4) uint8 array, got shape {uint8.shape}"
+        raise ValueError(msg)
     mode = "RGBA" if uint8.shape[2] == 4 else "RGB"  # noqa: PLR2004
     buf = io.BytesIO()
     Image.fromarray(uint8, mode=mode).save(buf, format="PNG")
