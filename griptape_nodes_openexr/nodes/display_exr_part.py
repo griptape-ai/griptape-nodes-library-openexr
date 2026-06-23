@@ -42,11 +42,11 @@ def _find_colorspace_transform_request_type() -> type | None:
             library = LibraryRegistry.get_library(lib_name)
             for req_type in library.get_registered_request_handler_types():  # type: ignore[attr-defined]
                 if req_type.__name__ == "ColorspaceTransformRequest":
-                    logger.info("DisplayEXRPart: found ColorspaceTransformRequest handler in library %r", lib_name)
+                    logger.debug("DisplayEXRPart: found ColorspaceTransformRequest handler in library %r", lib_name)
                     return req_type
-        logger.info("DisplayEXRPart: ColorspaceTransformRequest handler not found in any loaded library")
+        logger.debug("DisplayEXRPart: ColorspaceTransformRequest handler not found in any loaded library")
     except Exception:
-        logger.info("DisplayEXRPart: error scanning LibraryRegistry for ColorspaceTransformRequest", exc_info=True)
+        logger.debug("DisplayEXRPart: error scanning LibraryRegistry for ColorspaceTransformRequest", exc_info=True)
     return None
 
 
@@ -57,62 +57,51 @@ def _apply_color_management(
     view: str,
     tone_mapping: str,
 ) -> tuple[np.ndarray, str]:
-    """Try the OCIO service; fall back to local tone mapping.
+    """Apply OCIO colour management or local tone mapping.
 
-    Returns (output_pixels, mode_label). When OCIO succeeds the label is
-    'ocio:<source>→<display>/<view>'; on fallback it is the tone_mapping value.
+    When source_colorspace, display, and view are all set, the OCIO service is
+    required — raises ValueError if the library is not loaded or the transform
+    fails. When any param is empty, falls back to local tone mapping.
+
+    Returns (output_pixels, mode_label). On OCIO success the label is
+    'ocio:<source>→<display>/<view>'; on tone mapping it is the tone_mapping value.
     """
     if source_colorspace and display and view:
-        logger.info(
-            "DisplayEXRPart: attempting OCIO transform — source=%r display=%r view=%r",
-            source_colorspace,
-            display,
-            view,
-        )
         req_type = _find_colorspace_transform_request_type()
-        if req_type is not None:
+        if req_type is None:
+            msg = (
+                f"OCIO transform requested (source={source_colorspace!r}, display={display!r}, view={view!r}) "
+                "but the OpenColorIO library is not loaded. Load the library or clear the OCIO parameters."
+            )
+            raise ValueError(msg)
+        try:
             req = req_type(
                 pixels=rgb,
                 source_colorspace=source_colorspace,
                 display=display,
                 view=view,
             )
-            try:
-                result = GriptapeNodes.handle_request(req)
-                if result.succeeded():
-                    logger.info(
-                        "DisplayEXRPart: OCIO transform succeeded (%s→%s/%s)",
-                        source_colorspace,
-                        display,
-                        view,
-                    )
-                    return result.pixels, f"ocio:{source_colorspace}→{display}/{view}"  # type: ignore[attr-defined]
-                logger.warning(
-                    "DisplayEXRPart: OCIO transform failed — %s; falling back to %r",
-                    result.result_details,
-                    tone_mapping,
-                )
-            except TypeError:
-                # The framework raises TypeError ("No manager found") when no handler is
-                # registered for the request type. All other handler exceptions are caught
-                # internally by the framework and returned as a failed ResultPayload.
-                logger.info(
-                    "DisplayEXRPart: ColorspaceTransformRequest handler not registered (TypeError); falling back to %r",
-                    tone_mapping,
-                )
-        else:
-            logger.info(
-                "DisplayEXRPart: no OCIO handler found; falling back to %r tone mapping",
-                tone_mapping,
-            )
-    else:
-        logger.info(
-            "DisplayEXRPart: OCIO params incomplete (source=%r display=%r view=%r); using %r tone mapping",
+            result = GriptapeNodes.handle_request(req)
+        except TypeError as e:
+            msg = f"OCIO transform failed — {e}"
+            raise ValueError(msg) from e
+        if not result.succeeded():
+            msg = f"OCIO transform failed — {result.result_details}"
+            raise ValueError(msg)
+        logger.debug(
+            "DisplayEXRPart: OCIO transform succeeded (%s→%s/%s)",
             source_colorspace,
             display,
             view,
-            tone_mapping,
         )
+        return result.pixels, f"ocio:{source_colorspace}→{display}/{view}"  # type: ignore[attr-defined]
+    logger.debug(
+        "DisplayEXRPart: OCIO not configured (source=%r display=%r view=%r); using %r",
+        source_colorspace,
+        display,
+        view,
+        tone_mapping,
+    )
     return apply_tone_mapping(rgb, tone_mapping), tone_mapping
 
 
@@ -124,9 +113,9 @@ class DisplayEXRPart(SuccessFailureNode):
     saved via the project's save_node_output situation.
 
     When source_colorspace, display, and view are all set, the OpenColorIO
-    library's ColorspaceTransformService is used instead of local tone mapping,
-    with automatic fallback to the tone_mapping setting if the service is
-    unavailable.
+    library's ColorspaceTransformService is used instead of local tone mapping.
+    If the service is unavailable or the transform fails, the node fails loudly
+    rather than silently falling back — misconfigured OCIO is surfaced immediately.
     """
 
     def __init__(self, name: str, metadata: dict[Any, Any] | None = None) -> None:

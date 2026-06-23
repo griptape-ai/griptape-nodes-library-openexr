@@ -1,10 +1,11 @@
-"""Tests for DisplayEXRPart OCIO integration — discovery, dispatch, and fallback."""
+"""Tests for DisplayEXRPart OCIO integration — discovery, dispatch, and fail-loud."""
 
 from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
 import numpy as np
+import pytest
 
 from griptape_nodes_openexr.exr.tone_mapping import TONE_FILMIC
 from griptape_nodes_openexr.nodes.display_exr_part import (
@@ -136,7 +137,7 @@ class TestApplyColorManagement:
         assert "sRGB" in label
         assert "ACES" in label
 
-    def test_fallback_on_type_error(self) -> None:
+    def test_raises_on_type_error(self) -> None:
         rgb = _rgb()
         req_type = _cst_type()
         mock_gn = MagicMock()
@@ -145,32 +146,31 @@ class TestApplyColorManagement:
         with (
             patch("griptape_nodes_openexr.nodes.display_exr_part.LibraryRegistry", _mock_lr_with(req_type)),
             patch("griptape_nodes_openexr.nodes.display_exr_part.GriptapeNodes", mock_gn),
+            pytest.raises(ValueError, match="No manager found"),
         ):
-            pixels, label = _apply_color_management(rgb, "ACEScg", "sRGB", "ACES", TONE_FILMIC)
+            _apply_color_management(rgb, "ACEScg", "sRGB", "ACES", TONE_FILMIC)
 
-        assert label == TONE_FILMIC
-        assert not label.startswith("ocio:")
-
-    def test_fallback_on_failed_result(self) -> None:
+    def test_raises_on_failed_ocio_result(self) -> None:
         rgb = _rgb()
         req_type = _cst_type()
         mock_gn = MagicMock()
-        mock_gn.handle_request.return_value = _make_failed_result()
+        failed = _make_failed_result()
+        failed.result_details = "unknown colorspace"
+        mock_gn.handle_request.return_value = failed
 
         with (
             patch("griptape_nodes_openexr.nodes.display_exr_part.LibraryRegistry", _mock_lr_with(req_type)),
             patch("griptape_nodes_openexr.nodes.display_exr_part.GriptapeNodes", mock_gn),
+            pytest.raises(ValueError, match="unknown colorspace"),
         ):
-            pixels, label = _apply_color_management(rgb, "ACEScg", "sRGB", "ACES", TONE_FILMIC)
-
-        assert label == TONE_FILMIC
+            _apply_color_management(rgb, "ACEScg", "sRGB", "ACES", TONE_FILMIC)
 
     def test_ocio_skipped_when_display_missing(self) -> None:
         rgb = _rgb()
         mock_gn = MagicMock()
 
         with patch("griptape_nodes_openexr.nodes.display_exr_part.GriptapeNodes", mock_gn):
-            pixels, label = _apply_color_management(rgb, "ACEScg", "", "ACES", TONE_FILMIC)
+            _, label = _apply_color_management(rgb, "ACEScg", "", "ACES", TONE_FILMIC)
 
         mock_gn.handle_request.assert_not_called()
         assert label == TONE_FILMIC
@@ -180,32 +180,20 @@ class TestApplyColorManagement:
         mock_gn = MagicMock()
 
         with patch("griptape_nodes_openexr.nodes.display_exr_part.GriptapeNodes", mock_gn):
-            pixels, label = _apply_color_management(rgb, "", "sRGB", "ACES", TONE_FILMIC)
+            _, label = _apply_color_management(rgb, "", "sRGB", "ACES", TONE_FILMIC)
 
         mock_gn.handle_request.assert_not_called()
         assert label == TONE_FILMIC
 
-    def test_ocio_skipped_when_req_type_not_found(self) -> None:
+    def test_raises_when_ocio_library_not_loaded(self) -> None:
         rgb = _rgb()
         mock_gn = MagicMock()
 
         with (
             patch("griptape_nodes_openexr.nodes.display_exr_part.LibraryRegistry", _mock_lr_empty()),
             patch("griptape_nodes_openexr.nodes.display_exr_part.GriptapeNodes", mock_gn),
+            pytest.raises(ValueError, match="not loaded"),
         ):
-            pixels, label = _apply_color_management(rgb, "ACEScg", "sRGB", "ACES", TONE_FILMIC)
+            _apply_color_management(rgb, "ACEScg", "sRGB", "ACES", TONE_FILMIC)
 
         mock_gn.handle_request.assert_not_called()
-        assert label == TONE_FILMIC
-
-    def test_mode_label_is_tone_mapping_on_fallback(self) -> None:
-        rgb = _rgb()
-        mock_gn = MagicMock()
-
-        with (
-            patch("griptape_nodes_openexr.nodes.display_exr_part.LibraryRegistry", _mock_lr_empty()),
-            patch("griptape_nodes_openexr.nodes.display_exr_part.GriptapeNodes", mock_gn),
-        ):
-            _, label = _apply_color_management(rgb, "ACEScg", "sRGB", "ACES", TONE_FILMIC)
-
-        assert label == TONE_FILMIC
