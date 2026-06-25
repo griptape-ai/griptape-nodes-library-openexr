@@ -98,6 +98,7 @@ format: ## Format project.
 fix: ## Fix project.
 	@make format
 	@uv run ruff check --fix --unsafe-fixes
+	@uv run mdformat *.md
 
 .PHONY: check
 check: check/format check/lint check/types check/json ## Run all checks.
@@ -105,6 +106,7 @@ check: check/format check/lint check/types check/json ## Run all checks.
 .PHONY: check/format
 check/format:
 	@uv run ruff format --check
+	@uv run mdformat --check *.md
 
 .PHONY: check/lint
 check/lint:

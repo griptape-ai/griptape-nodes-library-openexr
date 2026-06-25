@@ -89,7 +89,9 @@
       "category": "openexr",
       "description": "OpenEXR library settings — controls how the LoadEXR node reads files",
       "contents": {
-        "header_only": true
+        "header_only": true,
+        "viewer_executable": "",
+        "viewer_args": ""
       }
     }
   ]
