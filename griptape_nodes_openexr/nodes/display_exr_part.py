@@ -13,19 +13,24 @@ from griptape_nodes.exe_types.node_types import SuccessFailureNode
 from griptape_nodes.exe_types.param_components.project_file_parameter import ProjectFileParameter
 from griptape_nodes.exe_types.param_types.parameter_float import ParameterFloat
 from griptape_nodes.exe_types.param_types.parameter_string import ParameterString
-from griptape_nodes.node_library.library_registry import LibraryRegistry
-from griptape_nodes.retained_mode.griptape_nodes import GriptapeNodes
 from griptape_nodes.traits.options import Options
 from PIL import Image
 
 from griptape_nodes_openexr.exr.channel_selection import select_alpha_channel, select_display_channels
 from griptape_nodes_openexr.exr.exr_header_artifact import EXRPartArtifact
 from griptape_nodes_openexr.exr.exr_io import load_exr_channels
+from griptape_nodes_openexr.exr.ocio_helpers import (
+    COLOR_MODE_BASIC,
+    COLOR_MODE_OCIO,
+    ColorParamsProtocol,
+    apply_color_management,
+    apply_color_mode_visibility,
+    find_colorspace_transform_request_type,
+)
 from griptape_nodes_openexr.exr.tone_mapping import (
     TONE_FILMIC,
     TONE_LINEAR,
     apply_exposure,
-    apply_tone_mapping,
     to_uint8_srgb,
 )
 
@@ -35,87 +40,19 @@ _EV_MIN = -10.0
 _EV_MAX = 10.0
 
 
-def _find_colorspace_transform_request_type() -> type | None:
-    """Discover ColorspaceTransformRequest from any loaded library — no hard import."""
-    try:
-        for lib_name in LibraryRegistry.list_libraries():
-            library = LibraryRegistry.get_library(lib_name)
-            for req_type in library.get_registered_request_handler_types():  # type: ignore[attr-defined]
-                if req_type.__name__ == "ColorspaceTransformRequest":
-                    logger.debug("DisplayEXRPart: found ColorspaceTransformRequest handler in library %r", lib_name)
-                    return req_type
-        logger.debug("DisplayEXRPart: ColorspaceTransformRequest handler not found in any loaded library")
-    except Exception:
-        logger.debug("DisplayEXRPart: error scanning LibraryRegistry for ColorspaceTransformRequest", exc_info=True)
-    return None
-
-
-def _apply_color_management(
-    rgb: np.ndarray,
-    source_colorspace: str,
-    display: str,
-    view: str,
-    tone_mapping: str,
-) -> tuple[np.ndarray, str]:
-    """Apply OCIO colour management or local tone mapping.
-
-    When source_colorspace, display, and view are all set, the OCIO service is
-    required — raises ValueError if the library is not loaded or the transform
-    fails. When any param is empty, falls back to local tone mapping.
-
-    Returns (output_pixels, mode_label). On OCIO success the label is
-    'ocio:<source>→<display>/<view>'; on tone mapping it is the tone_mapping value.
-    """
-    if source_colorspace and display and view:
-        req_type = _find_colorspace_transform_request_type()
-        if req_type is None:
-            msg = (
-                f"OCIO transform requested (source={source_colorspace!r}, display={display!r}, view={view!r}) "
-                "but the OpenColorIO library is not loaded. Load the library or clear the OCIO parameters."
-            )
-            raise ValueError(msg)
-        try:
-            req = req_type(
-                pixels=rgb,
-                source_colorspace=source_colorspace,
-                display=display,
-                view=view,
-            )
-            result = GriptapeNodes.handle_request(req)
-        except TypeError as e:
-            msg = f"OCIO transform failed — {e}"
-            raise ValueError(msg) from e
-        if not result.succeeded():
-            msg = f"OCIO transform failed — {result.result_details}"
-            raise ValueError(msg)
-        logger.debug(
-            "DisplayEXRPart: OCIO transform succeeded (%s→%s/%s)",
-            source_colorspace,
-            display,
-            view,
-        )
-        return result.pixels, f"ocio:{source_colorspace}→{display}/{view}"  # type: ignore[attr-defined]
-    logger.debug(
-        "DisplayEXRPart: OCIO not configured (source=%r display=%r view=%r); using %r",
-        source_colorspace,
-        display,
-        view,
-        tone_mapping,
-    )
-    return apply_tone_mapping(rgb, tone_mapping), tone_mapping
-
-
 class DisplayEXRPart(SuccessFailureNode):
     """Display an EXR part as an 8-bit sRGB PNG.
 
     Accepts an EXRPartArtifact, auto-selects RGB channels, applies exposure
-    and optional filmic tone mapping, and outputs an ImageUrlArtifact
-    saved via the project's save_node_output situation.
+    and colour management, and outputs an ImageUrlArtifact saved via the
+    project's save_node_output situation.
 
-    When source_colorspace, display, and view are all set, the OpenColorIO
-    library's ColorspaceTransformService is used instead of local tone mapping.
-    If the service is unavailable or the transform fails, the node fails loudly
-    rather than silently falling back — misconfigured OCIO is surfaced immediately.
+    In 'basic' mode, local filmic or linear tone mapping is applied.
+    In 'ocio' mode, a connected OCIOColorParamsArtifact drives an OCIO
+    display-view transform. OCIO failures are always surfaced loudly.
+
+    The default color_mode is set to 'ocio' when the OpenColorIO library is
+    detected at node instantiation time, otherwise 'basic'.
     """
 
     def __init__(self, name: str, metadata: dict[Any, Any] | None = None) -> None:
@@ -142,38 +79,38 @@ class DisplayEXRPart(SuccessFailureNode):
         )
         self.add_parameter(self._exposure_param)
 
+        _default_mode = COLOR_MODE_OCIO if find_colorspace_transform_request_type() is not None else COLOR_MODE_BASIC
+
+        self._color_mode_param = ParameterString(
+            name="color_mode",
+            default_value=_default_mode,
+            tooltip="Color management mode. 'basic' uses local tone mapping; 'ocio' uses the connected OCIOColorParamsArtifact.",
+            allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
+        )
+        self._color_mode_param.add_trait(Options(choices=[COLOR_MODE_BASIC, COLOR_MODE_OCIO]))
+        self.add_parameter(self._color_mode_param)
+
+        _ocio_active = _default_mode == COLOR_MODE_OCIO
+
         self._tone_mapping_param = ParameterString(
             name="tone_mapping",
             default_value=TONE_FILMIC,
-            tooltip="Fallback tone mapping when OCIO is not configured. 'filmic' applies Narkowicz 2015 curve; 'linear' clamps to [0, 1].",
+            tooltip="Local tone mapping when color_mode is 'basic'. 'filmic' applies Narkowicz 2015 curve; 'linear' clamps to [0, 1].",
             allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
+            ui_options={"hide": _ocio_active},
         )
         self._tone_mapping_param.add_trait(Options(choices=[TONE_FILMIC, TONE_LINEAR]))
         self.add_parameter(self._tone_mapping_param)
 
-        self._source_colorspace_param = ParameterString(
-            name="source_colorspace",
-            default_value="",
-            tooltip="OCIO source colourspace (e.g. 'ACEScg'). When this, Display, and View are all set and the OpenColorIO library is loaded, OCIO is used instead of local tone mapping.",
-            allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
+        self._color_params_param = Parameter(
+            name="color_params",
+            input_types=["OCIOColorParamsArtifact"],
+            type="OCIOColorParamsArtifact",
+            tooltip="OCIO color parameters artifact (source colorspace, display, view). Required when color_mode is 'ocio'.",
+            allowed_modes={ParameterMode.INPUT},
+            ui_options={"hide": not _ocio_active},
         )
-        self.add_parameter(self._source_colorspace_param)
-
-        self._display_param = ParameterString(
-            name="display",
-            default_value="",
-            tooltip="OCIO display target (e.g. 'sRGB'). Required for OCIO path.",
-            allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
-        )
-        self.add_parameter(self._display_param)
-
-        self._view_param = ParameterString(
-            name="view",
-            default_value="",
-            tooltip="OCIO view (e.g. 'ACES'). Required for OCIO path.",
-            allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
-        )
-        self.add_parameter(self._view_param)
+        self.add_parameter(self._color_params_param)
 
         self._image_param = Parameter(
             name="image",
@@ -197,6 +134,26 @@ class DisplayEXRPart(SuccessFailureNode):
             result_details_placeholder="Render details will appear here.",
             parameter_group_initially_collapsed=True,
         )
+
+        # after_value_set is not called by the framework when restoring saved values,
+        # so read the persisted mode from metadata to apply the correct initial visibility.
+        _restored_mode = self.metadata.get("_color_mode", _default_mode)
+        apply_color_mode_visibility(
+            self,
+            _restored_mode == COLOR_MODE_OCIO,
+            self._tone_mapping_param.name,
+            self._color_params_param.name,
+        )
+
+    def after_value_set(self, parameter: Parameter, value: Any) -> None:
+        if parameter.name == self._color_mode_param.name:
+            self.metadata["_color_mode"] = value
+            apply_color_mode_visibility(
+                self,
+                value == COLOR_MODE_OCIO,
+                self._tone_mapping_param.name,
+                self._color_params_param.name,
+            )
 
     async def aprocess(self) -> None:
         self._clear_execution_status()
@@ -230,13 +187,21 @@ class DisplayEXRPart(SuccessFailureNode):
 
         ev = float(self.get_parameter_value(self._exposure_param.name) or 0.0)
         tone_mapping = str(self.get_parameter_value(self._tone_mapping_param.name) or TONE_FILMIC)
-        source_colorspace = str(self.get_parameter_value(self._source_colorspace_param.name) or "")
-        display_cs = str(self.get_parameter_value(self._display_param.name) or "")
-        view_cs = str(self.get_parameter_value(self._view_param.name) or "")
+        color_mode = str(self.get_parameter_value(self._color_mode_param.name) or COLOR_MODE_BASIC)
+
+        color_params: ColorParamsProtocol | None = None
+        if color_mode == COLOR_MODE_OCIO:
+            color_params = self.get_parameter_value(self._color_params_param.name)  # type: ignore[assignment]
+            if color_params is None:
+                self._set_status_results(
+                    was_successful=False,
+                    result_details="OCIO mode requires a connected color_params artifact.",
+                )
+                return
 
         rgb = apply_exposure(rgb, ev)
         try:
-            rgb, tone_mode = _apply_color_management(rgb, source_colorspace, display_cs, view_cs, tone_mapping)
+            rgb, tone_mode = apply_color_management(rgb, color_params, tone_mapping)
         except ValueError as e:
             self._set_status_results(was_successful=False, result_details=str(e))
             return

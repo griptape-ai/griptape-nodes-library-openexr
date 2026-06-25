@@ -18,11 +18,18 @@ from PIL import Image
 
 from griptape_nodes_openexr.exr.exr_header_artifact import EXRChannelArtifact
 from griptape_nodes_openexr.exr.exr_io import load_exr_channels
+from griptape_nodes_openexr.exr.ocio_helpers import (
+    COLOR_MODE_BASIC,
+    COLOR_MODE_OCIO,
+    ColorParamsProtocol,
+    apply_color_management,
+    apply_color_mode_visibility,
+    find_colorspace_transform_request_type,
+)
 from griptape_nodes_openexr.exr.tone_mapping import (
     TONE_FILMIC,
     TONE_LINEAR,
     apply_exposure,
-    apply_tone_mapping,
     to_uint8_srgb,
 )
 
@@ -41,6 +48,10 @@ class DisplayEXRChannel(SuccessFailureNode):
 
     Single RGB channel → placed in its colour plane (R-only → red, etc.). Missing RGB slots → zero-filled plane.
     Connected alpha slot → RGBA output PNG.
+
+    In 'basic' mode, local filmic or linear tone mapping is applied.
+    In 'ocio' mode, a connected OCIOColorParamsArtifact drives an OCIO
+    display-view transform. OCIO failures are always surfaced loudly.
     """
 
     def __init__(self, name: str, metadata: dict[Any, Any] | None = None) -> None:
@@ -94,14 +105,38 @@ class DisplayEXRChannel(SuccessFailureNode):
         )
         self.add_parameter(self._exposure_param)
 
+        _default_mode = COLOR_MODE_OCIO if find_colorspace_transform_request_type() is not None else COLOR_MODE_BASIC
+
+        self._color_mode_param = ParameterString(
+            name="color_mode",
+            default_value=_default_mode,
+            tooltip="Color management mode. 'basic' uses local tone mapping; 'ocio' uses the connected OCIOColorParamsArtifact.",
+            allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
+        )
+        self._color_mode_param.add_trait(Options(choices=[COLOR_MODE_BASIC, COLOR_MODE_OCIO]))
+        self.add_parameter(self._color_mode_param)
+
+        _ocio_active = _default_mode == COLOR_MODE_OCIO
+
         self._tone_mapping_param = ParameterString(
             name="tone_mapping",
             default_value=TONE_FILMIC,
-            tooltip="Tone mapping mode. 'filmic' applies Narkowicz 2015 curve; 'linear' clamps to [0, 1].",
+            tooltip="Local tone mapping when color_mode is 'basic'. 'filmic' applies Narkowicz 2015 curve; 'linear' clamps to [0, 1].",
             allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
+            ui_options={"hide": _ocio_active},
         )
         self._tone_mapping_param.add_trait(Options(choices=[TONE_FILMIC, TONE_LINEAR]))
         self.add_parameter(self._tone_mapping_param)
+
+        self._color_params_param = Parameter(
+            name="color_params",
+            input_types=["OCIOColorParamsArtifact"],
+            type="OCIOColorParamsArtifact",
+            tooltip="OCIO color parameters artifact (source colorspace, display, view). Required when color_mode is 'ocio'.",
+            allowed_modes={ParameterMode.INPUT},
+            ui_options={"hide": not _ocio_active},
+        )
+        self.add_parameter(self._color_params_param)
 
         # TODO(DH): Add some preset backgrounds, "black"/"magenta"/"checkerboard"/"custom" when selecting custom,
         # the "background" input would be revealed.
@@ -136,6 +171,26 @@ class DisplayEXRChannel(SuccessFailureNode):
             result_details_placeholder="Render details will appear here.",
             parameter_group_initially_collapsed=True,
         )
+
+        # after_value_set is not called by the framework when restoring saved values,
+        # so read the persisted mode from metadata to apply the correct initial visibility.
+        _restored_mode = self.metadata.get("_color_mode", _default_mode)
+        apply_color_mode_visibility(
+            self,
+            _restored_mode == COLOR_MODE_OCIO,
+            self._tone_mapping_param.name,
+            self._color_params_param.name,
+        )
+
+    def after_value_set(self, parameter: Parameter, value: Any) -> None:
+        if parameter.name == self._color_mode_param.name:
+            self.metadata["_color_mode"] = value
+            apply_color_mode_visibility(
+                self,
+                value == COLOR_MODE_OCIO,
+                self._tone_mapping_param.name,
+                self._color_params_param.name,
+            )
 
     def _on_fail_handler(self, details: str) -> None:
         self.parameter_output_values[self._image_param.name] = None
@@ -196,10 +251,18 @@ class DisplayEXRChannel(SuccessFailureNode):
 
         ev = float(self.get_parameter_value(self._exposure_param.name) or 0.0)
         tone_mapping = str(self.get_parameter_value(self._tone_mapping_param.name) or TONE_FILMIC)
+        color_mode = str(self.get_parameter_value(self._color_mode_param.name) or COLOR_MODE_BASIC)
+
+        color_params: ColorParamsProtocol | None = None
+        if color_mode == COLOR_MODE_OCIO:
+            color_params = self.get_parameter_value(self._color_params_param.name)  # type: ignore[assignment]
+            if color_params is None:
+                self._on_fail_handler("OCIO mode requires a connected color_params artifact.")
+                return
 
         rgb = apply_exposure(rgb, ev)
         try:
-            rgb = apply_tone_mapping(rgb, tone_mapping)
+            rgb, tone_mode = apply_color_management(rgb, color_params, tone_mapping)
         except ValueError as e:
             self._on_fail_handler(str(e))
             return
@@ -232,7 +295,6 @@ class DisplayEXRChannel(SuccessFailureNode):
         self.parameter_output_values[self._image_param.name] = artifact
         self.publish_update_to_parameter(self._image_param.name, artifact)
 
-        tone_mode = tone_mapping
         slot_info = ", ".join(f"{slot}={rgb_slots[slot].channel.name}" for slot in sorted(rgb_slots))
         alpha_info = f", A={channel_a.channel.name}" if channel_a else ""
         bg_info = ", bg=composite" if bg_rgb_f32 is not None else ""
