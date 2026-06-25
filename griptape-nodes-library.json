@@ -1,6 +1,6 @@
 {
   "name": "OpenEXR Library",
-  "library_schema_version": "0.6.0",
+  "library_schema_version": "0.10.0",
   "metadata": {
     "author": "Griptape Community",
     "description": "OpenEXR file handling nodes for VFX and HDR workflows",
@@ -18,7 +18,14 @@
         "OpenEXR>=3.4.12",
         "pillow>=11.2.1"
       ]
-    }
+    },
+    "declarations": [
+      {
+        "type": "library_dependency",
+        "url": "https://github.com/griptape-ai/griptape-nodes-library-opencolorio.git",
+        "required": false
+      }
+    ]
   },
   "categories": [
     {
