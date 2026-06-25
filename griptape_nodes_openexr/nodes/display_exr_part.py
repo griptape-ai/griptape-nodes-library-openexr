@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import io
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 from griptape.artifacts import ImageUrlArtifact
-from griptape_nodes.exe_types.core_types import Parameter, ParameterMode
+from griptape_nodes.exe_types.core_types import NodeMessageResult, Parameter, ParameterMode
 from griptape_nodes.exe_types.node_types import SuccessFailureNode
 from griptape_nodes.exe_types.param_components.project_file_parameter import ProjectFileParameter
+from griptape_nodes.exe_types.param_types.parameter_button import ParameterButton
 from griptape_nodes.exe_types.param_types.parameter_float import ParameterFloat
 from griptape_nodes.exe_types.param_types.parameter_string import ParameterString
 from griptape_nodes.traits.options import Options
@@ -33,6 +34,10 @@ from griptape_nodes_openexr.exr.tone_mapping import (
     apply_exposure,
     to_uint8_srgb,
 )
+from griptape_nodes_openexr.exr.viewer_launcher import handle_viewer_button_click
+
+if TYPE_CHECKING:
+    from griptape_nodes.traits.button import Button, ButtonDetailsMessagePayload
 
 logger = logging.getLogger("griptape_nodes")
 
@@ -57,6 +62,8 @@ class DisplayEXRPart(SuccessFailureNode):
 
     def __init__(self, name: str, metadata: dict[Any, Any] | None = None) -> None:
         super().__init__(name, metadata)
+
+        self._current_exr_path: str | None = None
 
         self._part_param = Parameter(
             name="part",
@@ -129,6 +136,14 @@ class DisplayEXRPart(SuccessFailureNode):
         )
         self._output_file.add_parameter()
 
+        self._open_viewer_param = ParameterButton(
+            name="open_in_viewer",
+            label="Open in external viewer",
+            tooltip="Open the source EXR file in the configured external viewer (or OS default)",
+            on_click=self._on_open_viewer_click,
+        )
+        self.add_parameter(self._open_viewer_param)
+
         self._create_status_parameters(
             result_details_tooltip="Details about the display render result",
             result_details_placeholder="Render details will appear here.",
@@ -155,8 +170,21 @@ class DisplayEXRPart(SuccessFailureNode):
                 self._color_params_param.name,
             )
 
+    def _on_open_viewer_click(
+        self,
+        button: Button,
+        button_details: ButtonDetailsMessagePayload,  # noqa: ARG002
+    ) -> NodeMessageResult | None:
+        return handle_viewer_button_click(self.name, self._current_exr_path)
+
+    def _on_fail_handler(self, details: str) -> None:
+        self._current_exr_path = None
+        self.parameter_output_values[self._image_param.name] = None
+        self._set_status_results(was_successful=False, result_details=details)
+
     async def aprocess(self) -> None:
         self._clear_execution_status()
+        self._current_exr_path = None
         self.parameter_output_values[self._image_param.name] = None
 
         part: EXRPartArtifact | None = self.get_parameter_value(self._part_param.name)
@@ -164,10 +192,12 @@ class DisplayEXRPart(SuccessFailureNode):
             self._set_status_results(was_successful=False, result_details="No part provided")
             return
 
+        self._current_exr_path = part.file_path
+
         channel_names = [ch.name for ch in part.channels]
         selected = select_display_channels(channel_names)
         if selected is None:
-            self._set_status_results(was_successful=False, result_details="No channels found in part")
+            self._on_fail_handler("No channels found in part")
             return
 
         alpha_channel = select_alpha_channel(channel_names, selected)
@@ -176,13 +206,13 @@ class DisplayEXRPart(SuccessFailureNode):
         try:
             pixels = load_exr_channels(part.file_path, part.part_index, channels_to_load)
         except (ValueError, RuntimeError) as e:
-            self._set_status_results(was_successful=False, result_details=f"Failed to load channels: {e}")
+            self._on_fail_handler(f"Failed to load channels: {e}")
             return
 
         try:
             rgb = self._build_rgb(pixels, selected, part.width, part.height)
         except Exception as e:
-            self._set_status_results(was_successful=False, result_details=f"Failed to build RGB: {e}")
+            self._on_fail_handler(f"Failed to build RGB: {e}")
             return
 
         ev = float(self.get_parameter_value(self._exposure_param.name) or 0.0)
@@ -193,17 +223,14 @@ class DisplayEXRPart(SuccessFailureNode):
         if color_mode == COLOR_MODE_OCIO:
             color_params = self.get_parameter_value(self._color_params_param.name)  # type: ignore[assignment]
             if color_params is None:
-                self._set_status_results(
-                    was_successful=False,
-                    result_details="OCIO mode requires a connected color_params artifact.",
-                )
+                self._on_fail_handler("OCIO mode requires a connected color_params artifact.")
                 return
 
         rgb = apply_exposure(rgb, ev)
         try:
             rgb, tone_mode = apply_color_management(rgb, color_params, tone_mapping)
         except ValueError as e:
-            self._set_status_results(was_successful=False, result_details=str(e))
+            self._on_fail_handler(str(e))
             return
         uint8_rgb = to_uint8_srgb(rgb)
 
@@ -220,7 +247,7 @@ class DisplayEXRPart(SuccessFailureNode):
             saved = dest.write_bytes(png_bytes)
             artifact = ImageUrlArtifact(saved.location)
         except Exception as e:
-            self._set_status_results(was_successful=False, result_details=f"Failed to save image: {e}")
+            self._on_fail_handler(f"Failed to save image: {e}")
             return
 
         self.parameter_output_values[self._image_param.name] = artifact

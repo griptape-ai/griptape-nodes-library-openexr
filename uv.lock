@@ -341,6 +341,10 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "mdformat" },
+    { name = "mdformat-frontmatter" },
+    { name = "mdformat-gfm" },
+    { name = "mdformat-pyproject" },
     { name = "openexr" },
     { name = "pillow" },
     { name = "pyright" },
@@ -359,6 +363,10 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "mdformat", specifier = ">=0.7" },
+    { name = "mdformat-frontmatter", specifier = "~=2.0.10" },
+    { name = "mdformat-gfm", specifier = "~=1.0.0" },
+    { name = "mdformat-pyproject", specifier = "~=0.1.1" },
     { name = "openexr", specifier = ">=3.4.12" },
     { name = "pillow", specifier = ">=11.2.1" },
     { name = "pyright", specifier = ">=1.1.396" },
@@ -708,6 +716,71 @@ wheels = [
 [package.optional-dependencies]
 ws = [
     { name = "websockets" },
+]
+
+[[package]]
+name = "mdformat"
+version = "1.0.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "markdown-it-py" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/3f/05/32b5e14b192b0a8a309f32232c580aefedd9d06017cb8fe8fce34bec654c/mdformat-1.0.0.tar.gz", hash = "sha256:4954045fcae797c29f86d4ad879e43bb151fa55dbaf74ac6eaeacf1d45bb3928", size = 56953, upload-time = "2025-10-16T12:05:03.695Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/54/9a/8fe71b95985ca7a4001effbcc58e5a07a1f2a2884203f74dcf48a3b08315/mdformat-1.0.0-py3-none-any.whl", hash = "sha256:bca015d65a1d063a02e885a91daee303057bc7829c2cd37b2075a50dbb65944b", size = 53288, upload-time = "2025-10-16T12:05:02.607Z" },
+]
+
+[[package]]
+name = "mdformat-frontmatter"
+version = "2.0.10"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "mdformat" },
+    { name = "mdit-py-plugins" },
+    { name = "ruamel-yaml" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/c0/94/ccb15e0535f35c21b2b533cafb232f11ac0e7046dd122029b7ec0513c82e/mdformat_frontmatter-2.0.10.tar.gz", hash = "sha256:decefcb4beb66cf111f17e8c0d82e60b208104c7922ec09564d05365db551bd8", size = 3958, upload-time = "2026-01-19T23:42:23.672Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ea/40/e61f8ed549bed3159a9677eadb89849ccca6de30eb90bf61e1b6026df96d/mdformat_frontmatter-2.0.10-py3-none-any.whl", hash = "sha256:c99f7c52de0403e39f48b6a1c2bb79a4c8ce69304a799ff0e403e3957aa3669b", size = 4636, upload-time = "2026-01-19T23:42:22.341Z" },
+]
+
+[[package]]
+name = "mdformat-gfm"
+version = "1.0.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "markdown-it-py" },
+    { name = "mdformat" },
+    { name = "mdit-py-plugins" },
+    { name = "wcwidth" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/56/6f/a626ebb142a290474401b67e2d61e73ce096bf7798ee22dfe6270f924b3f/mdformat_gfm-1.0.0.tar.gz", hash = "sha256:d1d49a409a6acb774ce7635c72d69178df7dce1dc8cdd10e19f78e8e57b72623", size = 10112, upload-time = "2025-10-16T09:12:22.402Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e6/18/6bc2189b744dd383cad03764f41f30352b1278d2205096f77a29c0b327ad/mdformat_gfm-1.0.0-py3-none-any.whl", hash = "sha256:7305a50efd2a140d7c83505b58e3ac5df2b09e293f9bbe72f6c7bee8c678b005", size = 10970, upload-time = "2025-10-16T09:12:21.276Z" },
+]
+
+[[package]]
+name = "mdformat-pyproject"
+version = "0.1.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "mdformat" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/a7/33/4c7400f8d2ed273d675e72f55c33e72e08e6224a35f184ffca8ae6d40d53/mdformat_pyproject-0.1.1.tar.gz", hash = "sha256:be16ed754d42db5f5e376ccb9cdbdfefc7750f7f77eadddde37f99ab87272b54", size = 5654, upload-time = "2025-10-29T16:10:24.651Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/5a/31/113382823075056a46de42b21ed31372908f30d353c11ca01ec447ca2829/mdformat_pyproject-0.1.1-py3-none-any.whl", hash = "sha256:92d849f5c587ec7dc74a8d240139d3a9ecb65ea553cdb11e01f927fc55f248ce", size = 5102, upload-time = "2025-10-29T16:10:23.124Z" },
+]
+
+[[package]]
+name = "mdit-py-plugins"
+version = "0.6.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "markdown-it-py" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/59/fc/f8d0863f8862f25602c0404d75568e89fb6b4109804645e5cdfb1be5cf56/mdit_py_plugins-0.6.1.tar.gz", hash = "sha256:a2bca0f039f39dbd35fb74ae1b5f998608c437463371f0ff7f49a19a17a114d0", size = 56114, upload-time = "2026-05-13T09:03:38.91Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/a5/69/6da5581c6a7fede7dc261bf4e67d6adca4196f176b43288b55b3db395b6e/mdit_py_plugins-0.6.1-py3-none-any.whl", hash = "sha256:214c82fb2ac524472ab6a5bcab1de80f73b50443e187f401bfd77efbc7c6481d", size = 66663, upload-time = "2026-05-13T09:03:37.76Z" },
 ]
 
 [[package]]
@@ -1535,6 +1608,15 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/fa/08/d9e2e0f9e8e6791d33aefc694ad7eefa7f901f63caff84a81ded38692f9c/watchfiles-1.2.0-cp312-cp312-win32.whl", hash = "sha256:7a2cffd17d27d2ecbb310c2b1d8174f222a5495b1a721894afa88ec11e25b898", size = 275480, upload-time = "2026-05-18T04:30:31.307Z" },
     { url = "https://files.pythonhosted.org/packages/1c/e6/9d42569c0102645cc8cea5d8c7d8a1e9d4ada2cb7f05f75e554b8aa2202a/watchfiles-1.2.0-cp312-cp312-win_amd64.whl", hash = "sha256:f155b3a1b2a5fc89cdc70d47ee5d54e3b75e88efa34982028a35daef9ba00379", size = 288718, upload-time = "2026-05-18T04:32:10.745Z" },
     { url = "https://files.pythonhosted.org/packages/0a/26/88e0dc6ee3898169d7fa22bb6a69cabf2502d2ee25cb8c876d1262d204f8/watchfiles-1.2.0-cp312-cp312-win_arm64.whl", hash = "sha256:8fa585ede612ee9f9e91b18bebf9ba11b9ae29a4e3a0d0cf6fca3e382133f0d5", size = 281026, upload-time = "2026-05-18T04:30:22.23Z" },
+]
+
+[[package]]
+name = "wcwidth"
+version = "0.8.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/49/b4/51fe890511f0f242d07cb1ebe6a5b6db417262b9d2568b460347c57d95cc/wcwidth-0.8.1.tar.gz", hash = "sha256:faf5b4a5366a72dc49cad48cdf21f52bdf63bdda995178e483ba247ff79089b9", size = 1466072, upload-time = "2026-06-08T05:57:23.146Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/bd/6e/95b0e537de1f4d4301f76f944642c6da50d1511cc7b3d64dc418a66c7509/wcwidth-0.8.1-py3-none-any.whl", hash = "sha256:f453740b1e4a4f3291faa37944c555d71056c4da08d59809b307ef4feba695c8", size = 323092, upload-time = "2026-06-08T05:57:21.413Z" },
 ]
 
 [[package]]

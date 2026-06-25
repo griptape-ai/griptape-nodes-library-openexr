@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import io
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 from griptape.artifacts import ImageUrlArtifact
-from griptape_nodes.exe_types.core_types import Parameter, ParameterMode
+from griptape_nodes.exe_types.core_types import NodeMessageResult, Parameter, ParameterMode
 from griptape_nodes.exe_types.node_types import SuccessFailureNode
 from griptape_nodes.exe_types.param_components.project_file_parameter import ProjectFileParameter
+from griptape_nodes.exe_types.param_types.parameter_button import ParameterButton
 from griptape_nodes.exe_types.param_types.parameter_float import ParameterFloat
 from griptape_nodes.exe_types.param_types.parameter_string import ParameterString
 from griptape_nodes.traits.options import Options
@@ -32,6 +33,10 @@ from griptape_nodes_openexr.exr.tone_mapping import (
     apply_exposure,
     to_uint8_srgb,
 )
+from griptape_nodes_openexr.exr.viewer_launcher import handle_viewer_button_click
+
+if TYPE_CHECKING:
+    from griptape_nodes.traits.button import Button, ButtonDetailsMessagePayload
 
 logger = logging.getLogger("griptape_nodes")
 
@@ -56,6 +61,8 @@ class DisplayEXRChannel(SuccessFailureNode):
 
     def __init__(self, name: str, metadata: dict[Any, Any] | None = None) -> None:
         super().__init__(name, metadata)
+
+        self._current_exr_path: str | None = None
 
         self._channel_r_param = Parameter(
             name="channel_r",
@@ -166,6 +173,14 @@ class DisplayEXRChannel(SuccessFailureNode):
         )
         self._output_file.add_parameter()
 
+        self._open_viewer_param = ParameterButton(
+            name="open_in_viewer",
+            label="Open in external viewer",
+            tooltip="Open the source EXR file in the configured external viewer (or OS default). When channels from multiple files are connected, the file from the first connected channel is used.",
+            on_click=self._on_open_viewer_click,
+        )
+        self.add_parameter(self._open_viewer_param)
+
         self._create_status_parameters(
             result_details_tooltip="Details about the display render result",
             result_details_placeholder="Render details will appear here.",
@@ -192,12 +207,21 @@ class DisplayEXRChannel(SuccessFailureNode):
                 self._color_params_param.name,
             )
 
+    def _on_open_viewer_click(
+        self,
+        button: Button,
+        button_details: ButtonDetailsMessagePayload,  # noqa: ARG002
+    ) -> NodeMessageResult | None:
+        return handle_viewer_button_click(self.name, self._current_exr_path)
+
     def _on_fail_handler(self, details: str) -> None:
+        self._current_exr_path = None
         self.parameter_output_values[self._image_param.name] = None
         self._set_status_results(was_successful=False, result_details=details)
 
     async def aprocess(self) -> None:
         self._clear_execution_status()
+        self._current_exr_path = None
 
         channel_r: EXRChannelArtifact | None = self.get_parameter_value(self._channel_r_param.name)
         channel_g: EXRChannelArtifact | None = self.get_parameter_value(self._channel_g_param.name)
@@ -213,6 +237,9 @@ class DisplayEXRChannel(SuccessFailureNode):
         if not rgb_slots:
             self._on_fail_handler("At least one RGB channel slot must be connected")
             return
+
+        first_artifact = next(iter(rgb_slots.values()))
+        self._current_exr_path = first_artifact.file_path
 
         pixels: dict[str, np.ndarray] = {}
         for slot, artifact in rgb_slots.items():

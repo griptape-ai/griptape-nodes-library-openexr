@@ -17,18 +17,21 @@ import json
 import logging
 import math
 import os
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from griptape_nodes.exe_types.core_types import (
+    NodeMessageResult,
     Parameter,
     ParameterGroup,
     ParameterMode,
 )
 from griptape_nodes.exe_types.node_types import SuccessFailureNode
+from griptape_nodes.exe_types.param_types.parameter_button import ParameterButton
 from griptape_nodes.exe_types.param_types.parameter_float import ParameterFloat
 from griptape_nodes.exe_types.param_types.parameter_int import ParameterInt
 from griptape_nodes.exe_types.param_types.parameter_string import ParameterString
 from griptape_nodes.files.file import File, FileLoadError
+from griptape_nodes.retained_mode.events.config_events import GetConfigValueRequest, GetConfigValueResultSuccess
 from griptape_nodes.retained_mode.griptape_nodes import GriptapeNodes
 from griptape_nodes.traits.file_system_picker import FileSystemPicker
 
@@ -38,6 +41,10 @@ from griptape_nodes_openexr.exr.exr_header_artifact import (
 )
 from griptape_nodes_openexr.exr.exr_io import scan_exr_header
 from griptape_nodes_openexr.exr.exr_types import EXRData, EXRPart
+from griptape_nodes_openexr.exr.viewer_launcher import handle_viewer_button_click
+
+if TYPE_CHECKING:
+    from griptape_nodes.traits.button import Button, ButtonDetailsMessagePayload
 
 logger = logging.getLogger("griptape_nodes")
 
@@ -125,6 +132,14 @@ class LoadEXR(SuccessFailureNode):
             )
         )
         self.add_parameter(self._file_path_param)
+
+        self._open_viewer_param = ParameterButton(
+            name="open_in_viewer",
+            label="Open in external viewer",
+            tooltip="Open the EXR file in the configured external viewer (or OS default)",
+            on_click=self._on_open_viewer_click,
+        )
+        self.add_parameter(self._open_viewer_param)
 
         # --- EXR Info group (collapsed) ---
         # Single-part: all metadata lives here.
@@ -281,6 +296,20 @@ class LoadEXR(SuccessFailureNode):
 
     # --- Lifecycle ---
 
+    def _on_open_viewer_click(
+        self,
+        button: Button,
+        button_details: ButtonDetailsMessagePayload,  # noqa: ARG002
+    ) -> NodeMessageResult | None:
+        file_path = self._resolve_file_path_param()
+        if not file_path:
+            return NodeMessageResult(
+                success=False,
+                details="No EXR file path set — select a file first",
+                response=None,
+            )
+        return handle_viewer_button_click(self.name, file_path)
+
     def _resolve_file_path_param(self) -> str:
         """Resolve the file_path parameter value, handling Griptape macro paths."""
         raw = self.get_parameter_value(self._file_path_param.name)
@@ -373,9 +402,12 @@ class LoadEXR(SuccessFailureNode):
         if not file_path:
             return
 
-        header_only: bool = GriptapeNodes.ConfigManager().get_config_value("openexr.header_only")
-        if header_only is None:
-            header_only = True
+        _header_only_result = GriptapeNodes.handle_request(
+            GetConfigValueRequest(category_and_key="openexr.header_only")
+        )
+        header_only: bool = (
+            bool(_header_only_result.value) if isinstance(_header_only_result, GetConfigValueResultSuccess) else True
+        )
 
         try:
             exr_data = scan_exr_header(file_path, header_only=header_only)
