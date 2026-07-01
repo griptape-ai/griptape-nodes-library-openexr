@@ -50,9 +50,15 @@ def _mock_lr_empty() -> MagicMock:
     return mock_lr
 
 
-def _color_params(source: str = "ACEScg", display: str = "sRGB", view: str = "ACES") -> MagicMock:
+def _color_params(
+    source: str = "ACEScg",
+    display: str = "sRGB",
+    view: str = "ACES",
+    config_path: str | None = None,
+) -> MagicMock:
     artifact = MagicMock()
     artifact.source_colorspace = source
     artifact.display = display
     artifact.view = view
+    artifact.config_path = config_path
     return artifact
