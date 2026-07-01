@@ -22,6 +22,7 @@ class ColorParamsProtocol(Protocol):
     source_colorspace: str
     display: str
     view: str
+    config_path: str | None
 
 
 def find_colorspace_transform_request_type() -> type | None:
@@ -49,8 +50,9 @@ def apply_color_management(
             source_colorspace: str = color_params.source_colorspace
             display: str = color_params.display
             view: str = color_params.view
+            config_path: str | None = color_params.config_path
         except AttributeError as e:
-            msg = f"color_params is missing a required attribute (source_colorspace, display, view): {e}"
+            msg = f"color_params is missing a required attribute (source_colorspace, display, view, config_path): {e}"
             raise ValueError(msg) from e
 
         req_type = find_colorspace_transform_request_type()
@@ -67,6 +69,7 @@ def apply_color_management(
                 source_colorspace=source_colorspace,
                 display=display,
                 view=view,
+                config_path=config_path,
             )
             result = GriptapeNodes.handle_request(req)
         except TypeError as e:

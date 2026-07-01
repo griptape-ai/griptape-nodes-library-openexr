@@ -143,6 +143,46 @@ class TestApplyColorManagement:
         ):
             apply_color_management(rgb, _color_params(), TONE_FILMIC)
 
+    def test_config_path_forwarded_to_request(self) -> None:
+        rgb = _rgb()
+        req_type = _cst_type()
+        mock_gn = MagicMock()
+        mock_gn.handle_request.return_value = _make_succeeded_result(_rgb())
+
+        with (
+            patch(f"{_OCIO_HELPERS}.LibraryRegistry", _mock_lr_with(req_type)),
+            patch(f"{_OCIO_HELPERS}.GriptapeNodes", mock_gn),
+        ):
+            apply_color_management(rgb, _color_params(config_path="/path/to/config.ocio"), TONE_FILMIC)
+
+        req_type.assert_called_once_with(
+            pixels=rgb,
+            source_colorspace="ACEScg",
+            display="sRGB",
+            view="ACES",
+            config_path="/path/to/config.ocio",
+        )
+
+    def test_config_path_none_forwarded_to_request(self) -> None:
+        rgb = _rgb()
+        req_type = _cst_type()
+        mock_gn = MagicMock()
+        mock_gn.handle_request.return_value = _make_succeeded_result(_rgb())
+
+        with (
+            patch(f"{_OCIO_HELPERS}.LibraryRegistry", _mock_lr_with(req_type)),
+            patch(f"{_OCIO_HELPERS}.GriptapeNodes", mock_gn),
+        ):
+            apply_color_management(rgb, _color_params(config_path=None), TONE_FILMIC)
+
+        req_type.assert_called_once_with(
+            pixels=rgb,
+            source_colorspace="ACEScg",
+            display="sRGB",
+            view="ACES",
+            config_path=None,
+        )
+
     def test_raises_with_targeted_message_when_color_params_missing_attributes(self) -> None:
         """AttributeError from duck access must surface as ValueError with a clear message."""
         rgb = _rgb()
