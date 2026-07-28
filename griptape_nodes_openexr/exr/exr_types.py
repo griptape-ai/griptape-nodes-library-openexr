@@ -328,8 +328,6 @@ def _convert_attribute_value(value: Any) -> Any:
         return value.decode("utf-8", errors="replace")
     if isinstance(value, (tuple, list)):
         return [_convert_attribute_value(v) for v in value]
-    if hasattr(value, "item"):
-        return value.item()
     if hasattr(value, "tolist"):
         return value.tolist()
     return str(value)

@@ -273,6 +273,41 @@ class TestLegacyMultipart:
 
 
 # ---------------------------------------------------------------------------
+# vector_attributes.exr - multi-element numpy array custom attributes
+# Reproduces the Katana-export bug: _convert_attribute_value called .item()
+# on multi-element arrays (M44f, V3f, V2f), raising ValueError.
+# ---------------------------------------------------------------------------
+
+
+class TestVectorAttributes:
+    FILE = DATA / "vector_attributes.exr"
+
+    def test_loads_successfully(self) -> None:
+        data = scan_exr_header(str(self.FILE))
+        assert len(data.parts) == 1
+
+    def test_matrix_attribute_is_nested_list(self) -> None:
+        custom = scan_exr_header(str(self.FILE)).parts[0].header.custom
+        mat = custom["worldToCamera"]
+        assert isinstance(mat, list)
+        assert len(mat) == 4
+        assert all(isinstance(row, list) and len(row) == 4 for row in mat)
+
+    def test_vector3_attribute_is_list(self) -> None:
+        custom = scan_exr_header(str(self.FILE)).parts[0].header.custom
+        vec = custom["renderCamera"]
+        assert isinstance(vec, list)
+        assert len(vec) == 3
+
+    def test_screen_window_center_in_header(self) -> None:
+        # screenWindowCenter is a standard EXR attr extracted into the header, not custom
+        header = scan_exr_header(str(self.FILE)).parts[0].header
+        assert header.screen_window_center is not None
+        center = header.screen_window_center
+        assert len(center) == 2
+
+
+# ---------------------------------------------------------------------------
 # Error handling
 # ---------------------------------------------------------------------------
 
