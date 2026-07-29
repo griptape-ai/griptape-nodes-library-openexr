@@ -39,9 +39,11 @@ jobs:
         run: |
           VERSION=$(make version/get)
           BRANCH="chore/bump-v${VERSION}"
-          gh pr create \
-            --title "chore: bump v${VERSION}" \
-            --body "Automated version bump to v${VERSION}." \
-            --base main \
-            --head "${BRANCH}" || true
-          gh pr merge "${BRANCH}" --auto --squash || true
+          if ! gh pr view "${BRANCH}" --json number -q .number 2>/dev/null; then
+            gh pr create \
+              --title "chore: bump v${VERSION}" \
+              --body "Automated version bump to v${VERSION}." \
+              --base main \
+              --head "${BRANCH}"
+          fi
+          gh pr merge "${BRANCH}" --auto --squash
