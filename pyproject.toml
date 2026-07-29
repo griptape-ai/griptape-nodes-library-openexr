@@ -20,7 +20,7 @@ build-backend = "hatchling.build"
 packages = ["griptape_nodes_openexr"]
 
 [dependency-groups]
-dev = ["pyright>=1.1.396", "pytest-asyncio>=0.21.0", "ruff>=0.8.0", "pytest", "OpenEXR>=3.4.12", "pillow>=11.2.1", "mdformat>=0.7", "mdformat-gfm~=1.0.0", "mdformat-frontmatter~=2.0.10", "mdformat-pyproject~=0.1.1"]
+dev = ["pyright>=1.1.396", "pytest-asyncio>=0.21.0", "pytest-cov", "ruff>=0.8.0", "pytest", "OpenEXR>=3.4.12", "pillow>=11.2.1", "mdformat>=0.7", "mdformat-gfm~=1.0.0", "mdformat-frontmatter~=2.0.10", "mdformat-pyproject~=0.1.1"]
 
 [tool.mdformat]
 number = true

@@ -66,6 +66,22 @@ lib['metadata'].setdefault('dependencies', {})['pip_dependencies'] = deps; \
 open('$(LIBRARY_JSON)', 'w').write(json.dumps(lib, indent=4) + '\n'); \
 print(f'Synced {len(deps)} dependencies to $(LIBRARY_JSON)')"
 
+.PHONY: test
+test: ## Run all tests.
+	@uv run pytest tests/
+
+.PHONY: test/unit
+test/unit: ## Run unit tests.
+	@uv run pytest tests/unit
+
+.PHONY: test/unit/coverage
+test/unit/coverage: ## Run unit tests with coverage.
+	@uv run pytest --cov=griptape_nodes_openexr --cov-report=xml --cov-report=term tests/unit
+
+.PHONY: test/integration
+test/integration: ## Run integration tests.
+	@uv run pytest tests/integration
+
 .PHONY: test/fixtures
 test/fixtures: ## Generate EXR test fixtures into tests/data/.
 	@uv run python tests/generate_fixtures.py
