@@ -186,6 +186,28 @@ def make_infinity_attributes():
     OpenEXR.File(header, channels).write(str(OUT / "infinity_attributes.exr"))
 
 
+# ── 11. vector_attributes.exr ────────────────────────────────────────────────
+def make_vector_attributes():
+    """Single-part EXR with multi-element numpy array custom attributes.
+
+    Reproduces the bug where _convert_attribute_value calls .item() on a
+    multi-element array (V2f, V3f, M44f etc.) exported by DCCs like Katana,
+    raising 'can only convert an array of size 1 to a Python scalar'.
+    """
+    header = {
+        "compression": OpenEXR.ZIP_COMPRESSION,
+        "type": OpenEXR.scanlineimage,
+        # M44f — 4x4 matrix (e.g. world-to-camera transform, common in Katana)
+        "worldToCamera": np.eye(4, dtype=np.float32),
+        # V3f — 3-element vector
+        "renderCamera": np.array([1.0, 2.0, 3.0], dtype=np.float32),
+        # V2f — 2-element vector (screen window centre)
+        "screenWindowCenter": np.array([0.0, 0.0], dtype=np.float32),
+    }
+    channels = {"R": _gray(0.5), "G": _gray(0.5), "B": _gray(0.5)}
+    OpenEXR.File(header, channels).write(str(OUT / "vector_attributes.exr"))
+
+
 if __name__ == "__main__":
     fixtures = [
         ("single_part_rgba.exr", make_single_part_rgba),
@@ -198,6 +220,7 @@ if __name__ == "__main__":
         ("pixel_types.exr", make_pixel_types),
         ("legacy_multipart.exr", make_legacy_multipart),
         ("infinity_attributes.exr", make_infinity_attributes),
+        ("vector_attributes.exr", make_vector_attributes),
     ]
     for name, fn in fixtures:
         fn()
