@@ -13,24 +13,23 @@ from griptape_nodes.exe_types.node_types import SuccessFailureNode
 from griptape_nodes.exe_types.param_components.project_file_parameter import ProjectFileParameter
 from griptape_nodes.exe_types.param_types.parameter_button import ParameterButton
 from griptape_nodes.exe_types.param_types.parameter_float import ParameterFloat
-from griptape_nodes.exe_types.param_types.parameter_string import ParameterString
-from griptape_nodes.traits.options import Options
 from PIL import Image
 
 from griptape_nodes_openexr.exr.channel_selection import select_alpha_channel, select_display_channels
 from griptape_nodes_openexr.exr.exr_header_artifact import EXRPartArtifact
-from griptape_nodes_openexr.exr.exr_io import load_exr_channels
+from griptape_nodes_openexr.exr.exr_io import build_rgb_array, load_exr_channels
 from griptape_nodes_openexr.exr.ocio_helpers import (
     COLOR_MODE_BASIC,
     COLOR_MODE_OCIO,
     ColorParamsProtocol,
+    add_color_mode_parameters,
     apply_color_management,
-    apply_color_mode_visibility,
-    find_colorspace_transform_request_type,
+    handle_color_mode_change,
 )
 from griptape_nodes_openexr.exr.tone_mapping import (
+    EV_MAX,
+    EV_MIN,
     TONE_FILMIC,
-    TONE_LINEAR,
     apply_exposure,
     to_uint8_srgb,
 )
@@ -40,9 +39,6 @@ if TYPE_CHECKING:
     from griptape_nodes.traits.button import Button, ButtonDetailsMessagePayload
 
 logger = logging.getLogger("griptape_nodes")
-
-_EV_MIN = -10.0
-_EV_MAX = 10.0
 
 
 class DisplayEXRPart(SuccessFailureNode):
@@ -77,8 +73,8 @@ class DisplayEXRPart(SuccessFailureNode):
         self._exposure_param = ParameterFloat(
             name="exposure",
             default_value=0.0,
-            min_val=_EV_MIN,
-            max_val=_EV_MAX,
+            min_val=EV_MIN,
+            max_val=EV_MAX,
             step=0.1,
             slider=True,
             tooltip="Exposure in EV stops applied before tone mapping or OCIO transform",
@@ -86,38 +82,12 @@ class DisplayEXRPart(SuccessFailureNode):
         )
         self.add_parameter(self._exposure_param)
 
-        _default_mode = COLOR_MODE_OCIO if find_colorspace_transform_request_type() is not None else COLOR_MODE_BASIC
-
-        self._color_mode_param = ParameterString(
-            name="color_mode",
-            default_value=_default_mode,
-            tooltip="Color management mode. 'basic' uses local tone mapping; 'ocio' uses the connected OCIOColorParamsArtifact.",
-            allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
+        self._color_mode_param, self._tone_mapping_param, self._color_params_param = add_color_mode_parameters(
+            self,
+            color_mode_tooltip="Color management mode. 'basic' uses local tone mapping; 'ocio' uses the connected OCIOColorParamsArtifact.",
+            tone_mapping_tooltip="Local tone mapping when color_mode is 'basic'. 'filmic' applies Narkowicz 2015 curve; 'linear' clamps to [0, 1].",
+            color_params_tooltip="OCIO color parameters artifact (source colorspace, display, view). Required when color_mode is 'ocio'.",
         )
-        self._color_mode_param.add_trait(Options(choices=[COLOR_MODE_BASIC, COLOR_MODE_OCIO]))
-        self.add_parameter(self._color_mode_param)
-
-        _ocio_active = _default_mode == COLOR_MODE_OCIO
-
-        self._tone_mapping_param = ParameterString(
-            name="tone_mapping",
-            default_value=TONE_FILMIC,
-            tooltip="Local tone mapping when color_mode is 'basic'. 'filmic' applies Narkowicz 2015 curve; 'linear' clamps to [0, 1].",
-            allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
-            ui_options={"hide": _ocio_active},
-        )
-        self._tone_mapping_param.add_trait(Options(choices=[TONE_FILMIC, TONE_LINEAR]))
-        self.add_parameter(self._tone_mapping_param)
-
-        self._color_params_param = Parameter(
-            name="color_params",
-            input_types=["OCIOColorParamsArtifact"],
-            type="OCIOColorParamsArtifact",
-            tooltip="OCIO color parameters artifact (source colorspace, display, view). Required when color_mode is 'ocio'.",
-            allowed_modes={ParameterMode.INPUT},
-            ui_options={"hide": not _ocio_active},
-        )
-        self.add_parameter(self._color_params_param)
 
         self._image_param = Parameter(
             name="image",
@@ -150,25 +120,9 @@ class DisplayEXRPart(SuccessFailureNode):
             parameter_group_initially_collapsed=True,
         )
 
-        # after_value_set is not called by the framework when restoring saved values,
-        # so read the persisted mode from metadata to apply the correct initial visibility.
-        _restored_mode = self.metadata.get("_color_mode", _default_mode)
-        apply_color_mode_visibility(
-            self,
-            _restored_mode == COLOR_MODE_OCIO,
-            self._tone_mapping_param.name,
-            self._color_params_param.name,
-        )
-
     def after_value_set(self, parameter: Parameter, value: Any) -> None:
         if parameter.name == self._color_mode_param.name:
-            self.metadata["_color_mode"] = value
-            apply_color_mode_visibility(
-                self,
-                value == COLOR_MODE_OCIO,
-                self._tone_mapping_param.name,
-                self._color_params_param.name,
-            )
+            handle_color_mode_change(self, value, self._tone_mapping_param.name, self._color_params_param.name)
 
     def _on_open_viewer_click(
         self,
@@ -210,7 +164,7 @@ class DisplayEXRPart(SuccessFailureNode):
             return
 
         try:
-            rgb = self._build_rgb(pixels, selected, part.width, part.height)
+            rgb = build_rgb_array(pixels, selected)
         except Exception as e:
             self._on_fail_handler(f"Failed to build RGB: {e}")
             return
@@ -257,21 +211,6 @@ class DisplayEXRPart(SuccessFailureNode):
         details = f"Rendered '{label}' — {part.width}×{part.height}, channels: {selected}{alpha_info}, EV={ev:+.1f}, {tone_mode}"
         self._set_status_results(was_successful=True, result_details=details)
         logger.info("DisplayEXRPart '%s': %s", self.name, details)
-
-    @staticmethod
-    def _build_rgb(
-        pixels: dict[str, np.ndarray],
-        selected: list[str],
-        width: int,
-        height: int,
-    ) -> np.ndarray:
-        """Stack selected channels into a (H, W, 3) float32 array."""
-        if len(selected) == 1:
-            ch = pixels[selected[0]].reshape(height, width)
-            return np.stack([ch, ch, ch], axis=-1)
-
-        planes = [pixels[name].reshape(height, width) for name in selected]
-        return np.stack(planes, axis=-1)
 
 
 def _ndarray_to_png(uint8: np.ndarray) -> bytes:
