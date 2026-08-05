@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 from griptape_nodes_openexr.exr.ocio_helpers import COLOR_MODE_BASIC, COLOR_MODE_OCIO
 
 _NODE_MODULE = "griptape_nodes_openexr.nodes.display_exr_part"
+_OCIO_MODULE = "griptape_nodes_openexr.exr.ocio_helpers"
 
 
 def _make_node(ocio_available: bool = False, metadata: dict | None = None):
@@ -14,7 +15,7 @@ def _make_node(ocio_available: bool = False, metadata: dict | None = None):
     from griptape_nodes_openexr.nodes.display_exr_part import DisplayEXRPart
 
     detected = MagicMock() if ocio_available else None
-    with patch(f"{_NODE_MODULE}.find_colorspace_transform_request_type", return_value=detected):
+    with patch(f"{_OCIO_MODULE}.find_colorspace_transform_request_type", return_value=detected):
         return DisplayEXRPart("test_node", metadata=metadata)
 
 
@@ -25,14 +26,14 @@ def _make_node(ocio_available: bool = False, metadata: dict | None = None):
 
 class TestInitialVisibility:
     def test_new_node_no_ocio_starts_in_basic_mode(self) -> None:
-        with patch(f"{_NODE_MODULE}.apply_color_mode_visibility") as mock_vis:
+        with patch(f"{_OCIO_MODULE}.apply_color_mode_visibility") as mock_vis:
             _make_node(ocio_available=False)
 
         mock_vis.assert_called_once()
         assert mock_vis.call_args[0][1] is False
 
     def test_new_node_with_ocio_starts_in_ocio_mode(self) -> None:
-        with patch(f"{_NODE_MODULE}.apply_color_mode_visibility") as mock_vis:
+        with patch(f"{_OCIO_MODULE}.apply_color_mode_visibility") as mock_vis:
             _make_node(ocio_available=True)
 
         mock_vis.assert_called_once()
@@ -55,7 +56,7 @@ class TestInitialVisibility:
 class TestReloadVisibility:
     def test_reload_with_saved_basic_uses_basic_even_when_ocio_available(self) -> None:
         """The reload fix: metadata overrides _default_mode for initial visibility."""
-        with patch(f"{_NODE_MODULE}.apply_color_mode_visibility") as mock_vis:
+        with patch(f"{_OCIO_MODULE}.apply_color_mode_visibility") as mock_vis:
             _make_node(ocio_available=True, metadata={"_color_mode": COLOR_MODE_BASIC})
 
         mock_vis.assert_called_once()
@@ -63,7 +64,7 @@ class TestReloadVisibility:
 
     def test_reload_with_saved_ocio_uses_ocio_even_when_ocio_unavailable(self) -> None:
         """Saved 'ocio' mode restores OCIO visibility even if library is now absent."""
-        with patch(f"{_NODE_MODULE}.apply_color_mode_visibility") as mock_vis:
+        with patch(f"{_OCIO_MODULE}.apply_color_mode_visibility") as mock_vis:
             _make_node(ocio_available=False, metadata={"_color_mode": COLOR_MODE_OCIO})
 
         mock_vis.assert_called_once()
@@ -100,7 +101,7 @@ class TestAfterValueSetMetadata:
 class TestAfterValueSetVisibility:
     def test_switching_to_ocio_calls_visibility_with_true(self) -> None:
         node = _make_node()
-        with patch(f"{_NODE_MODULE}.apply_color_mode_visibility") as mock_vis:
+        with patch(f"{_OCIO_MODULE}.apply_color_mode_visibility") as mock_vis:
             node.after_value_set(node._color_mode_param, COLOR_MODE_OCIO)
 
         mock_vis.assert_called_once_with(
@@ -112,7 +113,7 @@ class TestAfterValueSetVisibility:
 
     def test_switching_to_basic_calls_visibility_with_false(self) -> None:
         node = _make_node()
-        with patch(f"{_NODE_MODULE}.apply_color_mode_visibility") as mock_vis:
+        with patch(f"{_OCIO_MODULE}.apply_color_mode_visibility") as mock_vis:
             node.after_value_set(node._color_mode_param, COLOR_MODE_BASIC)
 
         mock_vis.assert_called_once_with(
@@ -124,7 +125,7 @@ class TestAfterValueSetVisibility:
 
     def test_other_parameter_does_not_call_visibility(self) -> None:
         node = _make_node()
-        with patch(f"{_NODE_MODULE}.apply_color_mode_visibility") as mock_vis:
+        with patch(f"{_OCIO_MODULE}.apply_color_mode_visibility") as mock_vis:
             node.after_value_set(node._exposure_param, 1.0)
 
         mock_vis.assert_not_called()

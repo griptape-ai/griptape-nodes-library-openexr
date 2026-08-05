@@ -7,6 +7,9 @@ import numpy as np
 TONE_FILMIC = "filmic"
 TONE_LINEAR = "linear"
 
+EV_MIN = -10.0  # Exposure Value in stops (EV); range matches practical HDR capture limits
+EV_MAX = 10.0
+
 
 def apply_exposure(arr: np.ndarray, ev: float) -> np.ndarray:
     """Scale pixel values by 2^ev (EV stops).

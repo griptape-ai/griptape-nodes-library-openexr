@@ -16,7 +16,8 @@
       "pip_dependencies": [
         "numpy>=1.26.0",
         "OpenEXR>=3.4.12",
-        "pillow>=11.2.1"
+        "pillow>=11.2.1",
+        "static-ffmpeg>=2.5"
       ]
     },
     "declarations": [
@@ -80,6 +81,17 @@
         "display_name": "Save EXR",
         "icon": "file-output",
         "group": "write"
+      }
+    },
+    {
+      "class_name": "EXRSequenceToPreview",
+      "file_path": "griptape_nodes_openexr/nodes/exr_sequence_to_preview.py",
+      "metadata": {
+        "category": "exr",
+        "description": "Convert an EXR frame sequence to an MP4 preview with optional color management.",
+        "display_name": "EXR Sequence to Preview",
+        "icon": "film",
+        "group": "video"
       }
     }
   ],

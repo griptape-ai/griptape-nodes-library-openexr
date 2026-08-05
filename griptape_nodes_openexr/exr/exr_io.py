@@ -64,6 +64,20 @@ from griptape_nodes_openexr.exr.exr_types import (
 logger = logging.getLogger("griptape_nodes")
 
 
+def build_rgb_array(pixels: dict[str, np.ndarray], selected: list[str]) -> np.ndarray:
+    """Stack selected channels into a (H, W, 3) float32 array.
+
+    Single-channel selections are broadcast to grey RGB; multi-channel selections
+    are stacked in order. Shape is inferred from the first channel in pixels.
+    """
+    first_plane = next(iter(pixels.values()))
+    h, w = first_plane.shape
+    if len(selected) == 1:
+        ch = pixels[selected[0]].reshape(h, w)
+        return np.stack([ch, ch, ch], axis=-1)
+    return np.stack([pixels[name].reshape(h, w) for name in selected], axis=-1)
+
+
 def scan_exr_header(file_path: str, *, header_only: bool = True) -> EXRData:
     """Scan an EXR file and return metadata for all parts.
 
