@@ -1,110 +1,110 @@
 {
-  "name": "OpenEXR Library",
-  "library_schema_version": "0.10.0",
-  "metadata": {
-    "author": "Griptape Community",
-    "description": "OpenEXR file handling nodes for VFX and HDR workflows",
-    "library_version": "0.2.0",
-    "engine_version": "0.87.0",
-    "tags": [
-      "EXR",
-      "OpenEXR",
-      "HDR",
-      "VFX"
+    "name": "OpenEXR Library",
+    "library_schema_version": "0.10.0",
+    "metadata": {
+        "author": "Griptape Community",
+        "description": "OpenEXR file handling nodes for VFX and HDR workflows",
+        "library_version": "0.2.0",
+        "engine_version": "0.87.0",
+        "tags": [
+            "EXR",
+            "OpenEXR",
+            "HDR",
+            "VFX"
+        ],
+        "dependencies": {
+            "pip_dependencies": [
+                "numpy>=1.26.0",
+                "openexr>=3.3.0",
+                "pillow>=11.2.1",
+                "static-ffmpeg>=2.5"
+            ]
+        },
+        "declarations": [
+            {
+                "type": "library_dependency",
+                "url": "https://github.com/griptape-ai/griptape-nodes-library-opencolorio.git",
+                "required": false
+            }
+        ]
+    },
+    "categories": [
+        {
+            "exr": {
+                "title": "EXR",
+                "description": "OpenEXR file handling nodes for HDR image processing",
+                "color": "border-teal-500",
+                "icon": "Image"
+            }
+        }
     ],
-    "dependencies": {
-      "pip_dependencies": [
-        "numpy>=1.26.0",
-        "OpenEXR>=3.4.12",
-        "pillow>=11.2.1",
-        "static-ffmpeg>=2.5"
-      ]
-    },
-    "declarations": [
-      {
-        "type": "library_dependency",
-        "url": "https://github.com/griptape-ai/griptape-nodes-library-opencolorio.git",
-        "required": false
-      }
+    "nodes": [
+        {
+            "class_name": "LoadEXR",
+            "file_path": "griptape_nodes_openexr/nodes/load_exr.py",
+            "metadata": {
+                "category": "exr",
+                "description": "Load an OpenEXR file and expose its metadata (parts, channels, attributes) without reading pixels",
+                "display_name": "Load EXR",
+                "icon": "file-search",
+                "group": "load"
+            }
+        },
+        {
+            "class_name": "DisplayEXRPart",
+            "file_path": "griptape_nodes_openexr/nodes/display_exr_part.py",
+            "metadata": {
+                "category": "exr",
+                "description": "Display an EXR part as an 8-bit sRGB image with exposure and filmic tone mapping",
+                "display_name": "Display EXR Part",
+                "icon": "image",
+                "group": "display"
+            }
+        },
+        {
+            "class_name": "DisplayEXRChannel",
+            "file_path": "griptape_nodes_openexr/nodes/display_exr_channel.py",
+            "metadata": {
+                "category": "exr",
+                "description": "Combine 1\u20133 EXR channel artifacts into an 8-bit sRGB display image with exposure and filmic tone mapping",
+                "display_name": "Display EXR Channel",
+                "icon": "layers",
+                "group": "display"
+            }
+        },
+        {
+            "class_name": "SaveEXR",
+            "file_path": "griptape_nodes_openexr/nodes/save_exr.py",
+            "metadata": {
+                "category": "exr",
+                "description": "Save an EXR file from an image artifact or EXR channel artifacts",
+                "display_name": "Save EXR",
+                "icon": "file-output",
+                "group": "write"
+            }
+        },
+        {
+            "class_name": "EXRSequenceToPreview",
+            "file_path": "griptape_nodes_openexr/nodes/exr_sequence_to_preview.py",
+            "metadata": {
+                "category": "exr",
+                "description": "Convert an EXR frame sequence to an MP4 preview with optional color management.",
+                "display_name": "EXR Sequence to Preview",
+                "icon": "film",
+                "group": "video"
+            }
+        }
+    ],
+    "workflows": [],
+    "settings": [
+        {
+            "category": "openexr",
+            "description": "OpenEXR library settings \u2014 controls how the LoadEXR node reads files",
+            "contents": {
+                "header_only": true,
+                "viewer_executable": "",
+                "viewer_args": ""
+            }
+        }
     ]
-  },
-  "categories": [
-    {
-      "exr": {
-        "title": "EXR",
-        "description": "OpenEXR file handling nodes for HDR image processing",
-        "color": "border-teal-500",
-        "icon": "Image"
-      }
-    }
-  ],
-  "nodes": [
-    {
-      "class_name": "LoadEXR",
-      "file_path": "griptape_nodes_openexr/nodes/load_exr.py",
-      "metadata": {
-        "category": "exr",
-        "description": "Load an OpenEXR file and expose its metadata (parts, channels, attributes) without reading pixels",
-        "display_name": "Load EXR",
-        "icon": "file-search",
-        "group": "load"
-      }
-    },
-    {
-      "class_name": "DisplayEXRPart",
-      "file_path": "griptape_nodes_openexr/nodes/display_exr_part.py",
-      "metadata": {
-        "category": "exr",
-        "description": "Display an EXR part as an 8-bit sRGB image with exposure and filmic tone mapping",
-        "display_name": "Display EXR Part",
-        "icon": "image",
-        "group": "display"
-      }
-    },
-    {
-      "class_name": "DisplayEXRChannel",
-      "file_path": "griptape_nodes_openexr/nodes/display_exr_channel.py",
-      "metadata": {
-        "category": "exr",
-        "description": "Combine 1–3 EXR channel artifacts into an 8-bit sRGB display image with exposure and filmic tone mapping",
-        "display_name": "Display EXR Channel",
-        "icon": "layers",
-        "group": "display"
-      }
-    },
-    {
-      "class_name": "SaveEXR",
-      "file_path": "griptape_nodes_openexr/nodes/save_exr.py",
-      "metadata": {
-        "category": "exr",
-        "description": "Save an EXR file from an image artifact or EXR channel artifacts",
-        "display_name": "Save EXR",
-        "icon": "file-output",
-        "group": "write"
-      }
-    },
-    {
-      "class_name": "EXRSequenceToPreview",
-      "file_path": "griptape_nodes_openexr/nodes/exr_sequence_to_preview.py",
-      "metadata": {
-        "category": "exr",
-        "description": "Convert an EXR frame sequence to an MP4 preview with optional color management.",
-        "display_name": "EXR Sequence to Preview",
-        "icon": "film",
-        "group": "video"
-      }
-    }
-  ],
-  "workflows": [],
-  "settings": [
-    {
-      "category": "openexr",
-      "description": "OpenEXR library settings — controls how the LoadEXR node reads files",
-      "contents": {
-        "header_only": true,
-        "viewer_executable": "",
-        "viewer_args": ""
-      }
-    }
-  ]
 }
