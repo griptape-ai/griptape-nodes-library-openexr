@@ -158,9 +158,14 @@ def mock_project_file(tmp_path: Path):
         WriteFileRequest,
         WriteFileResultSuccess,
     )
+    from griptape_nodes.retained_mode.events.project_events import (
+        GetPathForMacroRequest,
+        GetPathForMacroResultSuccess,
+    )
     from griptape_nodes.retained_mode.griptape_nodes import GriptapeNodes
 
     output_path = tmp_path / "output.exr"
+    scratch_path = tmp_path / "scratch" / "temp.exr"
 
     dest = MagicMock()
     dest.resolve.return_value = str(output_path)
@@ -189,6 +194,12 @@ def mock_project_file(tmp_path: Path):
             assert request.path is not None
             Path(request.path).unlink(missing_ok=True)
             return MagicMock()
+        if isinstance(request, GetPathForMacroRequest):
+            # Macro paths resolve over the event bus, so the scratch destination
+            # SaveEXR builds from the save_temp_file situation is answered here.
+            return GetPathForMacroResultSuccess(
+                resolved_path=scratch_path, absolute_path=scratch_path, result_details=""
+            )
         return MagicMock()
 
     with (
