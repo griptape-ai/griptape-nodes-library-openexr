@@ -16,7 +16,7 @@
         "dependencies": {
             "pip_dependencies": [
                 "numpy>=1.26.0",
-                "openexr>=3.3.0",
+                "OpenEXR>=3.4.12",
                 "pillow>=11.2.1",
                 "static-ffmpeg>=2.5"
             ]
