@@ -34,6 +34,8 @@ def open_in_viewer(file_path: str) -> str | None:
     result = GriptapeNodes.handle_request(
         LaunchExternalViewerRequest(path_to_file=file_path, config_category="openexr", fallback_to_os_default=True)
     )
+    if result.succeeded():
+        return None
     if isinstance(result, LaunchExternalViewerResultFailure):
         return str(result.result_details) or f"Failed to open viewer: {result.failure_reason}"
-    return None
+    return str(result.result_details) or "Failed to open viewer"

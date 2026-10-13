@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
+from griptape_nodes.retained_mode.events.generic_events import GenericResultFailure
 from griptape_nodes.retained_mode.events.os_events import (
     FileIOFailureReason,
     LaunchExternalViewerRequest,
@@ -57,7 +58,7 @@ class TestHandleViewerButtonClick:
 
 
 # ---------------------------------------------------------------------------
-# open_in_viewer — delegates to LaunchExternalViewerRequest
+# open_in_viewer: delegates to LaunchExternalViewerRequest
 # ---------------------------------------------------------------------------
 
 
@@ -115,3 +116,16 @@ class TestOpenInViewer:
 
         assert result is not None
         assert "io_error" in result.lower()
+
+    def test_generic_failure_returns_result_details(self, tmp_path) -> None:
+        exr = str(tmp_path / "test.exr")
+        failure = GenericResultFailure(
+            result_details="Unhandled exception while processing LaunchExternalViewerRequest"
+        )
+
+        with patch(f"{_MODULE}.GriptapeNodes", _mock_gn(failure)):
+            from griptape_nodes_openexr.exr.viewer_launcher import open_in_viewer
+
+            result = open_in_viewer(exr)
+
+        assert result == "Unhandled exception while processing LaunchExternalViewerRequest"
