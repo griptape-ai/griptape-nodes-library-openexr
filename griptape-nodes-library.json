@@ -52,6 +52,17 @@
             }
         },
         {
+            "class_name": "LoadEXRSequence",
+            "file_path": "griptape_nodes_openexr/nodes/load_exr_sequence.py",
+            "metadata": {
+                "category": "exr",
+                "description": "Load an EXR frame sequence and expose per-frame structure as a list, without reading pixels",
+                "display_name": "Load EXR Sequence",
+                "icon": "file-search",
+                "group": "load"
+            }
+        },
+        {
             "class_name": "DisplayEXRPart",
             "file_path": "griptape_nodes_openexr/nodes/display_exr_part.py",
             "metadata": {
