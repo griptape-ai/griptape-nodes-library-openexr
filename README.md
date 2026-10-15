@@ -1,6 +1,6 @@
 # OpenEXR Library for Griptape Nodes
 
-Professional OpenEXR support for Griptape Nodes, designed for VFX and HDR pipelines. Load EXR files and inspect their structure, display individual parts or manually-assembled channels as tone-mapped images, and save images or channel data back to EXR.
+Professional OpenEXR support for Griptape Nodes, designed for VFX and HDR pipelines. Load EXR files and inspect their structure, load an EXR frame sequence, display individual parts or manually-assembled channels as tone-mapped images, convert a sequence to a preview video, and save images or channel data back to EXR.
 
 ## Nodes
 
@@ -37,6 +37,37 @@ Dynamic groups are also populated after scan:
 
 - **Parts** — one `EXRPartArtifact` output per part, each with its own channel outputs (hidden for single-part files; channels appear directly in the Channels group instead)
 - **Channels** — one `EXRChannelArtifact` per raw channel with name, pixel type, and sampling (single-part files only)
+
+______________________________________________________________________
+
+### Load EXR Sequence
+
+Loads an EXR frame sequence (from `ScanSequence`/`ScanSplitSequence`) and exposes per-frame structure as a list, without reading pixels. Pixel loading is off by default (`header_only=True`), same as **Load EXR**, and controlled by the same `openexr.header_only` engine setting.
+
+v1 is single-part: every frame is scanned at the same `part_index`. Multi-part-per-frame sequences (AOV stacks) are out of scope for now.
+
+**Inputs**
+
+| Parameter    | Type       | Description                                                                    |
+| ------------ | ---------- | ------------------------------------------------------------------------------ |
+| `sequence`   | `Sequence` | Frame sequence from **Scan Sequence** / **Scan Split Sequence**                |
+| `part_index` | `int`      | Part index to read from every frame. Default `0`.                              |
+| `threads`    | `int`      | Worker count for header scans. Range 1-16, default `4`. In the Advanced group. |
+
+**Outputs**
+
+| Parameter     | Type                    | Description                                       |
+| ------------- | ----------------------- | ------------------------------------------------- |
+| `parts`       | `list[EXRPartArtifact]` | One descriptor per frame, ordered by frame number |
+| `frame_count` | `int`                   | Number of frames in the sequence                  |
+
+Frames that fail to scan (resolution/channel mismatch against the rest of the sequence, or an out-of-range `part_index`) are skipped and reported in the result details; the rest of the sequence still loads.
+
+Because `EXRPartArtifact` carries no pixel data, the output `parts` list is cheap to produce and is a plain list, so it connects directly into a **For Each** loop for per-frame work (e.g. **Display EXR Part** per frame).
+
+#### Manual composition alternative
+
+For full per-frame control, you can wire `ScanSequence -> ForEach -> LoadEXR` by hand instead: feed `ScanSequence`'s `paths` output into **For Each Start**, and connect the current item to **Load EXR**'s `file_path`. This works today but isn't recommended for tight loops: **Load EXR**'s dynamic per-part/per-channel UI parameters re-populate on every `file_path` change, which is wasteful run hundreds of times. **Load EXR Sequence** followed by **For Each** over its `parts` output is the preferred path for most users.
 
 ______________________________________________________________________
 
@@ -130,6 +161,38 @@ The collapsed **Metadata** group exposes optional header fields:
 | ------------- | ----------------- | ------------------------------------------------------------------------------------- |
 | `output_file` | `str`             | Path to the written `.exr` file                                                       |
 | `output_part` | `EXRPartArtifact` | Descriptor for the written part — connectable to **Display EXR Part** or **Load EXR** |
+
+______________________________________________________________________
+
+### EXR Sequence to Preview
+
+Bakes an EXR frame sequence down to a single MP4/MOV preview video, applying exposure and color management per frame. Accepts a `Sequence` (from **Scan Sequence**/**Scan Split Sequence**) and loads pixels eagerly, since it has to encode a video. Use **Load EXR Sequence** instead if you need per-frame EXR data in the graph rather than a baked preview.
+
+**Inputs**
+
+| Parameter          | Type                 | Description                                                                            |
+| ------------------ | -------------------- | -------------------------------------------------------------------------------------- |
+| `sequence`         | `Sequence`           | Frame sequence from **Scan Sequence** / **Scan Split Sequence**                        |
+| `frame_rate`       | `float`              | Output frame rate. Default `24.0`.                                                     |
+| `part_index`       | `int`                | Part index to read from every frame. Default `0`.                                      |
+| `exposure`         | `float`              | Exposure in EV stops applied before tone mapping. Default `0.0`.                       |
+| `color_mode`       | `str`                | `Basic` or `OCIO`.                                                                     |
+| `tone_mapping`     | `str`                | `filmic` or `linear`. Default `filmic`.                                                |
+| `color_params`     | `OCIOConfigArtifact` | OCIO config. Required when `color_mode` is `OCIO`.                                     |
+| `format`           | `str`                | Output container: `mp4` or `mov`. Default `mp4`.                                       |
+| `processing_speed` | `str`                | `fast`, `balanced`, or `quality`. Trades encode speed for size/quality.                |
+| `threads`          | `int`                | Worker count for per-frame conversion. Range 1-16, default `4`. In the Advanced group. |
+
+**Outputs**
+
+| Parameter          | Type               | Description                                        |
+| ------------------ | ------------------ | -------------------------------------------------- |
+| `video`            | `VideoUrlArtifact` | The encoded preview video                          |
+| `frame_count`      | `int`              | Total frames in the sequence                       |
+| `frames_processed` | `int`              | Frames converted so far, updated live during a run |
+| `output_file`      | `str`              | Workspace path to the written video file           |
+
+Frames that fail to convert are skipped; the run continues and the error count is reported in the result details.
 
 ## Library Settings
 
