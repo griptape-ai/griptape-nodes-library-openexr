@@ -2,16 +2,14 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import subprocess
 import uuid
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
 from griptape.artifacts import VideoUrlArtifact
-from griptape_nodes.common.sequences import Sequence
+from griptape_nodes.common.sequences import SequenceEntry
 from griptape_nodes.exe_types.core_types import Parameter, ParameterGroup, ParameterMode
 from griptape_nodes.exe_types.node_types import SuccessFailureNode
 from griptape_nodes.exe_types.param_components.project_file_parameter import ProjectFileParameter
@@ -37,6 +35,7 @@ from griptape_nodes_openexr.exr.ocio_helpers import (
     apply_color_management,
     handle_color_mode_change,
 )
+from griptape_nodes_openexr.exr.sequence_helpers import resolve_sequence, run_over_sequence
 from griptape_nodes_openexr.exr.tone_mapping import (
     EV_MAX,
     EV_MIN,
@@ -200,22 +199,13 @@ class EXRSequenceToPreview(SuccessFailureNode):
 
         # --- Resolve sequence ---
         raw = self.get_parameter_value(self._sequence_param.name)
-        if raw is None:
-            self._on_fail("No sequence provided — connect a ScanSequenceNode.")
+        resolved = resolve_sequence(raw)
+        if isinstance(resolved, str):
+            self._on_fail(resolved)
             return
+        entries = resolved.entries
 
-        try:
-            sequence = Sequence.model_validate(raw) if isinstance(raw, dict) else raw
-        except Exception as e:
-            self._on_fail(f"Failed to parse sequence: {e}")
-            return
-
-        exr_paths = [entry.path for entry in sequence.entries]
-        if not exr_paths:
-            self._on_fail("Sequence contains no entries.")
-            return
-
-        total = len(exr_paths)
+        total = len(entries)
         self.parameter_output_values[self._frame_count_param.name] = total
         self.publish_update_to_parameter(self._frame_count_param.name, total)
         self.parameter_output_values[self._frames_processed_param.name] = 0
@@ -243,44 +233,22 @@ class EXRSequenceToPreview(SuccessFailureNode):
         temp_path = Path(dest.resolve()).parent
         temp_path.mkdir(parents=True, exist_ok=True)
 
-        errors: list[str] = []
         try:
-            frames_done = 0
-            loop = asyncio.get_running_loop()
             log_step = max(1, total * _LOG_INTERVAL_PCT // 100)
 
-            async def _run_frame(i: int, path: str) -> tuple[int, Exception | None]:
-                try:
-                    await loop.run_in_executor(
-                        executor,
-                        _convert_frame,
-                        path,
-                        i,
-                        temp_path,
-                        part_index,
-                        ev,
-                        color_params,
-                        tone_mapping,
-                    )
-                    return i, None
-                except Exception as e:
-                    return i, e
+            def _convert(i: int, entry: SequenceEntry) -> None:
+                _convert_frame(entry.path, i, temp_path, part_index, ev, color_params, tone_mapping)
 
-            with ThreadPoolExecutor(max_workers=threads) as executor:
-                tasks = [_run_frame(i, path) for i, path in enumerate(exr_paths)]
+            def _on_frame_done(frames_done: int) -> None:
+                self.parameter_output_values[self._frames_processed_param.name] = frames_done
+                if frames_done % log_step == 0 or frames_done == total:
+                    self.publish_update_to_parameter(self._frames_processed_param.name, frames_done)
+                    pct = frames_done * 100 // total
+                    logger.info("%s: converted %d/%d frames (%d%%)", self.name, frames_done, total, pct)
 
-                for coro in asyncio.as_completed(tasks):
-                    idx, err = await coro
-                    if err is not None:
-                        errors.append(f"frame {idx}: {err}")
-                        logger.warning("%s: frame %d failed: %s", self.name, idx, err)
-
-                    frames_done += 1
-                    self.parameter_output_values[self._frames_processed_param.name] = frames_done
-                    if frames_done % log_step == 0 or frames_done == total:
-                        self.publish_update_to_parameter(self._frames_processed_param.name, frames_done)
-                        pct = frames_done * 100 // total
-                        logger.info("%s: converted %d/%d frames (%d%%)", self.name, frames_done, total, pct)
+            _results, errors = await run_over_sequence(
+                entries, threads=threads, work=_convert, on_completed=_on_frame_done
+            )
 
             if errors:
                 logger.warning("%s: %d frame(s) failed conversion: %s", self.name, len(errors), "; ".join(errors))

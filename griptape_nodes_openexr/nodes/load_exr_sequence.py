@@ -2,13 +2,11 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from collections import Counter
-from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
-from griptape_nodes.common.sequences import Sequence
+from griptape_nodes.common.sequences import SequenceEntry
 from griptape_nodes.exe_types.core_types import Parameter, ParameterGroup, ParameterMode
 from griptape_nodes.exe_types.node_types import SuccessFailureNode
 from griptape_nodes.exe_types.param_types.parameter_int import ParameterInt
@@ -17,6 +15,7 @@ from griptape_nodes.traits.options import Options
 
 from griptape_nodes_openexr.exr.exr_header_artifact import EXRPartArtifact
 from griptape_nodes_openexr.exr.exr_io import scan_exr_header
+from griptape_nodes_openexr.exr.sequence_helpers import resolve_sequence, run_over_sequence
 
 logger = logging.getLogger("griptape_nodes")
 
@@ -125,20 +124,11 @@ class LoadEXRSequence(SuccessFailureNode):
         self.parameter_output_values[self._parts_param.name] = None
 
         raw = self.get_parameter_value(self._sequence_param.name)
-        if raw is None:
-            self._on_fail("No sequence provided — connect a ScanSequenceNode.")
+        resolved = resolve_sequence(raw)
+        if isinstance(resolved, str):
+            self._on_fail(resolved)
             return
-
-        try:
-            sequence = Sequence.model_validate(raw) if isinstance(raw, dict) else raw
-        except Exception as e:
-            self._on_fail(f"Failed to parse sequence: {e}")
-            return
-
-        entries = sequence.entries
-        if not entries:
-            self._on_fail("Sequence contains no entries.")
-            return
+        entries = resolved.entries
 
         total = len(entries)
         self.parameter_output_values[self._frame_count_param.name] = total
@@ -150,50 +140,29 @@ class LoadEXRSequence(SuccessFailureNode):
 
         logger.info("%s: scanning %d EXR frame header(s) (%d thread(s))", self.name, total, threads)
 
-        results: list[EXRPartArtifact | None] = [None] * total
-        errors: list[str] = []
-
-        loop = asyncio.get_running_loop()
-
-        def _scan_frame(path: str, frame_number: int) -> EXRPartArtifact:
+        def _scan_frame(_index: int, entry: SequenceEntry) -> EXRPartArtifact:
             # EXRPartArtifact never carries pixel data, so there is nothing for a full
             # (non-header-only) scan to buy here beyond slower, discarded pixel reads —
             # always scan header-only regardless of the openexr.header_only setting.
-            exr_data = scan_exr_header(path, header_only=True)
+            exr_data = scan_exr_header(entry.path, header_only=True)
             if not 0 <= part_index < len(exr_data.parts):
                 msg = f"part_index {part_index} out of range (file has {len(exr_data.parts)} part(s))"
                 raise ValueError(msg)
             part = exr_data.parts[part_index]
             return EXRPartArtifact(
-                file_path=path,
+                file_path=entry.path,
                 part_index=part_index,
                 name=part.header.name,
                 width=part.width,
                 height=part.height,
                 header=part.header,
                 channels=part.channels,
-                frame_number=frame_number,
+                frame_number=entry.number,
             )
 
-        async def _run_frame(
-            i: int, path: str, frame_number: int
-        ) -> tuple[int, EXRPartArtifact | None, Exception | None]:
-            try:
-                artifact = await loop.run_in_executor(executor, _scan_frame, path, frame_number)
-                return i, artifact, None
-            except Exception as e:
-                return i, None, e
-
-        with ThreadPoolExecutor(max_workers=threads) as executor:
-            tasks = [_run_frame(i, entry.path, entry.number) for i, entry in enumerate(entries)]
-            for coro in asyncio.as_completed(tasks):
-                idx, artifact, err = await coro
-                if err is not None:
-                    frame_number = entries[idx].number
-                    errors.append(f"frame {frame_number}: {err}")
-                    logger.warning("%s: frame %d failed: %s", self.name, frame_number, err)
-                    continue
-                results[idx] = artifact
+        results, errors = await run_over_sequence(entries, threads=threads, work=_scan_frame)
+        for message in errors:
+            logger.warning("%s: %s", self.name, message)
 
         scanned = [(idx, artifact) for idx, artifact in enumerate(results) if artifact is not None]
 
@@ -239,9 +208,6 @@ class LoadEXRSequence(SuccessFailureNode):
 
         self.parameter_output_values[self._parts_param.name] = ordered
         self.publish_update_to_parameter(self._parts_param.name, ordered)
-
-        if errors:
-            logger.warning("%s: %d frame(s) failed: %s", self.name, len(errors), "; ".join(errors))
 
         error_note = f", {len(errors)} frame error(s)" if errors else ""
         details = f"Scanned {len(ordered)}/{total} frame(s){error_note}"
