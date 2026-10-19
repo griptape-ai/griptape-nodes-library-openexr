@@ -12,8 +12,8 @@ from griptape_nodes.common.sequences import Sequence
 from griptape_nodes.exe_types.core_types import Parameter, ParameterGroup, ParameterMode
 from griptape_nodes.exe_types.node_types import SuccessFailureNode
 from griptape_nodes.exe_types.param_types.parameter_int import ParameterInt
-from griptape_nodes.retained_mode.events.config_events import GetConfigValueRequest, GetConfigValueResultSuccess
-from griptape_nodes.retained_mode.griptape_nodes import GriptapeNodes
+from griptape_nodes.exe_types.param_types.parameter_string import ParameterString
+from griptape_nodes.traits.options import Options
 
 from griptape_nodes_openexr.exr.exr_header_artifact import EXRPartArtifact
 from griptape_nodes_openexr.exr.exr_io import scan_exr_header
@@ -22,16 +22,19 @@ logger = logging.getLogger("griptape_nodes")
 
 _DEFAULT_THREADS = 4
 
+MISMATCH_POLICY_SKIP = "skip"
+MISMATCH_POLICY_FAIL = "fail"
+
 
 class LoadEXRSequence(SuccessFailureNode):
     """Load per-frame EXR structure from a frame sequence, without reading pixels.
 
     Accepts a Sequence artifact (from ScanSequenceNode/ScanSplitSequenceNode),
-    scans each frame's header (reusing scan_exr_header, header-only by default),
-    and outputs one EXRPartArtifact per frame. Header scanning is parallelised
-    across a configurable thread pool, following the same pattern as
-    EXRSequenceToPreview. v1 is single-part: the same part_index is read from
-    every frame.
+    scans each frame's header (reusing scan_exr_header, always header-only since
+    EXRPartArtifact carries no pixel data), and outputs one EXRPartArtifact per
+    frame. Header scanning is parallelised across a configurable thread pool,
+    following the same pattern as EXRSequenceToPreview. v1 is single-part: the
+    same part_index is read from every frame.
     """
 
     def __init__(self, name: str, metadata: dict[Any, Any] | None = None) -> None:
@@ -55,6 +58,19 @@ class LoadEXRSequence(SuccessFailureNode):
         )
         self.add_parameter(self._part_index_param)
 
+        self._on_mismatch_param = ParameterString(
+            name="on_mismatch",
+            default_value=MISMATCH_POLICY_SKIP,
+            tooltip=(
+                "What to do when a frame fails to scan or doesn't match the sequence's "
+                "resolution/channel layout. 'skip' drops only that frame (parts may be "
+                "shorter than frame_count); 'fail' fails the whole run instead."
+            ),
+            allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
+        )
+        self._on_mismatch_param.add_trait(Options(choices=[MISMATCH_POLICY_SKIP, MISMATCH_POLICY_FAIL]))
+        self.add_parameter(self._on_mismatch_param)
+
         # --- Advanced group ---
         advanced_group = ParameterGroup(name="Advanced", ui_options={"collapsed": True})
         with advanced_group:
@@ -74,7 +90,12 @@ class LoadEXRSequence(SuccessFailureNode):
             display_name="Parts",
             type="list[EXRPartArtifact]",
             output_type="list[EXRPartArtifact]",
-            tooltip="One EXR part descriptor per frame, ordered by frame number",
+            tooltip=(
+                "One EXR part descriptor per scanned frame, ordered by frame number. "
+                "Each artifact's frame_number field carries the real sequence frame "
+                "number — list position does not. May be shorter than frame_count "
+                "when on_mismatch is 'skip' and some frames were dropped."
+            ),
             allowed_modes={ParameterMode.OUTPUT},
             settable=False,
         )
@@ -114,22 +135,18 @@ class LoadEXRSequence(SuccessFailureNode):
             self._on_fail(f"Failed to parse sequence: {e}")
             return
 
-        exr_paths = [entry.path for entry in sequence.entries]
-        if not exr_paths:
+        entries = sequence.entries
+        if not entries:
             self._on_fail("Sequence contains no entries.")
             return
 
-        total = len(exr_paths)
+        total = len(entries)
         self.parameter_output_values[self._frame_count_param.name] = total
         self.publish_update_to_parameter(self._frame_count_param.name, total)
 
         part_index = int(self.get_parameter_value(self._part_index_param.name))
         threads = int(self.get_parameter_value(self._threads_param.name))
-
-        header_only_result = GriptapeNodes.handle_request(GetConfigValueRequest(category_and_key="openexr.header_only"))
-        header_only: bool = (
-            bool(header_only_result.value) if isinstance(header_only_result, GetConfigValueResultSuccess) else True
-        )
+        on_mismatch = str(self.get_parameter_value(self._on_mismatch_param.name))
 
         logger.info("%s: scanning %d EXR frame header(s) (%d thread(s))", self.name, total, threads)
 
@@ -138,8 +155,11 @@ class LoadEXRSequence(SuccessFailureNode):
 
         loop = asyncio.get_running_loop()
 
-        def _scan_frame(path: str) -> EXRPartArtifact:
-            exr_data = scan_exr_header(path, header_only=header_only)
+        def _scan_frame(path: str, frame_number: int) -> EXRPartArtifact:
+            # EXRPartArtifact never carries pixel data, so there is nothing for a full
+            # (non-header-only) scan to buy here beyond slower, discarded pixel reads —
+            # always scan header-only regardless of the openexr.header_only setting.
+            exr_data = scan_exr_header(path, header_only=True)
             if not 0 <= part_index < len(exr_data.parts):
                 msg = f"part_index {part_index} out of range (file has {len(exr_data.parts)} part(s))"
                 raise ValueError(msg)
@@ -152,22 +172,26 @@ class LoadEXRSequence(SuccessFailureNode):
                 height=part.height,
                 header=part.header,
                 channels=part.channels,
+                frame_number=frame_number,
             )
 
-        async def _run_frame(i: int, path: str) -> tuple[int, EXRPartArtifact | None, Exception | None]:
+        async def _run_frame(
+            i: int, path: str, frame_number: int
+        ) -> tuple[int, EXRPartArtifact | None, Exception | None]:
             try:
-                artifact = await loop.run_in_executor(executor, _scan_frame, path)
+                artifact = await loop.run_in_executor(executor, _scan_frame, path, frame_number)
                 return i, artifact, None
             except Exception as e:
                 return i, None, e
 
         with ThreadPoolExecutor(max_workers=threads) as executor:
-            tasks = [_run_frame(i, path) for i, path in enumerate(exr_paths)]
+            tasks = [_run_frame(i, entry.path, entry.number) for i, entry in enumerate(entries)]
             for coro in asyncio.as_completed(tasks):
                 idx, artifact, err = await coro
                 if err is not None:
-                    errors.append(f"frame {idx}: {err}")
-                    logger.warning("%s: frame %d failed: %s", self.name, idx, err)
+                    frame_number = entries[idx].number
+                    errors.append(f"frame {frame_number}: {err}")
+                    logger.warning("%s: frame %d failed: %s", self.name, frame_number, err)
                     continue
                 results[idx] = artifact
 
@@ -175,6 +199,10 @@ class LoadEXRSequence(SuccessFailureNode):
 
         if not scanned:
             self._on_fail(f"All {total} frame(s) failed to scan: {'; '.join(errors)}")
+            return
+
+        if on_mismatch == MISMATCH_POLICY_FAIL and len(scanned) != total:
+            self._on_fail(f"{total - len(scanned)}/{total} frame(s) failed to scan: {'; '.join(errors)}")
             return
 
         # Use the most common (width, height, channel layout) as the reference, so an outlier
@@ -193,12 +221,21 @@ class LoadEXRSequence(SuccessFailureNode):
             return
 
         ordered: list[EXRPartArtifact] = []
+        mismatched = 0
         for idx, artifact in scanned:
             if _layout_key(artifact) != reference_key:
-                errors.append(f"frame {idx}: resolution/channel layout does not match sequence")
-                logger.warning("%s: frame %d: layout mismatch", self.name, idx)
+                frame_number = entries[idx].number
+                errors.append(f"frame {frame_number}: resolution/channel layout does not match sequence")
+                logger.warning("%s: frame %d: layout mismatch", self.name, frame_number)
+                mismatched += 1
                 continue
             ordered.append(artifact)
+
+        if on_mismatch == MISMATCH_POLICY_FAIL and mismatched:
+            self._on_fail(
+                f"{mismatched}/{len(scanned)} scanned frame(s) did not match the sequence layout: {'; '.join(errors)}"
+            )
+            return
 
         self.parameter_output_values[self._parts_param.name] = ordered
         self.publish_update_to_parameter(self._parts_param.name, ordered)

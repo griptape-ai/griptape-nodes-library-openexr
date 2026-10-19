@@ -42,28 +42,34 @@ ______________________________________________________________________
 
 ### Load EXR Sequence
 
-Loads an EXR frame sequence (from `ScanSequence`/`ScanSplitSequence`) and exposes per-frame structure as a list, without reading pixels. Pixel loading is off by default (`header_only=True`), same as **Load EXR**, and controlled by the same `openexr.header_only` engine setting.
+Loads an EXR frame sequence (from `ScanSequence`/`ScanSplitSequence`) and exposes per-frame structure as a list. Unlike **Load EXR**, this node always scans header-only and ignores the `openexr.header_only` engine setting: the output `EXRPartArtifact` never carries pixel data, so there is nothing to gain from a full scan.
 
 v1 is single-part: every frame is scanned at the same `part_index`. Multi-part-per-frame sequences (AOV stacks) are out of scope for now.
 
 **Inputs**
 
-| Parameter    | Type       | Description                                                                    |
-| ------------ | ---------- | ------------------------------------------------------------------------------ |
-| `sequence`   | `Sequence` | Frame sequence from **Scan Sequence** / **Scan Split Sequence**                |
-| `part_index` | `int`      | Part index to read from every frame. Default `0`.                              |
-| `threads`    | `int`      | Worker count for header scans. Range 1-16, default `4`. In the Advanced group. |
+| Parameter     | Type       | Description                                                                                                 |
+| ------------- | ---------- | ----------------------------------------------------------------------------------------------------------- |
+| `sequence`    | `Sequence` | Frame sequence from **Scan Sequence** / **Scan Split Sequence**                                             |
+| `part_index`  | `int`      | Part index to read from every frame. Default `0`.                                                           |
+| `on_mismatch` | `str`      | What to do when a frame fails to scan or its layout doesn't match the sequence: `skip` (default) or `fail`. |
+| `threads`     | `int`      | Worker count for header scans. Range 1-16, default `4`. In the Advanced group.                              |
 
 **Outputs**
 
-| Parameter     | Type                    | Description                                       |
-| ------------- | ----------------------- | ------------------------------------------------- |
-| `parts`       | `list[EXRPartArtifact]` | One descriptor per frame, ordered by frame number |
-| `frame_count` | `int`                   | Number of frames in the sequence                  |
+| Parameter     | Type                    | Description                                               |
+| ------------- | ----------------------- | --------------------------------------------------------- |
+| `parts`       | `list[EXRPartArtifact]` | One descriptor per scanned frame, ordered by frame number |
+| `frame_count` | `int`                   | Number of frames in the sequence                          |
 
-Frames that fail to scan (resolution/channel mismatch against the rest of the sequence, or an out-of-range `part_index`) are skipped and reported in the result details; the rest of the sequence still loads.
+Each `EXRPartArtifact` carries a `frame_number` field set from the sequence's real frame number — list position in `parts` does not track frame number once a frame is dropped, so use `frame_number`, not index, to name output files or look up corresponding frames elsewhere.
 
-Because `EXRPartArtifact` carries no pixel data, the output `parts` list is cheap to produce and is a plain list, so it connects directly into a **For Each** loop for per-frame work (e.g. **Display EXR Part** per frame).
+Frames that fail to scan (resolution/channel mismatch against the rest of the sequence, or an out-of-range `part_index`) are handled according to `on_mismatch`:
+
+- `skip` (default): the bad frame is dropped from `parts` (which may then be shorter than `frame_count`) and the drop is reported in the result details; the rest of the sequence still loads.
+- `fail`: any dropped frame fails the whole run instead.
+
+The output `parts` is a plain list, so it connects directly into a **For Each** loop for per-frame work (e.g. **Display EXR Part** per frame).
 
 #### Manual composition alternative
 

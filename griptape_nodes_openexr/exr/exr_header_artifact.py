@@ -33,6 +33,9 @@ class EXRPartArtifact:
         height: Image height in pixels
         header: Full EXR header metadata
         channels: Channel metadata (no pixel data)
+        frame_number: The sequence frame number this part came from (e.g. from
+            LoadEXRSequence's input Sequence entries). None for nodes that load a
+            single file with no frame-sequence context (LoadEXR, SaveEXR).
     """
 
     file_path: str
@@ -42,6 +45,7 @@ class EXRPartArtifact:
     height: int
     header: EXRHeader
     channels: list[EXRChannelInfo]
+    frame_number: int | None = None
 
     def to_text(self) -> str:
         display_name = self.name or f"part {self.part_index}"
