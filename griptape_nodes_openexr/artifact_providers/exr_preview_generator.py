@@ -19,6 +19,7 @@ from griptape_nodes.retained_mode.managers.artifact_providers.base_generator_par
     BaseGeneratorParameters,
     Field,
 )
+from griptape_nodes.utils.async_utils import to_thread
 from PIL import Image
 from pydantic import PositiveInt
 
@@ -105,12 +106,13 @@ class EXRPreviewGenerator(BaseArtifactPreviewGenerator):
     def get_parameters(cls) -> type[BaseGeneratorParameters]:
         return EXRPreviewParameters
 
-    async def attempt_generate_preview(self) -> str:
-        """Convert EXR to a display-ready PNG/WebP preview.
+    def _render_preview_bytes(self) -> bytes:
+        """Decode, tone map, resize and encode the EXR into preview bytes.
+
+        Synchronous and CPU-bound; run off the event loop via `to_thread`.
 
         Raises:
-            RuntimeError: If the EXR file cannot be opened or has no channels.
-            OSError: If the preview file cannot be written.
+            RuntimeError: If the EXR file has no displayable channels.
         """
         # header_only avoids loading pixel data just to enumerate channels.
         exr_data = scan_exr_header(self.source_file_location, header_only=True)
@@ -146,7 +148,18 @@ class EXRPreviewGenerator(BaseArtifactPreviewGenerator):
 
         output_buffer = BytesIO()
         img.save(output_buffer, format=self.preview_format.upper())
-        output_bytes = output_buffer.getvalue()
+        return output_buffer.getvalue()
+
+    async def attempt_generate_preview(self) -> str:
+        """Convert EXR to a display-ready PNG/WebP preview.
+
+        Raises:
+            RuntimeError: If the EXR file cannot be opened or has no channels.
+            OSError: If the preview file cannot be written.
+        """
+        # Decode/tone map/encode is CPU-bound; keep it off the engine's event loop so
+        # concurrent preview requests do not serialise behind each other.
+        output_bytes = await to_thread(self._render_preview_bytes)
 
         destination_path = str(Path(self.destination_preview_directory) / self.destination_preview_file_name)
         write_request = WriteFileRequest(
