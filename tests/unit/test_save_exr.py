@@ -97,6 +97,24 @@ class TestWriteExrChannelsHelper:
             ch = f.parts[0].channels["R"]
             assert ch.pixels.dtype == np.float32
 
+    def test_extra_header_cannot_override_compression(self, tmp_path: Path) -> None:
+        out = str(tmp_path / "out.exr")
+        write_exr_channels(
+            out,
+            {"R": _ramp()},
+            compression=OpenEXR.ZIP_COMPRESSION,
+            extra_header={"compression": OpenEXR.NO_COMPRESSION, "owner": "me"},
+        )
+        header = OpenEXR.File(out).parts[0].header
+        assert header["compression"] == OpenEXR.Compression.ZIP_COMPRESSION
+        assert header["owner"] == "me"
+
+    def test_extra_header_cannot_override_type(self, tmp_path: Path) -> None:
+        """A tiledimage "type" on a scanline write produces an unreadable file."""
+        out = str(tmp_path / "out.exr")
+        write_exr_channels(out, {"R": _ramp()}, extra_header={"type": OpenEXR.tiledimage})
+        assert load_exr_channels(out, 0, ["R"])["R"].shape == (H, W)
+
     def test_non_contiguous_array_written_correctly(self, tmp_path: Path) -> None:
         """Non-contiguous slice of a (H, W, 3) array must not corrupt channel data."""
         out = str(tmp_path / "out.exr")
@@ -475,6 +493,68 @@ class TestSaveEXRMetadata:
         part = node.parameter_output_values.get("output_part")
         assert isinstance(part, EXRPartArtifact)
         assert part.header.custom == {"key": "value"}
+
+    def test_custom_cannot_shadow_typed_owner(self, mock_project_file: Path) -> None:
+        """A custom "owner" is dropped so the file and the EXRHeader artifact agree."""
+        from griptape_nodes_openexr.exr.exr_header_artifact import EXRPartArtifact
+
+        node = _make_node(mock_project_file)
+        node.set_parameter_value("image_in", _make_image_artifact())
+        node.set_parameter_value("metadata_owner", "typed-owner")
+        node.set_parameter_value("metadata_custom", {"owner": "custom-owner", "shot": "001"})
+        asyncio.run(node.aprocess())
+
+        assert _was_successful(node), _result_details(node)
+        part = node.parameter_output_values.get("output_part")
+        assert isinstance(part, EXRPartArtifact)
+        assert part.header.owner == "typed-owner"
+        assert part.header.custom == {"shot": "001"}
+        assert "owner" in _result_details(node)
+
+        on_disk = OpenEXR.File(str(part.file_path)).parts[0].header
+        assert on_disk["owner"] == "typed-owner"
+
+    def test_custom_reserved_key_fails(self, mock_project_file: Path) -> None:
+        node = _make_node(mock_project_file)
+        node.set_parameter_value("image_in", _make_image_artifact())
+        node.set_parameter_value("metadata_custom", {"compression": OpenEXR.NO_COMPRESSION})
+        asyncio.run(node.aprocess())
+
+        assert _was_successful(node) is False
+        assert "compression" in _result_details(node)
+        assert node.parameter_output_values.get("output_part") is None
+
+    def test_custom_reserved_type_key_fails(self, mock_project_file: Path) -> None:
+        """A custom "type" previously produced a file that could not be reopened."""
+        node = _make_node(mock_project_file)
+        node.set_parameter_value("image_in", _make_image_artifact())
+        node.set_parameter_value("metadata_custom", {"type": "tiledimage"})
+        asyncio.run(node.aprocess())
+
+        assert _was_successful(node) is False
+        # Rejected up front, not by a downstream write crash.
+        assert "may not set writer-owned header attributes" in _result_details(node)
+        assert "'type'" in _result_details(node)
+
+    def test_metadata_custom_invalid_json_fails(self, mock_project_file: Path) -> None:
+        """Malformed JSON must fail rather than write a file silently missing metadata."""
+        node = _make_node(mock_project_file)
+        node.set_parameter_value("image_in", _make_image_artifact())
+        node.set_parameter_value("metadata_custom", '{"shot": broken')
+        asyncio.run(node.aprocess())
+
+        assert _was_successful(node) is False
+        assert "not valid JSON" in _result_details(node)
+        assert node.parameter_output_values.get("output_part") is None
+
+    def test_metadata_custom_non_object_json_fails(self, mock_project_file: Path) -> None:
+        node = _make_node(mock_project_file)
+        node.set_parameter_value("image_in", _make_image_artifact())
+        node.set_parameter_value("metadata_custom", "[1, 2, 3]")
+        asyncio.run(node.aprocess())
+
+        assert _was_successful(node) is False
+        assert "must be a JSON object" in _result_details(node)
 
     def test_metadata_empty_strings_become_none(self, mock_project_file: Path) -> None:
         from griptape_nodes_openexr.exr.exr_header_artifact import EXRPartArtifact

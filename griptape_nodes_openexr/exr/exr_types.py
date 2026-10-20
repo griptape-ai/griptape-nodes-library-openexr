@@ -126,8 +126,10 @@ _ATTR_TIME_CODE = "timeCode"
 _ATTR_CHROMATICITIES = "chromaticities"
 _ATTR_CHANNELS = "channels"
 
-# Attributes handled as dedicated fields - excluded from EXRHeader.custom
-_HEADER_SKIP_ATTRS: set[str] = {
+# Structural attributes owned by the writer. A caller-supplied value here either
+# contradicts an explicit node parameter (compression) or produces a file that
+# cannot be reopened (type/tiles/channels/windows), so writers reject these.
+_WRITER_RESERVED_ATTRS: set[str] = {
     _ATTR_DATA_WINDOW,
     _ATTR_DISPLAY_WINDOW,
     _ATTR_COMPRESSION,
@@ -135,6 +137,13 @@ _HEADER_SKIP_ATTRS: set[str] = {
     _ATTR_STORAGE_TYPE,
     _ATTR_TILE_DESCRIPTION,
     _ATTR_CHUNK_COUNT,
+    _ATTR_CHANNELS,
+}
+
+# Attributes that SaveEXR derives from dedicated parameters (or hardcodes) when it
+# builds the EXRHeader artifact. A caller-supplied value would reach the file but
+# not the artifact, so writers drop these in favour of the typed value.
+_TYPED_FIELD_ATTRS: set[str] = {
     _ATTR_NAME,
     _ATTR_PIXEL_ASPECT_RATIO,
     _ATTR_SCREEN_WINDOW_CENTER,
@@ -145,10 +154,12 @@ _HEADER_SKIP_ATTRS: set[str] = {
     _ATTR_SOFTWARE,
     _ATTR_TIME_CODE,
     _ATTR_CHROMATICITIES,
-    _ATTR_CHANNELS,
     # Some files write "Software" with capital S; exclude both casings
     "Software",
 }
+
+# Attributes handled as dedicated fields - excluded from EXRHeader.custom
+_HEADER_SKIP_ATTRS: set[str] = _WRITER_RESERVED_ATTRS | _TYPED_FIELD_ATTRS
 
 
 def _map_oiio_string(mapping: dict[str, Any], oiio_value: str, label: str) -> Any:

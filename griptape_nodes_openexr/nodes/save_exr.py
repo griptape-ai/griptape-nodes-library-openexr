@@ -41,6 +41,8 @@ from griptape_nodes_openexr.exr.exr_types import (
     _ATTR_PIXEL_ASPECT_RATIO,
     _ATTR_SOFTWARE,
     _ATTR_TIME_CODE,
+    _TYPED_FIELD_ATTRS,
+    _WRITER_RESERVED_ATTRS,
     CompressionType,
     EXRChannelInfo,
     EXRHeader,
@@ -223,7 +225,11 @@ class SaveEXR(SuccessFailureNode):
                 input_types=["json", "str", "dict"],
                 type="json",
                 default_value={},
-                tooltip="Non-standard header attributes as a JSON object.",
+                tooltip=(
+                    "Non-standard header attributes as a JSON object. Keys that duplicate a "
+                    "dedicated parameter above are ignored; structural keys (compression, type, "
+                    "channels, dataWindow, ...) are rejected."
+                ),
                 allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
             )
 
@@ -251,18 +257,21 @@ class SaveEXR(SuccessFailureNode):
             parameter_group_initially_collapsed=True,
         )
 
-    def _read_metadata(self) -> dict:
-        def _opt(val: str | None) -> str | None:
-            return (val or "").strip() or None
-
+    def _read_custom_metadata(self) -> dict | str:
+        """Parse the metadata_custom parameter, or return an error string."""
         custom_val = self.get_parameter_value(self._metadata_custom_param.name) or {}
         if isinstance(custom_val, str):
             try:
                 custom_val = json.loads(custom_val)
-            except (ValueError, TypeError):
-                logger.warning("SaveEXR: metadata_custom is not valid JSON — using {}")
-                custom_val = {}
-        custom = custom_val if isinstance(custom_val, dict) else {}
+            except (ValueError, TypeError) as e:
+                return f"metadata_custom is not valid JSON: {e}"
+        if not isinstance(custom_val, dict):
+            return f"metadata_custom must be a JSON object, got {type(custom_val).__name__}"
+        return custom_val
+
+    def _read_metadata(self, custom: dict) -> dict:
+        def _opt(val: str | None) -> str | None:
+            return (val or "").strip() or None
 
         return {
             "name": self.get_parameter_value(self._metadata_part_name_param.name) or "",
@@ -316,7 +325,20 @@ class SaveEXR(SuccessFailureNode):
 
         channels, width, height, mode = result
 
-        meta = self._read_metadata()
+        custom = self._read_custom_metadata()
+        if isinstance(custom, str):
+            self._on_fail_handler(custom)
+            return
+
+        passthrough, reserved, shadowed = _partition_custom_attrs(custom)
+        if reserved:
+            self._on_fail_handler(
+                f"metadata_custom may not set writer-owned header attributes: {reserved}. "
+                "Use the Compression and Pixel Type parameters instead."
+            )
+            return
+
+        meta = self._read_metadata(passthrough)
         extra_header = _build_extra_header(meta)
 
         try:
@@ -376,6 +398,8 @@ class SaveEXR(SuccessFailureNode):
 
         channel_names = [ch.name for ch in channel_infos]
         details = f"Wrote {width}×{height} EXR ({mode}), channels: {channel_names}, {compression_key}, {pixel_type_key}"
+        if shadowed:
+            details += f". Ignored metadata_custom keys that duplicate dedicated parameters: {shadowed}"
         self._set_status_results(was_successful=True, result_details=details)
         logger.info("SaveEXR '%s': %s", self.name, details)
 
@@ -423,9 +447,34 @@ class SaveEXR(SuccessFailureNode):
         return channels, width, height, "channels"
 
 
+def _partition_custom_attrs(custom: dict) -> tuple[dict, list[str], list[str]]:
+    """Split custom attributes into (passthrough, reserved, shadowed).
+
+    ``reserved`` keys are structural attributes the writer owns — setting them either
+    contradicts an explicit parameter or corrupts the file, so callers reject them.
+    ``shadowed`` keys duplicate a typed metadata parameter; they are dropped so the
+    file and the emitted EXRHeader artifact cannot disagree.
+    """
+    passthrough: dict = {}
+    reserved: list[str] = []
+    shadowed: list[str] = []
+    for key, value in custom.items():
+        if key in _WRITER_RESERVED_ATTRS:
+            reserved.append(key)
+        elif key in _TYPED_FIELD_ATTRS:
+            shadowed.append(key)
+        else:
+            passthrough[key] = value
+    return passthrough, sorted(reserved), sorted(shadowed)
+
+
 def _build_extra_header(meta: dict) -> dict:
-    """Build the optional header attributes dict from _read_metadata() output."""
-    attrs: dict = {}
+    """Build the optional header attributes dict from _read_metadata() output.
+
+    ``meta["custom"]`` must already have been filtered by _partition_custom_attrs();
+    it is applied first so the typed fields below always win.
+    """
+    attrs: dict = dict(meta["custom"])
     if meta["name"]:
         attrs[_ATTR_NAME] = meta["name"]
     if meta["pixel_aspect_ratio"] != 1.0:
@@ -440,8 +489,6 @@ def _build_extra_header(meta: dict) -> dict:
         attrs[_ATTR_SOFTWARE] = meta["software"]
     if meta["time_code"]:
         attrs[_ATTR_TIME_CODE] = meta["time_code"]
-    if meta["custom"]:
-        attrs.update(meta["custom"])
     return attrs
 
 
