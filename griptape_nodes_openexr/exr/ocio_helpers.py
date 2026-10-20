@@ -28,14 +28,37 @@ class ColorParamsProtocol(Protocol):
     config_path: str | None
 
 
+_cached_request_type: type | None = None
+
+
+def reset_colorspace_transform_request_type_cache() -> None:
+    """Forget a previously discovered ColorspaceTransformRequest type.
+
+    Only needed if a library is unloaded or replaced at runtime; newly loaded
+    libraries are picked up without this because misses are never cached.
+    """
+    global _cached_request_type  # noqa: PLW0603
+    _cached_request_type = None
+
+
 def find_colorspace_transform_request_type() -> type | None:
-    """Discover ColorspaceTransformRequest from any loaded library — no hard import."""
+    """Discover ColorspaceTransformRequest from any loaded library — no hard import.
+
+    The full registry scan is memoised once a handler is found, since this runs
+    per frame for sequences. Misses are not cached, so a library loaded later in
+    the session is still discovered.
+    """
+    global _cached_request_type  # noqa: PLW0603
+    if _cached_request_type is not None:
+        return _cached_request_type
+
     try:
         for lib_name in LibraryRegistry.list_libraries():
             library = LibraryRegistry.get_library(lib_name)
             for req_type in library.get_registered_request_handler_types():  # type: ignore[attr-defined]
                 if req_type.__name__ == "ColorspaceTransformRequest":
                     logger.debug("OCIO: found ColorspaceTransformRequest handler in library %r", lib_name)
+                    _cached_request_type = req_type
                     return req_type
         logger.debug("OCIO: ColorspaceTransformRequest handler not found in any loaded library")
     except Exception:
