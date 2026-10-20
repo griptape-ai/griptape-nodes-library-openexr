@@ -268,3 +268,28 @@ class TestAttemptGeneratePreviewPNG:
 
         img = Image.open(BytesIO(captured[0]))
         assert img.format == "PNG"
+
+
+class TestEventLoopNotBlocked:
+    """Regression: the decode/tone-map/encode work must not run on the engine's event loop."""
+
+    @pytest.mark.asyncio
+    async def test_cpu_work_runs_off_the_event_loop(self, tmp_path: Path) -> None:
+        import threading
+
+        exr_path = DATA_DIR / "single_part_rgba.exr"
+        loop_thread = threading.get_ident()
+        render_threads: list[int] = []
+
+        gen = _make_generator(exr_path, tmp_path, engine=_make_engine())
+        original = gen._render_preview_bytes  # noqa: SLF001
+
+        def record() -> bytes:
+            render_threads.append(threading.get_ident())
+            return original()
+
+        gen._render_preview_bytes = record  # type: ignore[method-assign]  # noqa: SLF001
+        await gen.attempt_generate_preview()
+
+        assert render_threads, "_render_preview_bytes was never called"
+        assert render_threads[0] != loop_thread, "preview rendering ran on the event loop thread"
