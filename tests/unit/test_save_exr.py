@@ -522,6 +522,8 @@ class TestSaveEXRMetadata:
 
         assert _was_successful(node) is False
         assert "compression" in _result_details(node)
+        # "compression" is the one reserved key with a matching parameter.
+        assert "Compression parameter" in _result_details(node)
         assert node.parameter_output_values.get("output_part") is None
 
     def test_custom_reserved_type_key_fails(self, mock_project_file: Path) -> None:
@@ -535,6 +537,31 @@ class TestSaveEXRMetadata:
         # Rejected up front, not by a downstream write crash.
         assert "may not set writer-owned header attributes" in _result_details(node)
         assert "'type'" in _result_details(node)
+        # "type" (storage layout) has no dedicated parameter — must not be
+        # misdirected at Pixel Type (half/float), which is unrelated.
+        assert "Pixel Type" not in _result_details(node)
+        assert "Compression parameter" not in _result_details(node)
+
+    def test_custom_chromaticities_rejected_not_silently_dropped(self, mock_project_file: Path) -> None:
+        """chromaticities has no dedicated parameter to shadow — it must fail, not vanish."""
+        node = _make_node(mock_project_file)
+        node.set_parameter_value("image_in", _make_image_artifact())
+        node.set_parameter_value("metadata_custom", {"chromaticities": [1, 2, 3]})
+        asyncio.run(node.aprocess())
+
+        assert _was_successful(node) is False
+        assert "may not set writer-owned header attributes" in _result_details(node)
+        assert "'chromaticities'" in _result_details(node)
+
+    def test_custom_screen_window_center_rejected_not_silently_dropped(self, mock_project_file: Path) -> None:
+        """screenWindowCenter is hardcoded by SaveEXR, not parameterised — must fail, not vanish."""
+        node = _make_node(mock_project_file)
+        node.set_parameter_value("image_in", _make_image_artifact())
+        node.set_parameter_value("metadata_custom", {"screenWindowCenter": [1, 2, 3]})
+        asyncio.run(node.aprocess())
+
+        assert _was_successful(node) is False
+        assert "'screenWindowCenter'" in _result_details(node)
 
     def test_metadata_custom_invalid_json_fails(self, mock_project_file: Path) -> None:
         """Malformed JSON must fail rather than write a file silently missing metadata."""

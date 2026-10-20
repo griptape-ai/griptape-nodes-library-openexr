@@ -36,6 +36,7 @@ from griptape_nodes_openexr.exr.exr_io import load_exr_channels, write_exr_chann
 from griptape_nodes_openexr.exr.exr_types import (
     _ATTR_CAP_DATE,
     _ATTR_COMMENTS,
+    _ATTR_COMPRESSION,
     _ATTR_NAME,
     _ATTR_OWNER,
     _ATTR_PIXEL_ASPECT_RATIO,
@@ -332,10 +333,7 @@ class SaveEXR(SuccessFailureNode):
 
         passthrough, reserved, shadowed = _partition_custom_attrs(custom)
         if reserved:
-            self._on_fail_handler(
-                f"metadata_custom may not set writer-owned header attributes: {reserved}. "
-                "Use the Compression and Pixel Type parameters instead."
-            )
+            self._on_fail_handler(_reserved_attrs_rejection_message(reserved))
             return
 
         meta = self._read_metadata(passthrough)
@@ -466,6 +464,19 @@ def _partition_custom_attrs(custom: dict) -> tuple[dict, list[str], list[str]]:
         else:
             passthrough[key] = value
     return passthrough, sorted(reserved), sorted(shadowed)
+
+
+def _reserved_attrs_rejection_message(reserved: list[str]) -> str:
+    """Build the failure message for rejected metadata_custom keys.
+
+    Only `compression` maps to a node parameter (the Compression dropdown); the other
+    reserved keys (type, channels, dataWindow, tiles, ...) have no equivalent control,
+    so they are described as writer-owned rather than pointed at a parameter.
+    """
+    msg = f"metadata_custom may not set writer-owned header attributes: {reserved}."
+    if _ATTR_COMPRESSION in reserved:
+        msg += " Use the Compression parameter instead."
+    return msg
 
 
 def _build_extra_header(meta: dict) -> dict:

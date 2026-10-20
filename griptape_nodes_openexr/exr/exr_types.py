@@ -127,8 +127,10 @@ _ATTR_CHROMATICITIES = "chromaticities"
 _ATTR_CHANNELS = "channels"
 
 # Structural attributes owned by the writer. A caller-supplied value here either
-# contradicts an explicit node parameter (compression) or produces a file that
-# cannot be reopened (type/tiles/channels/windows), so writers reject these.
+# contradicts an explicit node parameter (compression), produces a file that cannot
+# be reopened (type/tiles/channels/windows), or has no dedicated node parameter at
+# all to shadow (screenWindow*/chromaticities are hardcoded, not parameterised), so
+# writers reject these rather than silently dropping them.
 _WRITER_RESERVED_ATTRS: set[str] = {
     _ATTR_DATA_WINDOW,
     _ATTR_DISPLAY_WINDOW,
@@ -138,22 +140,22 @@ _WRITER_RESERVED_ATTRS: set[str] = {
     _ATTR_TILE_DESCRIPTION,
     _ATTR_CHUNK_COUNT,
     _ATTR_CHANNELS,
+    _ATTR_SCREEN_WINDOW_CENTER,
+    _ATTR_SCREEN_WINDOW_WIDTH,
+    _ATTR_CHROMATICITIES,
 }
 
-# Attributes that SaveEXR derives from dedicated parameters (or hardcodes) when it
+# Attributes that SaveEXR derives from an actual dedicated node parameter when it
 # builds the EXRHeader artifact. A caller-supplied value would reach the file but
 # not the artifact, so writers drop these in favour of the typed value.
 _TYPED_FIELD_ATTRS: set[str] = {
     _ATTR_NAME,
     _ATTR_PIXEL_ASPECT_RATIO,
-    _ATTR_SCREEN_WINDOW_CENTER,
-    _ATTR_SCREEN_WINDOW_WIDTH,
     _ATTR_OWNER,
     _ATTR_COMMENTS,
     _ATTR_CAP_DATE,
     _ATTR_SOFTWARE,
     _ATTR_TIME_CODE,
-    _ATTR_CHROMATICITIES,
     # Some files write "Software" with capital S; exclude both casings
     "Software",
 }
