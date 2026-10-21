@@ -210,7 +210,8 @@ def write_exr_channels(
             Defaults to ``OpenEXR.ZIP_COMPRESSION`` when ``None``.
         pixel_type: ``"half"`` (float16, default) or ``"float"`` (float32).
         extra_header: Optional additional header attributes (owner, comments, etc.)
-            merged into the header dict before writing.
+            merged into the header dict before writing.  ``compression`` and ``type``
+            are always set from the arguments above and cannot be overridden here.
 
     Raises:
         ValueError: If ``output_path`` is empty.
@@ -226,12 +227,12 @@ def write_exr_channels(
     dtype = np.float16 if pixel_type == "half" else np.float32
     converted = {name: np.ascontiguousarray(arr.astype(dtype, copy=False)) for name, arr in channels.items()}
 
-    header: dict[str, Any] = {
-        "compression": compression,
-        "type": OpenEXR.scanlineimage,
-    }
-    if extra_header:
-        header.update(extra_header)
+    # extra_header goes in first so the writer's own compression/type always win: a
+    # caller-supplied "compression" would otherwise silently override the argument,
+    # and a "type" of tiledimage produces a file that cannot be reopened.
+    header: dict[str, Any] = dict(extra_header or {})
+    header["compression"] = compression
+    header["type"] = OpenEXR.scanlineimage
 
     try:
         # OpenEXR binding requires a real filesystem path — no in-memory API. Callers
