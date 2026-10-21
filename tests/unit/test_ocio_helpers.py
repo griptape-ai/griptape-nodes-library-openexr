@@ -9,6 +9,7 @@ import pytest
 from griptape_nodes_openexr.exr.ocio_helpers import (
     apply_color_management,
     find_colorspace_transform_request_type,
+    reset_colorspace_transform_request_type_cache,
 )
 from griptape_nodes_openexr.exr.tone_mapping import TONE_FILMIC, TONE_LINEAR
 
@@ -53,6 +54,38 @@ class TestFindColorspaceTransformRequestType:
             result = find_colorspace_transform_request_type()
 
         assert result is None
+
+    def test_registry_scanned_once_when_found(self) -> None:
+        req_type = _cst_type()
+        mock_lr = _mock_lr_with(req_type)
+
+        with patch(f"{_OCIO_HELPERS}.LibraryRegistry", mock_lr):
+            first = find_colorspace_transform_request_type()
+            second = find_colorspace_transform_request_type()
+
+        assert first is second is req_type
+        assert mock_lr.list_libraries.call_count == 1
+
+    def test_miss_is_not_cached(self) -> None:
+        req_type = _cst_type()
+
+        with patch(f"{_OCIO_HELPERS}.LibraryRegistry", _mock_lr_empty()):
+            assert find_colorspace_transform_request_type() is None
+
+        # A library loaded later in the session must still be discovered.
+        with patch(f"{_OCIO_HELPERS}.LibraryRegistry", _mock_lr_with(req_type)):
+            assert find_colorspace_transform_request_type() is req_type
+
+    def test_reset_clears_cache(self) -> None:
+        req_type = _cst_type()
+        mock_lr = _mock_lr_with(req_type)
+
+        with patch(f"{_OCIO_HELPERS}.LibraryRegistry", mock_lr):
+            find_colorspace_transform_request_type()
+            reset_colorspace_transform_request_type_cache()
+            find_colorspace_transform_request_type()
+
+        assert mock_lr.list_libraries.call_count == 2
 
 
 # ---------------------------------------------------------------------------

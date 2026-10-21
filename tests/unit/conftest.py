@@ -5,6 +5,15 @@ from __future__ import annotations
 from unittest.mock import MagicMock
 
 import numpy as np
+import pytest
+
+from griptape_nodes_openexr.exr.ocio_helpers import reset_colorspace_transform_request_type_cache
+
+
+@pytest.fixture(autouse=True)
+def _reset_ocio_cache() -> None:
+    """Keep the memoised ColorspaceTransformRequest lookup from leaking between tests."""
+    reset_colorspace_transform_request_type_cache()
 
 
 def _rgb(h: int = 4, w: int = 4) -> np.ndarray:
