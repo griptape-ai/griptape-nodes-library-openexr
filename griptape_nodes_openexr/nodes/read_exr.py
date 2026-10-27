@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import io
 import logging
 from typing import TYPE_CHECKING, Any
@@ -29,6 +30,7 @@ from griptape_nodes.retained_mode.events.project_events import MacroPath
 from griptape_nodes.retained_mode.griptape_nodes import GriptapeNodes
 from griptape_nodes.traits.file_system_picker import FileSystemPicker
 from griptape_nodes.traits.options import Options
+from griptape_nodes.utils.async_utils import to_thread
 from PIL import Image
 
 from griptape_nodes_openexr.exr.channel_selection import (
@@ -103,6 +105,8 @@ class ReadEXR(SuccessFailureNode):
         self._render_key: tuple | None = None
         self._render_outputs: dict[str, Any] | None = None
         self._current_exr_path: str | None = None
+        # The after_value_set scan runs as a background task so the setter can return.
+        self._pending_scan: asyncio.Task | None = None
 
         self._path_param = Parameter(
             name="path",
@@ -307,42 +311,78 @@ class ReadEXR(SuccessFailureNode):
             # A live-preview optimisation only. after_value_set is skipped on workflow
             # load and unreliable under parallel execution, so aprocess scans on a miss
             # rather than relying on this having run.
-            try:
-                refreshed = self._refresh_scan(value)
-            except Exception:
-                logger.warning("ReadEXR '%s': failed to scan '%s'", self.name, value, exc_info=True)
+            #
+            # The handler for SetParameterValueRequest is synchronous, so whatever happens
+            # here happens on the engine's event loop. Scanning a 4K header takes about
+            # 1.8s and the preview request blocks until the provider returns, so both go
+            # to a worker thread and the setter returns immediately.
+            if _running_loop() is None:
+                # Bootstrap and worker threads have no loop to protect. Scanning inline
+                # keeps the dropdowns populated for callers that set values that way.
+                self._scan_and_preview(value)
                 return
-            if refreshed:
-                self._request_canvas_preview()
+            self._pending_scan = asyncio.ensure_future(to_thread(self._scan_and_preview, value))
+
+    async def wait_for_pending_scan(self) -> None:
+        """Await the background scan started by `after_value_set`, if one is running.
+
+        Exists for tests and for anything that needs the dropdowns populated before it
+        reads them. Execution does not need it: `aprocess` scans on a cache miss.
+        """
+        task = self._pending_scan
+        if task is not None:
+            self._pending_scan = None
+            await asyncio.shield(task)
+
+    def _scan_and_preview(self, raw_path: Any) -> None:
+        """Scan and request a canvas preview. Synchronous; runs on a worker thread.
+
+        Swallows its own failures: a bad path must not break the value being set.
+        """
+        try:
+            scanned = self._scan_blocking(raw_path)
+        except Exception:
+            logger.warning("ReadEXR '%s': failed to scan '%s'", self.name, raw_path, exc_info=True)
+            return
+        if scanned is None:
+            return
+        self._adopt_scan(*scanned)
+        self._request_canvas_preview()
 
     # ------------------------------------------------------------------
     # Scanning
     # ------------------------------------------------------------------
 
-    def _refresh_scan(self, raw_path: Any) -> bool:
-        """Scan the header for `raw_path`, caching the result. True when a scan ran."""
+    def _clear_scan(self) -> None:
+        self._scan_key = None
+        self._cached_sequence = None
+        self._cached_exr_data = None
+        self._render_key = None
+        self._render_outputs = None
+
+    def _scan_blocking(self, raw_path: Any) -> tuple[str, Sequence, EXRData] | None:
+        """Resolve `raw_path` and read its header. Returns None when nothing was scanned.
+
+        Synchronous and slow (a 4K multi-part header is ~1.8s), so callers on the event
+        loop run it through `to_thread`. Touches no node state, which is what makes it
+        safe to call from a worker thread.
+        """
         key = _scan_key_for(raw_path)
         if not key:
-            self._scan_key = None
-            self._cached_sequence = None
-            self._cached_exr_data = None
-            self._render_key = None
-            self._render_outputs = None
-            return False
+            self._clear_scan()
+            return None
         if key == self._scan_key:
-            return False
+            return None
 
         sequence = _resolve_to_sequence(raw_path)
         if sequence is None or not sequence.entries:
-            self._scan_key = None
-            self._cached_sequence = None
-            self._cached_exr_data = None
-            self._render_key = None
-            self._render_outputs = None
-            return False
+            self._clear_scan()
+            return None
 
-        exr_data = scan_exr_header(sequence.entries[0].path, header_only=True)
+        return key, sequence, scan_exr_header(sequence.entries[0].path, header_only=True)
 
+    def _adopt_scan(self, key: str, sequence: Sequence, exr_data: EXRData) -> None:
+        """Install a completed scan and refresh the UI from it."""
         self._scan_key = key
         self._cached_sequence = sequence
         self._cached_exr_data = exr_data
@@ -351,7 +391,12 @@ class ReadEXR(SuccessFailureNode):
         self._render_outputs = None
 
         self._apply_scan_to_ui(sequence, exr_data)
-        return True
+
+    async def _arefresh_scan(self, raw_path: Any) -> None:
+        """Scan off the event loop, then adopt the result on it."""
+        scanned = await to_thread(self._scan_blocking, raw_path)
+        if scanned is not None:
+            self._adopt_scan(*scanned)
 
     def _apply_scan_to_ui(self, sequence: Sequence, exr_data: EXRData) -> None:
         """Populate the dropdowns and the frame slider range from a fresh scan."""
@@ -464,7 +509,7 @@ class ReadEXR(SuccessFailureNode):
         # node work cold after a workflow reload, and in a worker that never saw the
         # after_value_set hook.
         try:
-            self._refresh_scan(raw_path)
+            await self._arefresh_scan(raw_path)
         except (ValueError, RuntimeError) as e:
             self._on_fail(f"Failed to scan EXR header: {e}")
             return
@@ -524,35 +569,27 @@ class ReadEXR(SuccessFailureNode):
         alpha_channel = select_alpha_channel(candidates, selected)
         channels_to_load = selected + ([alpha_channel] if alpha_channel else [])
 
+        # Decode, tone map and encode together on a worker thread. On a 4K frame this is
+        # ~3.2s of CPU, which would otherwise freeze the canvas for the whole run.
         try:
-            pixels = load_exr_channels(entry.path, part_index, channels_to_load)
+            png_bytes, tone_mode = await to_thread(
+                self._render_png,
+                entry.path,
+                part_index,
+                part.width,
+                part.height,
+                selected,
+                alpha_channel,
+                channels_to_load,
+                ev,
+                color_params,
+                tone_mapping,
+            )
         except (ValueError, RuntimeError) as e:
-            self._on_fail(f"Failed to load channels: {e}")
-            return
-
-        try:
-            rgb = build_rgb_array(pixels, selected)
-        except Exception as e:  # noqa: BLE001 - surfaced as a node failure
-            self._on_fail(f"Failed to build RGB: {e}")
-            return
-
-        rgb = apply_exposure(rgb, ev)
-        try:
-            rgb, tone_mode = apply_color_management(rgb, color_params, tone_mapping)
-        except ValueError as e:
             self._on_fail(str(e))
             return
-        uint8_rgb = to_uint8_srgb(rgb)
-
-        if alpha_channel:
-            alpha_plane = np.clip(pixels[alpha_channel].reshape(part.height, part.width), 0.0, 1.0)
-            alpha_uint8 = (alpha_plane * 255.0 + 0.5).astype(np.uint8)[..., np.newaxis]
-            uint8 = np.concatenate([uint8_rgb, alpha_uint8], axis=-1)
-        else:
-            uint8 = uint8_rgb
 
         try:
-            png_bytes = _ndarray_to_png(uint8)
             # The frame number goes into the filename so a loop leaves a clean numbered
             # set; a single file keeps the plain name.
             extra_vars: dict[str, str | int] = {"_index": entry.number} if is_sequence else {}
@@ -601,6 +638,55 @@ class ReadEXR(SuccessFailureNode):
         self._set_status_results(was_successful=True, result_details=details)
         logger.info("ReadEXR '%s': %s", self.name, details)
 
+    def _render_png(  # noqa: PLR0913, PLR0917
+        self,
+        file_path: str,
+        part_index: int,
+        width: int,
+        height: int,
+        selected: list[str],
+        alpha_channel: str | None,
+        channels_to_load: list[str],
+        ev: float,
+        color_params: ColorParamsProtocol | None,
+        tone_mapping: str,
+    ) -> tuple[bytes, str]:
+        """Decode the selected channels and encode them as PNG bytes.
+
+        Synchronous and CPU-bound; callers run it through `to_thread`. Failures are
+        raised with the message the node reports, so the caller has one except clause
+        rather than one per stage.
+
+        OCIO dispatch happens in here too. That is already how EXRSequenceToPreview
+        calls it (per frame, on a thread pool), so the request path is known to work
+        off the loop.
+        """
+        try:
+            pixels = load_exr_channels(file_path, part_index, channels_to_load)
+        except (ValueError, RuntimeError) as e:
+            msg = f"Failed to load channels: {e}"
+            raise RuntimeError(msg) from e
+
+        try:
+            rgb = build_rgb_array(pixels, selected)
+        except Exception as e:
+            msg = f"Failed to build RGB: {e}"
+            raise RuntimeError(msg) from e
+
+        rgb = apply_exposure(rgb, ev)
+        # apply_color_management raises ValueError with a user-facing message already.
+        rgb, tone_mode = apply_color_management(rgb, color_params, tone_mapping)
+        uint8_rgb = to_uint8_srgb(rgb)
+
+        if alpha_channel:
+            alpha_plane = np.clip(pixels[alpha_channel].reshape(height, width), 0.0, 1.0)
+            alpha_uint8 = (alpha_plane * 255.0 + 0.5).astype(np.uint8)[..., np.newaxis]
+            uint8 = np.concatenate([uint8_rgb, alpha_uint8], axis=-1)
+        else:
+            uint8 = uint8_rgb
+
+        return _ndarray_to_png(uint8), tone_mode
+
     def _emit_render(self, outputs: dict[str, Any]) -> None:
         """Publish a render's outputs, whether it was just computed or came from the cache."""
         for name, value in outputs.items():
@@ -642,6 +728,14 @@ class ReadEXR(SuccessFailureNode):
 # ---------------------------------------------------------------------------
 # Module helpers
 # ---------------------------------------------------------------------------
+
+
+def _running_loop() -> asyncio.AbstractEventLoop | None:
+    """The running event loop, or None when called from sync code with no loop."""
+    try:
+        return asyncio.get_running_loop()
+    except RuntimeError:
+        return None
 
 
 def _scan_key_for(raw_path: Any) -> str:

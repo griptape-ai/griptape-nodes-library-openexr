@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import threading
+import time
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -137,6 +139,10 @@ class _Harness:
         self.preview_succeeds = True
         self.scan_calls: list[str] = []
         self.load_calls: list[tuple[str, int, list[str]]] = []
+        self.scan_threads: list[int] = []
+        self.load_threads: list[int] = []
+        self.preview_threads: list[int] = []
+        self.scan_delay = 0.0
         self.preview_requests: list[GetPreviewForArtifactRequest] = []
         self.build_file_calls: list[dict[str, Any]] = []
         self.written: list[Path] = []
@@ -145,10 +151,14 @@ class _Harness:
 
     def scan_exr_header(self, file_path: str, *, header_only: bool = True) -> EXRData:  # noqa: ARG002
         self.scan_calls.append(file_path)
+        self.scan_threads.append(threading.get_ident())
+        if self.scan_delay:
+            time.sleep(self.scan_delay)
         return self.exr_data
 
     def load_exr_channels(self, file_path: str, part_index: int, channel_names: list[str]) -> dict[str, np.ndarray]:
         self.load_calls.append((file_path, part_index, list(channel_names)))
+        self.load_threads.append(threading.get_ident())
         return {name: self.pixels[name] for name in channel_names}
 
     # -- stubs standing in for the engine --
@@ -174,6 +184,7 @@ class _Harness:
             )
         if isinstance(request, GetPreviewForArtifactRequest):
             self.preview_requests.append(request)
+            self.preview_threads.append(threading.get_ident())
             if not self.preview_succeeds:
                 return GetPreviewForArtifactResultFailure(result_details="no provider")
             return GetPreviewForArtifactResultSuccess(
@@ -582,6 +593,67 @@ class TestCaching:
             node = _make_node()
             node.set_parameter_value("path", str(_single_file(tmp_path)))
         assert node.get_parameter_value("path")
+
+
+class TestEventLoopNotBlocked:
+    """Regression: EXR decode and the blocking preview request must stay off the loop."""
+
+    @pytest.mark.asyncio
+    async def test_aprocess_decode_runs_off_the_event_loop(self, harness: _Harness, tmp_path: Path) -> None:
+        loop_thread = threading.get_ident()
+        node = _make_node()
+        node.set_parameter_value("path", str(_single_file(tmp_path)))
+        await node.aprocess()
+
+        assert _was_successful(node) is True, _result_details(node)
+        assert harness.load_threads, "load_exr_channels was never called"
+        assert loop_thread not in harness.load_threads, "channel decode ran on the event loop thread"
+
+    @pytest.mark.asyncio
+    async def test_aprocess_scan_runs_off_the_event_loop(self, harness: _Harness, tmp_path: Path) -> None:
+        loop_thread = threading.get_ident()
+        node = _make_node()
+        # initial_setup skips after_value_set, so aprocess does the scan itself.
+        node.set_parameter_value("path", str(_single_file(tmp_path)), initial_setup=True)
+        await node.aprocess()
+
+        assert harness.scan_threads, "scan_exr_header was never called"
+        assert loop_thread not in harness.scan_threads, "header scan ran on the event loop thread"
+
+    @pytest.mark.asyncio
+    async def test_value_set_scan_and_preview_run_off_the_event_loop(self, harness: _Harness, tmp_path: Path) -> None:
+        loop_thread = threading.get_ident()
+        node = _make_node()
+        node.set_parameter_value("path", str(_single_file(tmp_path)))
+        await node.wait_for_pending_scan()
+
+        assert harness.scan_threads, "scan_exr_header was never called"
+        assert loop_thread not in harness.scan_threads, "header scan ran on the event loop thread"
+        assert harness.preview_threads, "no preview was requested"
+        assert loop_thread not in harness.preview_threads, "preview request blocked the event loop thread"
+
+    @pytest.mark.asyncio
+    async def test_value_set_returns_before_the_scan_finishes(self, harness: _Harness, tmp_path: Path) -> None:
+        # The point of going off-loop: the setter hands control back rather than
+        # holding it for the length of a 4K decode.
+        harness.scan_delay = 0.25
+        node = _make_node()
+
+        start = time.perf_counter()
+        node.set_parameter_value("path", str(_single_file(tmp_path)))
+        elapsed = time.perf_counter() - start
+
+        assert elapsed < harness.scan_delay / 2, f"set_parameter_value blocked for {elapsed:.3f}s"
+        await node.wait_for_pending_scan()
+        assert harness.scan_calls
+
+    def test_value_set_without_a_running_loop_still_scans(self, harness: _Harness, tmp_path: Path) -> None:
+        # Bootstrap and worker threads set values with no loop running; the scan has
+        # to happen inline there rather than being dropped.
+        node = _make_node()
+        node.set_parameter_value("path", str(_single_file(tmp_path)))
+        assert harness.scan_calls
+        assert node._part_choices() == ["0: part"]
 
 
 class TestPreview:
