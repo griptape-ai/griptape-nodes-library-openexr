@@ -22,6 +22,7 @@ from griptape_nodes_openexr.exr.exr_io import load_exr_channels
 from griptape_nodes_openexr.exr.ocio_helpers import (
     COLOR_MODE_BASIC,
     COLOR_MODE_OCIO,
+    TONE_MAPPING_TOOLTIP,
     ColorParamsProtocol,
     apply_color_management,
     apply_color_mode_visibility,
@@ -128,10 +129,7 @@ class DisplayEXRChannel(SuccessFailureNode):
         self._tone_mapping_param = ParameterString(
             name="tone_mapping",
             default_value=TONE_FILMIC,
-            tooltip=(
-                "Local tone mapping when color_mode is 'basic'. 'filmic' applies the Narkowicz 2015 curve; "
-                "'linear' clamps to [0, 1]. Both are then sRGB-encoded for display."
-            ),
+            tooltip=TONE_MAPPING_TOOLTIP,
             allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
             ui_options={"hide": _ocio_active},
         )

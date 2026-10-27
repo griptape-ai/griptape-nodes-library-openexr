@@ -6,6 +6,9 @@ import numpy as np
 
 TONE_FILMIC = "filmic"
 TONE_LINEAR = "linear"
+TONE_CURVES_DESCRIPTION = (
+    "'filmic' applies the Narkowicz 2015 curve; 'linear' clamps to [0, 1]. Both are then sRGB-encoded for display."
+)
 
 EV_MIN = -10.0  # Exposure Value in stops (EV); range matches practical HDR capture limits
 EV_MAX = 10.0

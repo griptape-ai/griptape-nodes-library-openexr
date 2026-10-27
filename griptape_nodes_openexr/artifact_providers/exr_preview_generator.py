@@ -25,7 +25,12 @@ from pydantic import PositiveInt
 
 from griptape_nodes_openexr.exr.channel_selection import select_alpha_channel, select_display_channels
 from griptape_nodes_openexr.exr.exr_io import build_rgb_array, load_exr_channels, scan_exr_header
-from griptape_nodes_openexr.exr.tone_mapping import apply_exposure, apply_tone_mapping, to_uint8
+from griptape_nodes_openexr.exr.tone_mapping import (
+    TONE_CURVES_DESCRIPTION,
+    apply_exposure,
+    apply_tone_mapping,
+    to_uint8,
+)
 
 if TYPE_CHECKING:
     from griptape_nodes.retained_mode.engine import Engine
@@ -36,10 +41,7 @@ class EXRPreviewParameters(BaseGeneratorParameters):
 
     tone_mapping: str = Field(
         default="filmic",
-        description=(
-            "Tone mapping curve. 'filmic' applies the Narkowicz 2015 curve; "
-            "'linear' clamps to [0, 1]. Both are then sRGB-encoded for display."
-        ),
+        description=f"Tone mapping curve. {TONE_CURVES_DESCRIPTION}",
         editor_schema_type="string",
     )
 

@@ -13,12 +13,19 @@ from griptape_nodes.node_library.library_registry import LibraryRegistry
 from griptape_nodes.retained_mode.griptape_nodes import GriptapeNodes
 from griptape_nodes.traits.options import Options
 
-from griptape_nodes_openexr.exr.tone_mapping import TONE_FILMIC, TONE_LINEAR, apply_tone_mapping
+from griptape_nodes_openexr.exr.tone_mapping import (
+    TONE_CURVES_DESCRIPTION,
+    TONE_FILMIC,
+    TONE_LINEAR,
+    apply_tone_mapping,
+)
 
 logger = logging.getLogger("griptape_nodes")
 
 COLOR_MODE_BASIC = "basic"
 COLOR_MODE_OCIO = "ocio"
+
+TONE_MAPPING_TOOLTIP = f"Local tone mapping when color_mode is 'basic'. {TONE_CURVES_DESCRIPTION}"
 
 
 class ColorParamsProtocol(Protocol):
@@ -116,10 +123,7 @@ def add_color_mode_parameters(
     node: BaseNode,
     *,
     color_mode_tooltip: str = "'basic' uses local tone mapping; 'ocio' uses the connected OCIOColorParamsArtifact.",
-    tone_mapping_tooltip: str = (
-        "Local tone mapping when color_mode is 'basic'. 'filmic' applies the Narkowicz 2015 curve; "
-        "'linear' clamps to [0, 1]. Both are then sRGB-encoded for display."
-    ),
+    tone_mapping_tooltip: str = TONE_MAPPING_TOOLTIP,
     color_params_tooltip: str = "OCIO color parameters (source colorspace, display, view). Required when color_mode is 'ocio'.",
 ) -> tuple[ParameterString, ParameterString, Parameter]:
     """Create and register the color_mode, tone_mapping, and color_params parameters.
