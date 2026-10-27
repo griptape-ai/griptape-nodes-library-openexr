@@ -59,25 +59,14 @@ def linear_to_srgb(arr: np.ndarray) -> np.ndarray:
     Returns:
         Display-encoded float32 array in [0, 1], same shape as input.
     """
-    # Clamping first is required, not just tidiness: np.power on a negative base with
-    # a fractional exponent returns NaN. Both in-module callers already clip, so the
-    # clamp is a no-op on them; it is here because this is a public entry point and
-    # scene-linear data legitimately carries negatives.
+    # np.power on a negative base with a fractional exponent returns NaN.
     x = np.clip(arr, 0.0, 1.0).astype(np.float32, copy=False)
 
-    # Evaluate the power segment over the whole array, then overwrite the toe. The
-    # np.where spelling needs the same np.power call but allocates both branches in
-    # full and discards one; here the power result is built once and the scale and
-    # offset applied in place. np.power dominates either way, so this buys about 6%
-    # at 4K and nothing at HD — taken because ExrSequenceToPreview runs it per frame
-    # and the output is bit-identical, not because it is a significant speed-up.
-    # The float32 exponent and literals keep the arithmetic off the float64 path
-    # np.power would otherwise promote a float32 array to.
+    # Power segment over the whole array; the linear toe is patched in below.
     encoded = np.power(x, np.float32(1.0 / 2.4), dtype=np.float32)
     encoded *= np.float32(1.055)
     encoded -= np.float32(0.055)
 
-    # Below the cutoff sRGB is a plain linear ramp, so patch those pixels back in.
     np.copyto(encoded, x * np.float32(12.92), where=x <= SRGB_LINEAR_CUTOFF)
     return encoded
 

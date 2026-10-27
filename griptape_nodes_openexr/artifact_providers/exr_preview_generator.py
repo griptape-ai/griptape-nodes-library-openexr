@@ -36,7 +36,10 @@ class EXRPreviewParameters(BaseGeneratorParameters):
 
     tone_mapping: str = Field(
         default="filmic",
-        description="Tone mapping curve: 'filmic' or 'linear' (clamp only)",
+        description=(
+            "Tone mapping curve. 'filmic' applies the Narkowicz 2015 curve; "
+            "'linear' clamps to [0, 1]. Both are then sRGB-encoded for display."
+        ),
         editor_schema_type="string",
     )
 
