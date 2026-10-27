@@ -116,7 +116,10 @@ def add_color_mode_parameters(
     node: BaseNode,
     *,
     color_mode_tooltip: str = "'basic' uses local tone mapping; 'ocio' uses the connected OCIOColorParamsArtifact.",
-    tone_mapping_tooltip: str = "Local tone mapping when color_mode is 'basic'.",
+    tone_mapping_tooltip: str = (
+        "Local tone mapping when color_mode is 'basic'. 'filmic' applies the Narkowicz 2015 curve; "
+        "'linear' clamps to [0, 1]. Both are then sRGB-encoded for display."
+    ),
     color_params_tooltip: str = "OCIO color parameters (source colorspace, display, view). Required when color_mode is 'ocio'.",
 ) -> tuple[ParameterString, ParameterString, Parameter]:
     """Create and register the color_mode, tone_mapping, and color_params parameters.

@@ -31,7 +31,7 @@ from griptape_nodes_openexr.exr.tone_mapping import (
     TONE_FILMIC,
     TONE_LINEAR,
     apply_exposure,
-    to_uint8_srgb,
+    to_uint8,
 )
 from griptape_nodes_openexr.exr.viewer_launcher import handle_viewer_button_click
 
@@ -128,7 +128,10 @@ class DisplayEXRChannel(SuccessFailureNode):
         self._tone_mapping_param = ParameterString(
             name="tone_mapping",
             default_value=TONE_FILMIC,
-            tooltip="Local tone mapping when color_mode is 'basic'. 'filmic' applies Narkowicz 2015 curve; 'linear' clamps to [0, 1].",
+            tooltip=(
+                "Local tone mapping when color_mode is 'basic'. 'filmic' applies the Narkowicz 2015 curve; "
+                "'linear' clamps to [0, 1]. Both are then sRGB-encoded for display."
+            ),
             allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
             ui_options={"hide": _ocio_active},
         )
@@ -293,7 +296,7 @@ class DisplayEXRChannel(SuccessFailureNode):
         except ValueError as e:
             self._on_fail_handler(str(e))
             return
-        uint8_rgb = to_uint8_srgb(rgb)
+        uint8_rgb = to_uint8(rgb)
 
         alpha_f32 = alpha_plane.reshape(height, width) if alpha_plane is not None else None
 
@@ -376,7 +379,7 @@ def _compose_alpha(uint8_rgb: np.ndarray, alpha_plane: np.ndarray | None) -> np.
     """
     if alpha_plane is None:
         return uint8_rgb
-    alpha_uint8 = (np.clip(alpha_plane, 0.0, 1.0) * 255.0 + 0.5).astype(np.uint8)[..., np.newaxis]
+    alpha_uint8 = to_uint8(alpha_plane)[..., np.newaxis]
     return np.concatenate([uint8_rgb, alpha_uint8], axis=-1)
 
 
@@ -391,8 +394,7 @@ def _composite(
         return _compose_alpha(uint8_rgb, alpha_plane)
     a = np.clip(alpha_plane, 0.0, 1.0)[..., np.newaxis]
     fg = uint8_rgb.astype(np.float32) / 255.0
-    out = np.clip(fg * a + bg_rgb_f32 * (1.0 - a), 0.0, 1.0)
-    return (out * 255.0 + 0.5).astype(np.uint8)
+    return to_uint8(fg * a + bg_rgb_f32 * (1.0 - a))
 
 
 def _ndarray_to_png(uint8: np.ndarray) -> bytes:

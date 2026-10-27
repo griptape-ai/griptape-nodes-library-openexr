@@ -25,7 +25,7 @@ from pydantic import PositiveInt
 
 from griptape_nodes_openexr.exr.channel_selection import select_alpha_channel, select_display_channels
 from griptape_nodes_openexr.exr.exr_io import build_rgb_array, load_exr_channels, scan_exr_header
-from griptape_nodes_openexr.exr.tone_mapping import apply_exposure, apply_tone_mapping, to_uint8_srgb
+from griptape_nodes_openexr.exr.tone_mapping import apply_exposure, apply_tone_mapping, to_uint8
 
 if TYPE_CHECKING:
     from griptape_nodes.retained_mode.engine import Engine
@@ -134,11 +134,10 @@ class EXRPreviewGenerator(BaseArtifactPreviewGenerator):
 
         rgb = apply_exposure(rgb, self.params.exposure)
         rgb = apply_tone_mapping(rgb, self.params.tone_mapping)
-        rgb_uint8 = to_uint8_srgb(rgb)
+        rgb_uint8 = to_uint8(rgb)
 
         if alpha_name:
-            alpha_float = np.clip(pixel_data[alpha_name], 0.0, 1.0)
-            alpha_uint8 = (alpha_float * 255.0 + 0.5).astype(np.uint8)
+            alpha_uint8 = to_uint8(pixel_data[alpha_name])
             rgba_uint8 = np.dstack([rgb_uint8, alpha_uint8])
             img = Image.fromarray(rgba_uint8, mode="RGBA")
         else:

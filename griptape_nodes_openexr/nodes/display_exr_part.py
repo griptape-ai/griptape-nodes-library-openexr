@@ -31,7 +31,7 @@ from griptape_nodes_openexr.exr.tone_mapping import (
     EV_MIN,
     TONE_FILMIC,
     apply_exposure,
-    to_uint8_srgb,
+    to_uint8,
 )
 from griptape_nodes_openexr.exr.viewer_launcher import handle_viewer_button_click
 
@@ -85,7 +85,6 @@ class DisplayEXRPart(SuccessFailureNode):
         self._color_mode_param, self._tone_mapping_param, self._color_params_param = add_color_mode_parameters(
             self,
             color_mode_tooltip="Color management mode. 'basic' uses local tone mapping; 'ocio' uses the connected OCIOColorParamsArtifact.",
-            tone_mapping_tooltip="Local tone mapping when color_mode is 'basic'. 'filmic' applies Narkowicz 2015 curve; 'linear' clamps to [0, 1].",
             color_params_tooltip="OCIO color parameters artifact (source colorspace, display, view). Required when color_mode is 'ocio'.",
         )
 
@@ -186,11 +185,11 @@ class DisplayEXRPart(SuccessFailureNode):
         except ValueError as e:
             self._on_fail_handler(str(e))
             return
-        uint8_rgb = to_uint8_srgb(rgb)
+        uint8_rgb = to_uint8(rgb)
 
         if alpha_channel:
-            alpha_plane = np.clip(pixels[alpha_channel].reshape(part.height, part.width), 0.0, 1.0)
-            alpha_uint8 = (alpha_plane * 255.0 + 0.5).astype(np.uint8)[..., np.newaxis]
+            alpha_plane = pixels[alpha_channel].reshape(part.height, part.width)
+            alpha_uint8 = to_uint8(alpha_plane)[..., np.newaxis]
             uint8 = np.concatenate([uint8_rgb, alpha_uint8], axis=-1)
         else:
             uint8 = uint8_rgb

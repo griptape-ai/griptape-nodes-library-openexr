@@ -40,7 +40,7 @@ from griptape_nodes_openexr.exr.tone_mapping import (
     EV_MAX,
     EV_MIN,
     apply_exposure,
-    to_uint8_srgb,
+    to_uint8,
 )
 
 logger = logging.getLogger("griptape_nodes")
@@ -348,7 +348,7 @@ def _convert_frame(
     rgb = build_rgb_array(pixels, selected)
     rgb = apply_exposure(rgb, ev)
     rgb, _ = apply_color_management(rgb, color_params, tone_mapping)
-    uint8_rgb = to_uint8_srgb(rgb)
+    uint8_rgb = to_uint8(rgb)
 
     out_path = temp_dir / f"frame_{frame_index:04d}.png"
     Image.fromarray(uint8_rgb, "RGB").save(out_path)
