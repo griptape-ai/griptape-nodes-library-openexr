@@ -135,7 +135,12 @@ class ReadEXR(SuccessFailureNode):
             allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
             ui_options={"hide": True},
         )
-        self._part_name_param.add_trait(Options(choices=[]))
+        # allow_custom disables the Options converter and validator. Without it, a value
+        # restored on workflow load (hooks suppressed, so no scan has run and choices are
+        # still empty) hits `self.choices[0]` on an empty list: the saved part is dropped
+        # and the node silently reads part 0 instead. _apply_scan_to_ui corrects a value
+        # the file does not have, once the scan can say what the real choices are.
+        self._part_name_param.add_trait(Options(choices=[], allow_custom=True))
         self.add_parameter(self._part_name_param)
 
         self._layer_param = ParameterString(
@@ -145,7 +150,7 @@ class ReadEXR(SuccessFailureNode):
             allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
             ui_options={"hide": True},
         )
-        self._layer_param.add_trait(Options(choices=[]))
+        self._layer_param.add_trait(Options(choices=[], allow_custom=True))
         self.add_parameter(self._layer_param)
 
         self._frame_param = ParameterInt(
@@ -283,6 +288,16 @@ class ReadEXR(SuccessFailureNode):
                 allowed_modes={ParameterMode.OUTPUT},
             )
         self.add_node_element(info_group)
+        # Cleared together on failure; see _on_fail.
+        self._info_params = (
+            self._image_width_param,
+            self._image_height_param,
+            self._part_count_param,
+            self._channel_count_param,
+            self._first_frame_param,
+            self._last_frame_param,
+            self._frame_count_param,
+        )
 
         self._open_viewer_param = ParameterButton(
             name="open_in_viewer",
@@ -307,6 +322,13 @@ class ReadEXR(SuccessFailureNode):
             handle_color_mode_change(self, value, self._tone_mapping_param.name, self._color_params_param.name)
             return
 
+        if parameter.name == self._part_name_param.name:
+            # Layers belong to a part, so the dropdown has to follow the part selection.
+            # No rescan: the cached header already describes every part in the file.
+            if self._cached_exr_data is not None:
+                self._apply_layer_choices(self._cached_exr_data, str(value or ""))
+            return
+
         if parameter.name == self._path_param.name:
             # A live-preview optimisation only. after_value_set is skipped on workflow
             # load and unreliable under parallel execution, so aprocess scans on a miss
@@ -321,6 +343,11 @@ class ReadEXR(SuccessFailureNode):
                 # keeps the dropdowns populated for callers that set values that way.
                 self._scan_and_preview(value)
                 return
+            previous = self._pending_scan
+            if previous is not None and not previous.done():
+                # Superseded. The thread it is on cannot be interrupted, so the result is
+                # discarded by _adopt_if_current rather than by cancelling here.
+                previous.cancel()
             self._pending_scan = asyncio.ensure_future(to_thread(self._scan_and_preview, value))
 
     async def wait_for_pending_scan(self) -> None:
@@ -344,10 +371,28 @@ class ReadEXR(SuccessFailureNode):
         except Exception:
             logger.warning("ReadEXR '%s': failed to scan '%s'", self.name, raw_path, exc_info=True)
             return
-        if scanned is None:
+        if not self._adopt_if_current(raw_path, scanned):
             return
-        self._adopt_scan(*scanned)
         self._request_canvas_preview()
+
+    def _adopt_if_current(self, raw_path: Any, scanned: tuple[str, Sequence, EXRData] | None) -> bool:
+        """Install a scan result, unless `path` has moved on since the scan started.
+
+        Clicking through the file picker starts a scan per click, and they finish in
+        whatever order the files take to read. Without this check a slow earlier scan
+        lands after a fast later one and leaves the node describing a file the user has
+        already navigated away from.
+        """
+        wanted = _scan_key_for(self.get_parameter_value(self._path_param.name))
+        if _scan_key_for(raw_path) != wanted:
+            logger.debug("ReadEXR '%s': discarding a superseded scan of '%s'", self.name, raw_path)
+            return False
+        if scanned is None:
+            if not wanted:
+                self._clear_scan()
+            return False
+        self._adopt_scan(*scanned)
+        return True
 
     # ------------------------------------------------------------------
     # Scanning
@@ -361,22 +406,19 @@ class ReadEXR(SuccessFailureNode):
         self._render_outputs = None
 
     def _scan_blocking(self, raw_path: Any) -> tuple[str, Sequence, EXRData] | None:
-        """Resolve `raw_path` and read its header. Returns None when nothing was scanned.
+        """Resolve `raw_path` and read its header. Returns None when there is nothing to read.
 
         Synchronous and slow (a 4K multi-part header is ~1.8s), so callers on the event
-        loop run it through `to_thread`. Touches no node state, which is what makes it
-        safe to call from a worker thread.
+        loop run it through `to_thread`. Reads `self._scan_key` to skip a redundant scan
+        but writes nothing: every mutation belongs to `_adopt_scan` or `_clear_scan` on
+        the loop, which is what makes this safe to call from a worker thread.
         """
         key = _scan_key_for(raw_path)
-        if not key:
-            self._clear_scan()
-            return None
-        if key == self._scan_key:
+        if not key or key == self._scan_key:
             return None
 
         sequence = _resolve_to_sequence(raw_path)
         if sequence is None or not sequence.entries:
-            self._clear_scan()
             return None
 
         return key, sequence, scan_exr_header(sequence.entries[0].path, header_only=True)
@@ -395,8 +437,7 @@ class ReadEXR(SuccessFailureNode):
     async def _arefresh_scan(self, raw_path: Any) -> None:
         """Scan off the event loop, then adopt the result on it."""
         scanned = await to_thread(self._scan_blocking, raw_path)
-        if scanned is not None:
-            self._adopt_scan(*scanned)
+        self._adopt_if_current(raw_path, scanned)
 
     def _apply_scan_to_ui(self, sequence: Sequence, exr_data: EXRData) -> None:
         """Populate the dropdowns and the frame slider range from a fresh scan."""
@@ -407,14 +448,7 @@ class ReadEXR(SuccessFailureNode):
             self.set_parameter_value(self._part_name_param.name, part_choices[0], emit_change=False)
         self._set_hidden(self._part_name_param, hidden=len(part_choices) <= 1)
 
-        channel_names = [channel.name for channel in _part_for(exr_data, part_choices[0]).channels]
-        layer_choices = list_layers(channel_names)
-        _set_choices(self._layer_param, layer_choices)
-        current_layer = self.get_parameter_value(self._layer_param.name)
-        if current_layer not in layer_choices:
-            fallback = default_layer(channel_names) or (layer_choices[0] if layer_choices else "")
-            self.set_parameter_value(self._layer_param.name, fallback, emit_change=False)
-        self._set_hidden(self._layer_param, hidden=len(layer_choices) <= 1)
+        self._apply_layer_choices(exr_data, str(self.get_parameter_value(self._part_name_param.name) or ""))
 
         is_sequence = len(sequence.entries) > 1
         self._set_hidden(self._frame_param, hidden=not is_sequence)
@@ -424,6 +458,17 @@ class ReadEXR(SuccessFailureNode):
             self._frame_param.soft_limits = True
             if not self.get_parameter_value(self._frame_param.name):
                 self.set_parameter_value(self._frame_param.name, sequence.first, emit_change=False)
+
+    def _apply_layer_choices(self, exr_data: EXRData, part_choice: str) -> None:
+        """Repopulate the layer dropdown for the currently selected part."""
+        channel_names = [channel.name for channel in _part_for(exr_data, part_choice).channels]
+        layer_choices = list_layers(channel_names)
+        _set_choices(self._layer_param, layer_choices)
+        current_layer = self.get_parameter_value(self._layer_param.name)
+        if current_layer not in layer_choices:
+            fallback = default_layer(channel_names) or (layer_choices[0] if layer_choices else "")
+            self.set_parameter_value(self._layer_param.name, fallback, emit_change=False)
+        self._set_hidden(self._layer_param, hidden=len(layer_choices) <= 1)
 
     def _request_canvas_preview(self) -> None:
         """Ask the engine for a cheap provider preview of the scanned file.
@@ -491,6 +536,11 @@ class ReadEXR(SuccessFailureNode):
         self.parameter_output_values[self._image_param.name] = None
         self.parameter_output_values[self._part_param.name] = None
         self.parameter_output_values[self._channels_param.name] = None
+        # The info outputs go too. Leaving them behind publishes a mixed state where the
+        # dimensions describe the last good read and the bounds describe the failed one,
+        # which is worse than publishing nothing.
+        for parameter in self._info_params:
+            self.parameter_output_values[parameter.name] = 0
         self._set_status_results(was_successful=False, result_details=details)
 
     # ------------------------------------------------------------------
@@ -549,7 +599,19 @@ class ReadEXR(SuccessFailureNode):
                 self._on_fail("OCIO mode requires a connected color_params artifact.")
                 return
 
-        render_key = (self._scan_key, entry.number, part_index, layer, ev, color_mode, tone_mapping, id(color_params))
+        render_key = (
+            self._scan_key,
+            entry.number,
+            part_index,
+            layer,
+            ev,
+            color_mode,
+            tone_mapping,
+            # The artifact's values, not its identity: an upstream OCIO node can mutate
+            # and re-emit the same object, which leaves id() unchanged and would serve a
+            # stale image for the new display.
+            _color_params_key(color_params),
+        )
         if render_key == self._render_key and self._render_outputs is not None:
             self._emit_render(self._render_outputs)
             details = f"Reused cached render of {_part_label(part, part_index)}{frame_note}"
@@ -728,6 +790,18 @@ class ReadEXR(SuccessFailureNode):
 # ---------------------------------------------------------------------------
 # Module helpers
 # ---------------------------------------------------------------------------
+
+
+def _color_params_key(color_params: ColorParamsProtocol | None) -> tuple | None:
+    """The parts of an OCIO artifact that change the rendered pixels."""
+    if color_params is None:
+        return None
+    return (
+        getattr(color_params, "source_colorspace", None),
+        getattr(color_params, "display", None),
+        getattr(color_params, "view", None),
+        getattr(color_params, "config_path", None),
+    )
 
 
 def _running_loop() -> asyncio.AbstractEventLoop | None:

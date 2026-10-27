@@ -143,6 +143,7 @@ class _Harness:
         self.load_threads: list[int] = []
         self.preview_threads: list[int] = []
         self.scan_delay = 0.0
+        self.scan_delay_by_path: dict[str, float] = {}
         self.preview_requests: list[GetPreviewForArtifactRequest] = []
         self.build_file_calls: list[dict[str, Any]] = []
         self.written: list[Path] = []
@@ -152,8 +153,9 @@ class _Harness:
     def scan_exr_header(self, file_path: str, *, header_only: bool = True) -> EXRData:  # noqa: ARG002
         self.scan_calls.append(file_path)
         self.scan_threads.append(threading.get_ident())
-        if self.scan_delay:
-            time.sleep(self.scan_delay)
+        delay = self.scan_delay_by_path.get(file_path, self.scan_delay)
+        if delay:
+            time.sleep(delay)
         return self.exr_data
 
     def load_exr_channels(self, file_path: str, part_index: int, channel_names: list[str]) -> dict[str, np.ndarray]:
@@ -245,6 +247,17 @@ def _param(node, name: str) -> Parameter:
     parameter = node.get_parameter_by_name(name)
     assert parameter is not None, name
     return parameter
+
+
+def _passthrough_ocio(rgb, color_params, tone_mapping):  # noqa: ANN001, ANN202, ARG001
+    """Stand-in for apply_color_management whose output depends on the artifact's display."""
+    return rgb, f"ocio:{getattr(color_params, 'display', '?')}"
+
+
+def _layer_options(node) -> list[str]:
+    from griptape_nodes.traits.options import Options
+
+    return [trait.choices for trait in node._layer_param.find_elements_by_type(Options)][0]
 
 
 def _was_successful(node) -> bool | None:
@@ -448,6 +461,90 @@ class TestDropdowns:
 # ---------------------------------------------------------------------------
 # Sequences
 # ---------------------------------------------------------------------------
+
+
+class TestPartLayerCoupling:
+    """Regression: the layer dropdown has to follow part_name, not stay on part 0."""
+
+    @staticmethod
+    def _two_part() -> EXRData:
+        return _make_exr_data(
+            _make_part("beauty", ("R", "G", "B")),
+            _make_part("aovs", ("diffuse.R", "diffuse.G", "diffuse.B", "spec.R", "spec.G", "spec.B")),
+        )
+
+    def _node_on_two_part(self, harness: _Harness, tmp_path: Path):
+        harness.exr_data = self._two_part()
+        harness.pixels = _make_pixels(
+            ("R", "G", "B", "diffuse.R", "diffuse.G", "diffuse.B", "spec.R", "spec.G", "spec.B")
+        )
+        node = _make_node()
+        node.set_parameter_value("path", str(_single_file(tmp_path)))
+        return node
+
+    def test_layer_choices_refresh_when_part_changes(self, harness: _Harness, tmp_path: Path) -> None:
+        node = self._node_on_two_part(harness, tmp_path)
+        node.set_parameter_value("part_name", "1: aovs")
+        assert _layer_options(node) == ["diffuse", "spec"]
+
+    def test_layer_dropdown_unhides_when_the_new_part_has_layers(self, harness: _Harness, tmp_path: Path) -> None:
+        node = self._node_on_two_part(harness, tmp_path)
+        # Part 0 has a single (root) layer, so the dropdown starts hidden.
+        assert _param(node, "layer").ui_options.get("hide") is True
+        node.set_parameter_value("part_name", "1: aovs")
+        assert _param(node, "layer").ui_options.get("hide") is not True
+
+    def test_a_layer_of_the_new_part_is_selectable(self, harness: _Harness, tmp_path: Path) -> None:
+        node = self._node_on_two_part(harness, tmp_path)
+        node.set_parameter_value("part_name", "1: aovs")
+        node.set_parameter_value("layer", "spec")
+        # Without refreshed choices the Options converter rewrites this to part 0's layer.
+        assert node.get_parameter_value("layer") == "spec"
+
+    def test_the_selected_layer_is_the_one_decoded(self, harness: _Harness, tmp_path: Path) -> None:
+        node = self._node_on_two_part(harness, tmp_path)
+        node.set_parameter_value("part_name", "1: aovs")
+        node.set_parameter_value("layer", "spec")
+        asyncio.run(node.aprocess())
+        assert _was_successful(node) is True, _result_details(node)
+        assert harness.load_calls[-1][2] == ["spec.R", "spec.G", "spec.B"]
+
+    def test_layer_resets_to_the_new_parts_default(self, harness: _Harness, tmp_path: Path) -> None:
+        node = self._node_on_two_part(harness, tmp_path)
+        node.set_parameter_value("part_name", "1: aovs")
+        # (root) does not exist on part 1, so it must fall back rather than persist.
+        assert node.get_parameter_value("layer") in ("diffuse", "spec")
+
+    def test_changing_part_does_not_rescan(self, harness: _Harness, tmp_path: Path) -> None:
+        node = self._node_on_two_part(harness, tmp_path)
+        scans = len(harness.scan_calls)
+        node.set_parameter_value("part_name", "1: aovs")
+        assert len(harness.scan_calls) == scans
+
+
+class TestRestoreBeforeScan:
+    """Regression: a saved value must survive being replayed before any scan has run."""
+
+    def test_setting_part_name_before_a_scan_does_not_raise(self, harness: _Harness) -> None:
+        node = _make_node()
+        node.set_parameter_value("part_name", "1: aovs", initial_setup=True)
+
+    def test_setting_layer_before_a_scan_does_not_raise(self, harness: _Harness) -> None:
+        node = _make_node()
+        node.set_parameter_value("layer", "spec", initial_setup=True)
+
+    def test_a_restored_part_name_survives_the_scan(self, harness: _Harness, tmp_path: Path) -> None:
+        harness.exr_data = _make_exr_data(_make_part("beauty", ("R", "G", "B")), _make_part("aovs", ("Z",)))
+        harness.pixels = _make_pixels(("R", "G", "B", "Z"))
+        node = _make_node()
+        # Workflow load order: values replayed with hooks suppressed, then execution scans.
+        node.set_parameter_value("part_name", "1: aovs", initial_setup=True)
+        node.set_parameter_value("path", str(_single_file(tmp_path)), initial_setup=True)
+        asyncio.run(node.aprocess())
+
+        assert _was_successful(node) is True, _result_details(node)
+        assert node.get_parameter_value("part_name") == "1: aovs"
+        assert node.parameter_output_values["part"].name == "aovs"
 
 
 class TestSequence:
@@ -654,6 +751,119 @@ class TestEventLoopNotBlocked:
         node.set_parameter_value("path", str(_single_file(tmp_path)))
         assert harness.scan_calls
         assert node._part_choices() == ["0: part"]
+
+
+class TestColorParamsCacheKey:
+    """Regression: an OCIO artifact mutated in place must invalidate the render cache."""
+
+    @staticmethod
+    def _params(display: str = "sRGB"):
+        params = MagicMock()
+        params.source_colorspace = "ACEScg"
+        params.display = display
+        params.view = "ACES"
+        params.config_path = None
+        return params
+
+    def _node_with_ocio(self, harness: _Harness, tmp_path: Path, params):
+        node = _make_node(ocio_available=True)
+        node.set_parameter_value("path", str(_single_file(tmp_path)))
+        node.set_parameter_value("color_mode", "ocio")
+        node.set_parameter_value("color_params", params)
+        return node
+
+    def test_mutating_the_artifact_in_place_rerenders(self, harness: _Harness, tmp_path: Path) -> None:
+        params = self._params()
+        node = self._node_with_ocio(harness, tmp_path, params)
+        with patch(f"{_NODE_MODULE}.apply_color_management", side_effect=_passthrough_ocio) as ocio:
+            asyncio.run(node.aprocess())
+            assert _was_successful(node) is True, _result_details(node)
+            renders = ocio.call_count
+
+            # An upstream node re-emits the same object with a different display.
+            params.display = "Rec709"
+            asyncio.run(node.aprocess())
+
+            assert ocio.call_count == renders + 1, "cache hit served a stale image"
+
+    def test_an_unchanged_artifact_still_hits_the_cache(self, harness: _Harness, tmp_path: Path) -> None:
+        node = self._node_with_ocio(harness, tmp_path, self._params())
+        with patch(f"{_NODE_MODULE}.apply_color_management", side_effect=_passthrough_ocio) as ocio:
+            asyncio.run(node.aprocess())
+            renders = ocio.call_count
+            asyncio.run(node.aprocess())
+            assert ocio.call_count == renders
+
+
+class TestConcurrentPathChanges:
+    """Regression: a slow scan finishing late must not clobber a newer path."""
+
+    @pytest.mark.asyncio
+    async def test_the_last_path_set_wins(self, harness: _Harness, tmp_path: Path) -> None:
+        slow = _single_file(tmp_path)
+        fast = tmp_path / "second.exr"
+        fast.write_bytes(b"")
+
+        harness.scan_delay_by_path = {str(slow): 0.25}
+        node = _make_node()
+        node.set_parameter_value("path", str(slow))
+        await asyncio.sleep(0.02)
+        node.set_parameter_value("path", str(fast))
+
+        await node.wait_for_pending_scan()
+        await asyncio.sleep(0.4)
+
+        assert node._scan_key == str(fast)
+
+    @pytest.mark.asyncio
+    async def test_a_superseded_scan_does_not_render_from_the_old_file(self, harness: _Harness, tmp_path: Path) -> None:
+        slow = _single_file(tmp_path)
+        fast = tmp_path / "second.exr"
+        fast.write_bytes(b"")
+
+        harness.scan_delay_by_path = {str(slow): 0.25}
+        node = _make_node()
+        node.set_parameter_value("path", str(slow))
+        await asyncio.sleep(0.02)
+        node.set_parameter_value("path", str(fast))
+        await node.wait_for_pending_scan()
+        await asyncio.sleep(0.4)
+        await node.aprocess()
+
+        assert _was_successful(node) is True, _result_details(node)
+        assert node.parameter_output_values["part"].file_path == str(fast)
+
+
+class TestFailureClearsOutputs:
+    """Regression: a failed read must not leave the previous run's info outputs published."""
+
+    def _node_on_gappy_sequence(self, harness: _Harness, tmp_path: Path):
+        paths = _frames(tmp_path, range(1001, 1004))
+        harness.sequence = _make_sequence(paths, start=1001, missing=[1002])
+        node = _make_node()
+        node.set_parameter_value("path", str(tmp_path / "frame.####.exr"))
+        return node
+
+    def test_info_outputs_are_cleared_on_failure(self, harness: _Harness, tmp_path: Path) -> None:
+        node = self._node_on_gappy_sequence(harness, tmp_path)
+        asyncio.run(node.aprocess())
+        assert _was_successful(node) is True, _result_details(node)
+
+        node.set_parameter_value("frame", 1002)
+        asyncio.run(node.aprocess())
+
+        assert _was_successful(node) is False
+        for name in ("image_width", "image_height", "part_count", "channel_count"):
+            assert not node.parameter_output_values.get(name), f"{name} kept a stale value"
+
+    def test_sequence_bounds_are_cleared_on_failure(self, harness: _Harness, tmp_path: Path) -> None:
+        node = self._node_on_gappy_sequence(harness, tmp_path)
+        asyncio.run(node.aprocess())
+        node.set_parameter_value("frame", 1002)
+        asyncio.run(node.aprocess())
+
+        for name in ("first_frame", "last_frame", "frame_count"):
+            assert not node.parameter_output_values.get(name), f"{name} kept a stale value"
 
 
 class TestPreview:
