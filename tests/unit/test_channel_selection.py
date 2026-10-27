@@ -2,7 +2,17 @@
 
 from __future__ import annotations
 
-from griptape_nodes_openexr.exr.channel_selection import select_alpha_channel, select_display_channels
+from griptape_nodes_openexr.exr.channel_selection import (
+    order_channels_for_display,
+    select_alpha_channel,
+    select_display_channels,
+)
+from griptape_nodes_openexr.exr.exr_types import EXRChannelInfo, PixelType
+
+
+def _ordered_names(names: list[str]) -> list[str]:
+    channels = [EXRChannelInfo(name=n, pixel_type=PixelType.HALF, x_sampling=1, y_sampling=1) for n in names]
+    return [ch.name for ch in order_channels_for_display(channels)]
 
 
 class TestExactRGB:
@@ -123,3 +133,29 @@ class TestAlphaSelection:
             )
             is None
         )
+
+
+class TestOrderChannelsForDisplay:
+    def test_alphabetical_rgba_becomes_rgba(self) -> None:
+        assert _ordered_names(["A", "B", "G", "R"]) == ["R", "G", "B", "A"]
+
+    def test_extra_channels_follow_rgba_in_stored_order(self) -> None:
+        assert _ordered_names(["A", "B", "G", "R", "Z", "N"]) == ["R", "G", "B", "A", "Z", "N"]
+
+    def test_layers_keep_stored_order_and_sort_within(self) -> None:
+        names = ["A", "B", "G", "R", "beauty.A", "beauty.B", "beauty.G", "beauty.R", "depth.Z"]
+        assert _ordered_names(names) == [
+            "R", "G", "B", "A",
+            "beauty.R", "beauty.G", "beauty.B", "beauty.A",
+            "depth.Z",
+        ]  # fmt: skip
+
+    def test_interleaved_layers_are_regrouped(self) -> None:
+        names = ["A", "B", "Beauty.A", "Beauty.B", "Beauty.G", "Beauty.R", "G", "R"]
+        assert _ordered_names(names) == ["R", "G", "B", "A", "Beauty.R", "Beauty.G", "Beauty.B", "Beauty.A"]
+
+    def test_non_rgba_layer_unchanged(self) -> None:
+        assert _ordered_names(["X", "Y", "Z"]) == ["X", "Y", "Z"]
+
+    def test_empty(self) -> None:
+        assert _ordered_names([]) == []

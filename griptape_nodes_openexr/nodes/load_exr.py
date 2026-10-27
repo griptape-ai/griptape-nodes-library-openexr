@@ -35,6 +35,7 @@ from griptape_nodes.retained_mode.events.config_events import GetConfigValueRequ
 from griptape_nodes.retained_mode.griptape_nodes import GriptapeNodes
 from griptape_nodes.traits.file_system_picker import FileSystemPicker
 
+from griptape_nodes_openexr.exr.channel_selection import order_channels_for_display
 from griptape_nodes_openexr.exr.exr_header_artifact import (
     EXRChannelArtifact,
     EXRPartArtifact,
@@ -501,7 +502,7 @@ class LoadEXR(SuccessFailureNode):
             self.parameter_output_values[artifact_param.name] = artifact
 
             # Channel outputs for this part
-            for ch in part.channels:
+            for ch in order_channels_for_display(part.channels):
                 ch_key = _sanitize_key(ch.name)
                 sampling = "" if (ch.x_sampling == 1 and ch.y_sampling == 1) else f" [{ch.x_sampling}×{ch.y_sampling}]"
                 ch_param = Parameter(
@@ -531,7 +532,7 @@ class LoadEXR(SuccessFailureNode):
             return
 
         part = exr_data.parts[0]
-        for ch in part.channels:
+        for ch in order_channels_for_display(part.channels):
             ch_key = _sanitize_key(ch.name)
             sampling = "" if (ch.x_sampling == 1 and ch.y_sampling == 1) else f" [{ch.x_sampling}×{ch.y_sampling}]"
             param = Parameter(
