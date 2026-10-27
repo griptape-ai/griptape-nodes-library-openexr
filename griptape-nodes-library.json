@@ -41,6 +41,17 @@
     ],
     "nodes": [
         {
+            "class_name": "ReadEXR",
+            "file_path": "griptape_nodes_openexr/nodes/read_exr.py",
+            "metadata": {
+                "category": "exr",
+                "description": "Read an EXR file or frame sequence and output a viewable image plus the part and channel descriptors",
+                "display_name": "Read EXR",
+                "icon": "image-down",
+                "group": "load"
+            }
+        },
+        {
             "class_name": "LoadEXR",
             "file_path": "griptape_nodes_openexr/nodes/load_exr.py",
             "metadata": {

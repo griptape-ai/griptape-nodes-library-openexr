@@ -1,8 +1,69 @@
 # OpenEXR Library for Griptape Nodes
 
-Professional OpenEXR support for Griptape Nodes, designed for VFX and HDR pipelines. Load EXR files and inspect their structure, load an EXR frame sequence, display individual parts or manually-assembled channels as tone-mapped images, convert a sequence to a preview video, and save images or channel data back to EXR.
+Professional OpenEXR support for Griptape Nodes, designed for VFX and HDR pipelines. Read an EXR file or frame sequence straight to a viewable image, inspect a file's structure, load an EXR frame sequence, display individual parts or manually-assembled channels as tone-mapped images, convert a sequence to a preview video, and save images or channel data back to EXR.
+
+Start with **Read EXR**. The other nodes are there when you need the structure, the lower-level sequence controls, or explicit per-channel wiring.
 
 ## Nodes
+
+### Read EXR
+
+Reads an EXR file or frame sequence and outputs a viewable image from a single node. This is the front door for most work: **Load EXR** -> **Get From List** -> **Display EXR Part** collapses into one node here. Modelled on Nuke's Read node.
+
+The `path` input accepts either a path or a connected `Sequence`. A bare filename comes back from the scan as a one-frame sequence, so a single file and a 200-frame render use the same input and the same wiring.
+
+An **Open in external viewer** button opens the source EXR in a configured HDR viewer (or the OS default) after the node has been run. See [Library Settings](#library-settings).
+
+**Inputs**
+
+| Parameter      | Type              | Description                                                                                                                  |
+| -------------- | ----------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `path`         | `Sequence \| str` | Path to an `.exr` file, or a frame pattern such as `render.####.exr`. A connected `Sequence` is used as-is.                  |
+| `part_name`    | `str`             | Which part to read, as `"0: rgba"`, `"1: depth"`. Populated after the scan, hidden for single-part files.                    |
+| `layer`        | `str`             | Which layer of the part to render. Populated after the scan, hidden when the part has one layer.                             |
+| `frame`        | `int`             | Absolute frame number, matching the filenames on disk. Hidden for a single file.                                             |
+| `exposure`     | `float`           | Exposure in EV stops applied before tone mapping. Range -10 to +10, default `0.0`. In the Color Management group.            |
+| `color_mode`   | `str`             | `basic` (local tone mapping) or `ocio` (connected `OCIOColorParamsArtifact`). Defaults to `ocio` when OpenColorIO is loaded. |
+| `tone_mapping` | `str`             | `filmic` (Narkowicz 2015 curve) or `linear` (clamp to [0, 1]). Default `filmic`. Used when `color_mode` is `basic`.          |
+
+**Outputs**
+
+| Parameter                      | Type                       | Description                                                       |
+| ------------------------------ | -------------------------- | ----------------------------------------------------------------- |
+| `image`                        | `ImageUrlArtifact`         | 8-bit sRGB (or RGBA) PNG of the current frame                     |
+| `part`                         | `EXRPartArtifact`          | Descriptor for the part that was read, carrying the float data on |
+| `channels`                     | `list[EXRChannelArtifact]` | One descriptor per channel in that part                           |
+| `output_file`                  | `str`                      | Path to the saved PNG                                             |
+| `image_width` / `image_height` | `int`                      | Dimensions from the data window                                   |
+| `part_count` / `channel_count` | `int`                      | Parts in the file, channels in the part that was read             |
+| `first_frame` / `last_frame`   | `int`                      | Sequence bounds; `0` for a single file                            |
+| `frame_count`                  | `int`                      | Frames in the sequence; `1` for a single file                     |
+
+The `image` output is a rendered 8-bit PNG rather than the `.exr` itself, because the standard library's image nodes cannot open an EXR and have no float or greater-than-8-bit path. The float data travels on `part` and `channels` instead, so a downstream **Display EXR Channel** still gets the real pixels.
+
+#### Iterating a sequence
+
+Outputs are scalar: the node emits one frame per execution and never a whole-sequence list. Iteration belongs to the graph. Wire **For Loop Start**'s `index` output into `frame` and drive the loop from `first_frame` and `last_frame`:
+
+```
+Read EXR.first_frame -> For Loop Start.start
+Read EXR.last_frame  -> For Loop Start.end
+For Loop Start.index -> Read EXR.frame
+```
+
+While a connection drives `frame`, the slider renders disabled but live, so it doubles as a frame readout during playback. Output filenames carry the frame number (`read_exr.1001.png`), so a loop leaves a clean numbered set.
+
+An out-of-range `frame` clamps to the sequence bounds and says so in the result details rather than failing. A frame that is absent from the sequence's entries fails loudly, naming the frame: the scan already applied your `MissingItemPolicy`, so deciding it again here would override you. Set `SKIP` or `FILL_NEAREST` at the scan if you want gaps tolerated.
+
+#### Relationship to the other nodes
+
+All of these coexist. **Read EXR** is the recommended starting point; the others keep the jobs it deliberately does not do.
+
+- **Load EXR** is the structural inspector: header-only, the full set of header outputs, dynamic per-part and per-channel groups.
+- **Load EXR Sequence** is the lower-level sequence node: `on_mismatch`, a thread count, and a header-only pass over hundreds of frames with no rendering.
+- **Display EXR Channel** is still the only way to map arbitrary channels onto R/G/B/A slots.
+
+______________________________________________________________________
 
 ### Load EXR
 
@@ -209,6 +270,8 @@ Settings are configured in the engine under the `openexr` category.
 | `openexr.header_only`       | `true`  | When `true`, **Load EXR** reads only the file header (fast). Set to `false` to read accurate per-channel pixel types at the cost of loading pixel data into memory.                             |
 | `openexr.viewer_executable` | `""`    | Full path to an external HDR viewer executable (e.g. `/usr/bin/djv`, `/Applications/Nuke15.0v1/Nuke15.0v1.app/Contents/MacOS/Nuke15.0v1`). When empty, the OS default file association is used. |
 | `openexr.viewer_args`       | `""`    | Additional command-line arguments passed to the viewer before the file path, e.g. `--hdr --linear`. Parsed with shell-style quoting rules.                                                      |
+
+Only **Load EXR** honours `openexr.header_only`. **Load EXR Sequence** always scans header-only, since its output carries no pixel data and a full scan would only buy slower, discarded reads. **Read EXR** always reads pixels, since decoding the selected part is the whole job.
 
 The viewer is launched fire-and-forget — clicking the button never blocks the canvas.
 
