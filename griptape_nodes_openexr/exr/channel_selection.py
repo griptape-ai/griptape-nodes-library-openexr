@@ -3,6 +3,38 @@
 from __future__ import annotations
 
 from collections import Counter
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+
+    from griptape_nodes_openexr.exr.exr_types import EXRChannelInfo
+
+_RGBA_RANK = {"R": 0, "G": 1, "B": 2, "A": 3}
+
+
+def order_channels_for_display(channels: Sequence[EXRChannelInfo]) -> list[EXRChannelInfo]:
+    """Order channels for display: grouped by layer, R, G, B, A first within each layer.
+
+    EXR files store channels alphabetically (A, B, G, R). Layers keep their
+    stored order; within a layer, non-RGBA channels follow RGBA in stored order.
+
+    Args:
+        channels: Channels in the order the file stores them.
+
+    Returns:
+        A new list in display order.
+    """
+    layer_order: dict[str, int] = {}
+    for ch in channels:
+        layer_order.setdefault(ch.name.rpartition(".")[0], len(layer_order))
+
+    def sort_key(indexed: tuple[int, EXRChannelInfo]) -> tuple[int, int, int]:
+        index, ch = indexed
+        layer, _, suffix = ch.name.rpartition(".")
+        return (layer_order[layer], _RGBA_RANK.get(suffix, len(_RGBA_RANK)), index)
+
+    return [ch for _, ch in sorted(enumerate(channels), key=sort_key)]
 
 
 def select_display_channels(channel_names: list[str]) -> list[str] | None:

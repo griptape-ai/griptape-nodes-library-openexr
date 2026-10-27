@@ -115,14 +115,27 @@ class TestAfterValueSet:
     def test_single_part_channels_populated(self, mock_config) -> None:
         node = _make_node()
         node.after_value_set(node._file_path_param, str(SINGLE_PART))
-        assert len(node._channels_group.children) == 4  # A, B, G, R
+        assert len(node._channels_group.children) == 4
         assert node._parts_group.children == []
+
+    def test_single_part_channels_listed_rgba(self, mock_config) -> None:
+        node = _make_node()
+        node.after_value_set(node._file_path_param, str(SINGLE_PART))
+        names = [c.name for c in node._channels_group.children]
+        assert names == ["channel_R", "channel_G", "channel_B", "channel_A"]
 
     def test_multi_part_parts_populated(self, mock_config) -> None:
         node = _make_node()
         node.after_value_set(node._file_path_param, str(MULTI_PART))
         assert len(node._parts_group.children) == 3  # rgba, depth, normal
         assert node._channels_group.children == []
+
+    def test_multi_part_channels_listed_rgba(self, mock_config) -> None:
+        node = _make_node()
+        node.after_value_set(node._file_path_param, str(MULTI_PART))
+        first_part = node._parts_group.children[0]
+        suffixes = [c.name.rpartition("_")[2] for c in first_part.children if c.name.startswith("channel_")]
+        assert suffixes == ["R", "G", "B", "A"]
 
     def test_empty_path_clears_groups(self, mock_config) -> None:
         node = _make_node()
