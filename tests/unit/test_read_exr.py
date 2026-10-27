@@ -551,6 +551,23 @@ class TestCaching:
         asyncio.run(node.aprocess())
         assert len(harness.load_calls) == loads
 
+    def test_cache_hit_still_emits_the_outputs(self, harness: _Harness, tmp_path: Path) -> None:
+        node = _make_node()
+        node.set_parameter_value("path", str(_single_file(tmp_path)))
+        asyncio.run(node.aprocess())
+        loads = len(harness.load_calls)
+
+        # The engine clears output values whenever it marks a node unresolved, which
+        # happens between runs. A cache hit has to re-emit, not just report success.
+        node.clear_node()
+        asyncio.run(node.aprocess())
+
+        assert len(harness.load_calls) == loads
+        assert isinstance(node.parameter_output_values["image"], ImageUrlArtifact)
+        assert isinstance(node.parameter_output_values["part"], EXRPartArtifact)
+        assert node.parameter_output_values["channels"]
+        assert node.parameter_output_values["image_width"] == WIDTH
+
     def test_changing_exposure_redecodes(self, harness: _Harness, tmp_path: Path) -> None:
         node = _make_node()
         node.set_parameter_value("path", str(_single_file(tmp_path)))

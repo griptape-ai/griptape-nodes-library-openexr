@@ -96,8 +96,12 @@ class ReadEXR(SuccessFailureNode):
         self._scan_key: str | None = None
         self._cached_sequence: Sequence | None = None
         self._cached_exr_data: EXRData | None = None
-        # Keyed on everything that changes the rendered pixels.
+        # Keyed on everything that changes the rendered pixels. The outputs are cached
+        # alongside the key because the engine clears parameter_output_values whenever it
+        # marks the node unresolved, so a cache hit has to re-emit rather than assume the
+        # previous run's values are still there.
         self._render_key: tuple | None = None
+        self._render_outputs: dict[str, Any] | None = None
         self._current_exr_path: str | None = None
 
         self._path_param = Parameter(
@@ -323,6 +327,7 @@ class ReadEXR(SuccessFailureNode):
             self._cached_sequence = None
             self._cached_exr_data = None
             self._render_key = None
+            self._render_outputs = None
             return False
         if key == self._scan_key:
             return False
@@ -333,6 +338,7 @@ class ReadEXR(SuccessFailureNode):
             self._cached_sequence = None
             self._cached_exr_data = None
             self._render_key = None
+            self._render_outputs = None
             return False
 
         exr_data = scan_exr_header(sequence.entries[0].path, header_only=True)
@@ -342,6 +348,7 @@ class ReadEXR(SuccessFailureNode):
         self._cached_exr_data = exr_data
         # Any cached render belongs to the file that just went away.
         self._render_key = None
+        self._render_outputs = None
 
         self._apply_scan_to_ui(sequence, exr_data)
         return True
@@ -435,6 +442,7 @@ class ReadEXR(SuccessFailureNode):
 
     def _on_fail(self, details: str) -> None:
         self._render_key = None
+        self._render_outputs = None
         self.parameter_output_values[self._image_param.name] = None
         self.parameter_output_values[self._part_param.name] = None
         self.parameter_output_values[self._channels_param.name] = None
@@ -497,7 +505,8 @@ class ReadEXR(SuccessFailureNode):
                 return
 
         render_key = (self._scan_key, entry.number, part_index, layer, ev, color_mode, tone_mapping, id(color_params))
-        if render_key == self._render_key:
+        if render_key == self._render_key and self._render_outputs is not None:
+            self._emit_render(self._render_outputs)
             details = f"Reused cached render of {_part_label(part, part_index)}{frame_note}"
             self._set_status_results(was_successful=True, result_details=details)
             return
@@ -570,16 +579,19 @@ class ReadEXR(SuccessFailureNode):
             for channel in part.channels
         ]
 
-        self.parameter_output_values[self._image_param.name] = artifact
-        self.publish_update_to_parameter(self._image_param.name, artifact)
-        self.parameter_output_values[self._part_param.name] = part_artifact
-        self.parameter_output_values[self._channels_param.name] = channel_artifacts
-        self.parameter_output_values[self._image_width_param.name] = part.width
-        self.parameter_output_values[self._image_height_param.name] = part.height
-        self.parameter_output_values[self._part_count_param.name] = len(exr_data.parts)
-        self.parameter_output_values[self._channel_count_param.name] = len(part.channels)
+        outputs = {
+            self._image_param.name: artifact,
+            self._part_param.name: part_artifact,
+            self._channels_param.name: channel_artifacts,
+            self._image_width_param.name: part.width,
+            self._image_height_param.name: part.height,
+            self._part_count_param.name: len(exr_data.parts),
+            self._channel_count_param.name: len(part.channels),
+        }
+        self._emit_render(outputs)
 
         self._render_key = render_key
+        self._render_outputs = outputs
 
         alpha_info = f", alpha: {alpha_channel}" if alpha_channel else ""
         details = (
@@ -588,6 +600,12 @@ class ReadEXR(SuccessFailureNode):
         )
         self._set_status_results(was_successful=True, result_details=details)
         logger.info("ReadEXR '%s': %s", self.name, details)
+
+    def _emit_render(self, outputs: dict[str, Any]) -> None:
+        """Publish a render's outputs, whether it was just computed or came from the cache."""
+        for name, value in outputs.items():
+            self.parameter_output_values[name] = value
+        self.publish_update_to_parameter(self._image_param.name, outputs[self._image_param.name])
 
     def _select_entry(self, sequence: Sequence, *, is_sequence: bool) -> tuple[SequenceEntry | None, str]:
         """Pick the entry for the requested frame.
