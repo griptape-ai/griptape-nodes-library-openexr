@@ -36,6 +36,7 @@ def order_channels_for_display(channels: Sequence[EXRChannelInfo]) -> list[EXRCh
 
     return [ch for _, ch in sorted(enumerate(channels), key=sort_key)]
 
+
 # Layer name used for channels with no dot-separated prefix (R, G, B, A and friends).
 # EXR calls these the root layer; the dropdown needs a label for them.
 ROOT_LAYER = "(root)"

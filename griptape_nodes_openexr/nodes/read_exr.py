@@ -34,6 +34,7 @@ from griptape_nodes_openexr.exr.channel_selection import (
     channels_in_layer,
     default_layer,
     list_layers,
+    order_channels_for_display,
     select_alpha_channel,
     select_display_channels,
 )
@@ -671,7 +672,8 @@ class ReadEXR(SuccessFailureNode):
         )
         channel_artifacts = [
             EXRChannelArtifact(file_path=entry.path, part_index=part_index, channel=channel)
-            for channel in part.channels
+            # R, G, B, A rather than the alphabetical order EXR stores, matching LoadEXR.
+            for channel in order_channels_for_display(part.channels)
         ]
 
         outputs = {

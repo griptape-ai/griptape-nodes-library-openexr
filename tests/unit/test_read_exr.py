@@ -408,6 +408,32 @@ class TestSingleFile:
 # ---------------------------------------------------------------------------
 
 
+class TestChannelOrder:
+    def test_channels_are_emitted_in_rgba_order(self, harness: _Harness, tmp_path: Path) -> None:
+        # EXR stores channels alphabetically. #52 fixed LoadEXR to list them R, G, B, A;
+        # ReadEXR's channels output is the same listing and follows the same rule.
+        harness.exr_data = _make_exr_data(_make_part("", ("A", "B", "G", "R")))
+        harness.pixels = _make_pixels(("A", "B", "G", "R"))
+        node = _make_node()
+        node.set_parameter_value("path", str(_single_file(tmp_path)))
+        asyncio.run(node.aprocess())
+
+        assert _was_successful(node) is True, _result_details(node)
+        emitted = [channel.channel.name for channel in node.parameter_output_values["channels"]]
+        assert emitted == ["R", "G", "B", "A"]
+
+    def test_layers_are_grouped_in_the_channels_output(self, harness: _Harness, tmp_path: Path) -> None:
+        names = ("A", "B", "G", "R", "depth.Z")
+        harness.exr_data = _make_exr_data(_make_part("", names))
+        harness.pixels = _make_pixels(names)
+        node = _make_node()
+        node.set_parameter_value("path", str(_single_file(tmp_path)))
+        asyncio.run(node.aprocess())
+
+        emitted = [channel.channel.name for channel in node.parameter_output_values["channels"]]
+        assert emitted == ["R", "G", "B", "A", "depth.Z"]
+
+
 class TestDropdowns:
     def test_multi_part_populates_part_choices(self, harness: _Harness, tmp_path: Path) -> None:
         harness.exr_data = _make_exr_data(
