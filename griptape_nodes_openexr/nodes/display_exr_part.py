@@ -160,8 +160,6 @@ class DisplayEXRPart(SuccessFailureNode):
             png_bytes, tone_mode = render_part_png(
                 file_path=part.file_path,
                 part_index=part.part_index,
-                width=part.width,
-                height=part.height,
                 selected=selected,
                 alpha_channel=alpha_channel,
                 ev=ev,

@@ -25,8 +25,6 @@ def render_part_png(  # noqa: PLR0913
     *,
     file_path: str,
     part_index: int,
-    width: int,
-    height: int,
     selected: list[str],
     alpha_channel: str | None,
     ev: float = 0.0,
@@ -38,8 +36,6 @@ def render_part_png(  # noqa: PLR0913
     Args:
         file_path: Engine path to the EXR file.
         part_index: Zero-based part index within the file.
-        width: Part width in pixels, used to reshape the alpha plane.
-        height: Part height in pixels, used to reshape the alpha plane.
         selected: 1 or 3 channel names to map onto RGB, as returned by
             `select_display_channels`.
         alpha_channel: Channel to use as alpha, or None for RGB output.
@@ -75,7 +71,7 @@ def render_part_png(  # noqa: PLR0913
     uint8_rgb = to_uint8(rgb)
 
     if alpha_channel:
-        alpha_plane = np.clip(pixels[alpha_channel].reshape(height, width), 0.0, 1.0)
+        alpha_plane = np.clip(pixels[alpha_channel].reshape(uint8_rgb.shape[:2]), 0.0, 1.0)
         alpha_uint8 = (alpha_plane * 255.0 + 0.5).astype(np.uint8)[..., np.newaxis]
         uint8 = np.concatenate([uint8_rgb, alpha_uint8], axis=-1)
     else:

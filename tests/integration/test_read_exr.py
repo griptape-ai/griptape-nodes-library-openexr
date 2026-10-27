@@ -329,9 +329,8 @@ class TestViewerButton:
 def _write_frames(tmp_path: Path, numbers: range) -> list[Path]:
     """Write a real EXR per frame, each a flat grey whose value encodes its frame.
 
-    Same layout throughout, which is what ReadEXR assumes of a sequence: it scans
-    one header per sequence and reuses it across frames. The per-frame grey level
-    is what makes "the right frame was decoded" visible in the output pixels.
+    Same layout throughout. The per-frame grey level is what makes "the right
+    frame was decoded" visible in the output pixels.
     """
     paths = []
     for offset, number in enumerate(numbers):
@@ -365,6 +364,31 @@ class TestSequenceOverRealFiles:
         assert part.file_path == str(paths[2])
         # Each frame is a brighter grey than the last.
         assert third.sum() > first.sum()
+
+    def test_a_frame_with_its_own_data_window_is_read_at_its_own_size(self, engine: _Engine, tmp_path: Path) -> None:
+        import asyncio
+
+        # CG renders auto-crop the data window per frame, so frames of one sequence
+        # differ in size. With alpha selected, rendering against frame 1's header
+        # would reshape this frame's alpha to the wrong size.
+        paths = []
+        for number, (height, width) in zip((1001, 1002), ((8, 8), (4, 6)), strict=True):
+            value = np.full((height, width), 0.5, dtype=np.float32)
+            path = tmp_path / f"frame.{number:04d}.exr"
+            write_exr_channels(str(path), dict.fromkeys("RGBA", value), pixel_type="float")
+            paths.append(path)
+        node = _make_node()
+        node.set_parameter_value("path", _sequence_dict(paths, start=1001))
+        node.set_parameter_value("frame", 1002)
+        asyncio.run(_run(node))
+
+        assert _was_successful(node) is True, _result_details(node)
+        assert _rendered(node).shape == (4, 6, 4)
+        assert node.parameter_output_values["image_width"] == 6
+        assert node.parameter_output_values["image_height"] == 4
+        part = node.parameter_output_values["part"]
+        assert (part.width, part.height) == (6, 4)
+        assert part.file_path == str(paths[1])
 
     def test_bounds_outputs_describe_the_sequence(self, engine: _Engine, tmp_path: Path) -> None:
         import asyncio

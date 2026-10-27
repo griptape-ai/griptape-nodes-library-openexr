@@ -329,7 +329,8 @@ class ReadEXR(SuccessFailureNode):
             # The handler for SetParameterValueRequest is synchronous, so whatever happens
             # here happens on the engine's event loop. Scanning a 4K header takes about
             # 1.8s and the preview request blocks until the provider returns, so both go
-            # to a worker thread and the setter returns immediately.
+            # to a worker thread and the setter returns immediately. The scan result is
+            # adopted back on the loop in between, so node state is only written there.
             if _running_loop() is None:
                 # Bootstrap and worker threads have no loop to protect. Scanning inline
                 # keeps the dropdowns populated for callers that set values that way.
@@ -337,10 +338,10 @@ class ReadEXR(SuccessFailureNode):
                 return
             previous = self._pending_scan
             if previous is not None and not previous.done():
-                # Superseded. The thread it is on cannot be interrupted, so the result is
-                # discarded by _adopt_if_current rather than by cancelling here.
+                # Superseded. Cancelling stops it adopting; the scan already on a worker
+                # thread runs to completion and its result is dropped.
                 previous.cancel()
-            self._pending_scan = asyncio.ensure_future(to_thread(self._scan_and_preview, value))
+            self._pending_scan = asyncio.ensure_future(self._ascan_and_preview(value))
 
     async def wait_for_pending_scan(self) -> None:
         """Await the background scan started by `after_value_set`, if one is running.
@@ -353,8 +354,22 @@ class ReadEXR(SuccessFailureNode):
             self._pending_scan = None
             await asyncio.shield(task)
 
+    async def _ascan_and_preview(self, raw_path: Any) -> None:
+        """Scan and request a canvas preview, with only the blocking calls off the loop.
+
+        Swallows its own failures: a bad path must not break the value being set.
+        """
+        try:
+            scanned = await to_thread(self._scan_blocking, raw_path)
+        except Exception:
+            logger.warning("ReadEXR '%s': failed to scan '%s'", self.name, raw_path, exc_info=True)
+            return
+        if not self._adopt_if_current(raw_path, scanned):
+            return
+        await to_thread(self._request_canvas_preview)
+
     def _scan_and_preview(self, raw_path: Any) -> None:
-        """Scan and request a canvas preview. Synchronous; runs on a worker thread.
+        """Scan and request a canvas preview inline, for callers with no event loop.
 
         Swallows its own failures: a bad path must not break the value being set.
         """
@@ -398,7 +413,7 @@ class ReadEXR(SuccessFailureNode):
         self._render_outputs = None
 
     def _scan_blocking(self, raw_path: Any) -> tuple[str, Sequence, EXRData] | None:
-        """Resolve `raw_path` and read its header. Returns None when there is nothing to read.
+        """Resolve `raw_path` and read its first entry's header. Returns None when there is nothing to read.
 
         Synchronous and slow (a 4K multi-part header is ~1.8s), so callers on the event
         loop run it through `to_thread`. Reads `self._scan_key` to skip a redundant scan
@@ -617,12 +632,31 @@ class ReadEXR(SuccessFailureNode):
             self._set_status_results(was_successful=True, result_details=details)
             return
 
+        # The cached scan is frame 1's header, which drives the dropdowns. Each frame
+        # carries its own data window and channel list, so the frame being read
+        # supplies its own.
+        if entry.path != sequence.entries[0].path:
+            try:
+                frame_data = await to_thread(scan_exr_header, entry.path, header_only=True)
+            except (ValueError, RuntimeError) as e:
+                self._on_fail(f"Failed to read the header of{frame_note}: {e}")
+                return
+            # Matched by name as well as index: a frame that drops a part shifts the
+            # ones after it, and reading by index alone would render the wrong one.
+            if part_index >= len(frame_data.parts) or frame_data.parts[part_index].header.name != part.header.name:
+                self._on_fail(f"Part '{part_name}' is not in{frame_note}")
+                return
+            exr_data = frame_data
+            part = frame_data.parts[part_index]
+
         self._current_exr_path = entry.path
 
         channel_names = [channel.name for channel in part.channels]
         candidates = channels_in_layer(channel_names, layer) if layer else channel_names
         if not candidates:
-            candidates = channel_names
+            # The layer dropdown is built from frame 1, so a later frame can lack it.
+            self._on_fail(f"Layer '{layer}' is not in {_part_label(part, part_index)}{frame_note}")
+            return
         selected = select_display_channels(candidates)
         if selected is None:
             self._on_fail(f"No channels found in {_part_label(part, part_index)}")
@@ -636,8 +670,6 @@ class ReadEXR(SuccessFailureNode):
                 self._render_png,
                 entry.path,
                 part_index,
-                part.width,
-                part.height,
                 selected,
                 alpha_channel,
                 ev,
@@ -702,8 +734,6 @@ class ReadEXR(SuccessFailureNode):
         self,
         file_path: str,
         part_index: int,
-        width: int,
-        height: int,
         selected: list[str],
         alpha_channel: str | None,
         ev: float,
@@ -719,8 +749,6 @@ class ReadEXR(SuccessFailureNode):
         return render_part_png(
             file_path=file_path,
             part_index=part_index,
-            width=width,
-            height=height,
             selected=selected,
             alpha_channel=alpha_channel,
             ev=ev,

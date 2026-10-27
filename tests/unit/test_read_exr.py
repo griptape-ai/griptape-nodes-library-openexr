@@ -137,6 +137,7 @@ class _Harness:
     def __init__(self, tmp_path: Path) -> None:
         self.tmp_path = tmp_path
         self.exr_data = _make_exr_data()
+        self.exr_data_by_path: dict[str, EXRData] = {}
         self.pixels = _make_pixels()
         self.sequence: dict | None = None
         self.connected_params: set[str] = set()
@@ -160,7 +161,7 @@ class _Harness:
         delay = self.scan_delay_by_path.get(file_path, self.scan_delay)
         if delay:
             time.sleep(delay)
-        return self.exr_data
+        return self.exr_data_by_path.get(file_path, self.exr_data)
 
     def load_exr_channels(self, file_path: str, part_index: int, channel_names: list[str]) -> dict[str, np.ndarray]:
         self.load_calls.append((file_path, part_index, list(channel_names)))
@@ -678,7 +679,8 @@ class TestCaching:
 
         node.set_parameter_value("frame", 1003)
         asyncio.run(node.aprocess())
-        assert len(harness.scan_calls) == scans_after_first
+        # The sequence scan is reused; only the new frame's own header is read.
+        assert harness.scan_calls[scans_after_first:] == [str(paths[2])]
         assert len(harness.load_calls) == loads_after_first + 1
 
     def test_rerun_with_identical_inputs_does_not_redecode(self, harness: _Harness, tmp_path: Path) -> None:
@@ -758,6 +760,25 @@ class TestEventLoopNotBlocked:
         assert loop_thread not in harness.scan_threads, "header scan ran on the event loop thread"
         assert harness.preview_threads, "no preview was requested"
         assert loop_thread not in harness.preview_threads, "preview request blocked the event loop thread"
+
+    @pytest.mark.asyncio
+    async def test_value_set_scan_is_adopted_on_the_event_loop(self, harness: _Harness, tmp_path: Path) -> None:
+        # Only the blocking calls go to a worker. Node state is written on the loop,
+        # where it cannot interleave with a part_name or path change.
+        loop_thread = threading.get_ident()
+        node = _make_node()
+        adopt_threads: list[int] = []
+        original = node._adopt_scan
+
+        def _recording_adopt(*args: Any) -> None:
+            adopt_threads.append(threading.get_ident())
+            original(*args)
+
+        with patch.object(node, "_adopt_scan", side_effect=_recording_adopt):
+            node.set_parameter_value("path", str(_single_file(tmp_path)))
+            await node.wait_for_pending_scan()
+
+        assert adopt_threads == [loop_thread]
 
     @pytest.mark.asyncio
     async def test_value_set_returns_before_the_scan_finishes(self, harness: _Harness, tmp_path: Path) -> None:
@@ -947,3 +968,40 @@ class TestConnectionDrivenFrame:
         # The slider range is sized from the scan; a loop can push past it.
         node.set_parameter_value("frame", 99999)
         assert node.get_parameter_value("frame") == 99999
+
+
+class TestPerFrameHeader:
+    """Regression: each frame is read against its own header, not frame 1's."""
+
+    def _node_on_sequence(self, harness: _Harness, tmp_path: Path):
+        paths = _frames(tmp_path, range(1001, 1003))
+        harness.sequence = _make_sequence(paths, start=1001)
+        node = _make_node()
+        node.set_parameter_value("path", str(tmp_path / "frame.####.exr"))
+        return node, paths
+
+    def test_a_frame_that_drops_a_part_fails_rather_than_reading_the_next(
+        self, harness: _Harness, tmp_path: Path
+    ) -> None:
+        harness.exr_data = _make_exr_data(_make_part("beauty"), _make_part("diffuse"), _make_part("specular"))
+        node, paths = self._node_on_sequence(harness, tmp_path)
+        harness.exr_data_by_path[str(paths[1])] = _make_exr_data(_make_part("beauty"), _make_part("specular"))
+        node.set_parameter_value("part_name", "1: diffuse")
+        node.set_parameter_value("frame", 1002)
+        asyncio.run(node.aprocess())
+
+        assert _was_successful(node) is False
+        assert "1: diffuse" in _result_details(node)
+        assert not harness.load_calls
+
+    def test_a_frame_missing_the_selected_layer_fails(self, harness: _Harness, tmp_path: Path) -> None:
+        harness.exr_data = _make_exr_data(_make_part(channel_names=("R", "G", "B", "crypto.R")))
+        node, paths = self._node_on_sequence(harness, tmp_path)
+        harness.exr_data_by_path[str(paths[1])] = _make_exr_data(_make_part(channel_names=("R", "G", "B")))
+        node.set_parameter_value("layer", "crypto")
+        node.set_parameter_value("frame", 1002)
+        asyncio.run(node.aprocess())
+
+        assert _was_successful(node) is False
+        assert "crypto" in _result_details(node)
+        assert not harness.load_calls
