@@ -42,6 +42,9 @@ SINGLE_PART_AOVS = DATA / "single_part_aovs.exr"
 MULTI_PART = DATA / "multi_part.exr"
 
 _NODE_MODULE = "griptape_nodes_openexr.nodes.read_exr"
+# Decode and colour management live in the shared rendering helper, so that is
+# where they are patched from.
+_RENDER_MODULE = "griptape_nodes_openexr.exr.rendering"
 _OCIO_MODULE = "griptape_nodes_openexr.exr.ocio_helpers"
 
 

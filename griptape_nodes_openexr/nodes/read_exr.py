@@ -3,11 +3,9 @@
 from __future__ import annotations
 
 import asyncio
-import io
 import logging
 from typing import TYPE_CHECKING, Any
 
-import numpy as np
 from griptape.artifacts import ImageUrlArtifact
 from griptape_nodes.common.macro_parser import MacroSyntaxError, ParsedMacro
 from griptape_nodes.common.sequences import MissingItemPolicy, NoTokenBehavior, Sequence, SequenceEntry
@@ -31,7 +29,6 @@ from griptape_nodes.retained_mode.griptape_nodes import GriptapeNodes
 from griptape_nodes.traits.file_system_picker import FileSystemPicker
 from griptape_nodes.traits.options import Options
 from griptape_nodes.utils.async_utils import to_thread
-from PIL import Image
 
 from griptape_nodes_openexr.exr.channel_selection import (
     channels_in_layer,
@@ -41,22 +38,16 @@ from griptape_nodes_openexr.exr.channel_selection import (
     select_display_channels,
 )
 from griptape_nodes_openexr.exr.exr_header_artifact import EXRChannelArtifact, EXRPartArtifact
-from griptape_nodes_openexr.exr.exr_io import build_rgb_array, load_exr_channels, scan_exr_header
+from griptape_nodes_openexr.exr.exr_io import scan_exr_header
 from griptape_nodes_openexr.exr.ocio_helpers import (
     COLOR_MODE_BASIC,
     COLOR_MODE_OCIO,
     ColorParamsProtocol,
     add_color_mode_parameters,
-    apply_color_management,
     handle_color_mode_change,
 )
-from griptape_nodes_openexr.exr.tone_mapping import (
-    EV_MAX,
-    EV_MIN,
-    TONE_FILMIC,
-    apply_exposure,
-    to_uint8_srgb,
-)
+from griptape_nodes_openexr.exr.rendering import render_part_png
+from griptape_nodes_openexr.exr.tone_mapping import EV_MAX, EV_MIN, TONE_FILMIC
 from griptape_nodes_openexr.exr.viewer_launcher import handle_viewer_button_click
 
 if TYPE_CHECKING:
@@ -455,9 +446,16 @@ class ReadEXR(SuccessFailureNode):
         if is_sequence:
             self._frame_param.min_val = sequence.first
             self._frame_param.max_val = sequence.last
-            self._frame_param.soft_limits = True
             if not self.get_parameter_value(self._frame_param.name):
                 self.set_parameter_value(self._frame_param.name, sequence.first, emit_change=False)
+        else:
+            # Back to the placeholder range rather than keeping the last sequence's.
+            self._frame_param.min_val = _DEFAULT_FRAME_MIN
+            self._frame_param.max_val = _DEFAULT_FRAME_MAX
+        # Reasserted rather than assumed: the range setters rebuild the Slider trait,
+        # and losing soft limits would let a loop-driven frame outside the range abort
+        # the run.
+        self._frame_param.soft_limits = True
 
     def _apply_layer_choices(self, exr_data: EXRData, part_choice: str) -> None:
         """Repopulate the layer dropdown for the currently selected part."""
@@ -629,7 +627,6 @@ class ReadEXR(SuccessFailureNode):
             self._on_fail(f"No channels found in {_part_label(part, part_index)}")
             return
         alpha_channel = select_alpha_channel(candidates, selected)
-        channels_to_load = selected + ([alpha_channel] if alpha_channel else [])
 
         # Decode, tone map and encode together on a worker thread. On a 4K frame this is
         # ~3.2s of CPU, which would otherwise freeze the canvas for the whole run.
@@ -642,7 +639,6 @@ class ReadEXR(SuccessFailureNode):
                 part.height,
                 selected,
                 alpha_channel,
-                channels_to_load,
                 ev,
                 color_params,
                 tone_mapping,
@@ -708,46 +704,27 @@ class ReadEXR(SuccessFailureNode):
         height: int,
         selected: list[str],
         alpha_channel: str | None,
-        channels_to_load: list[str],
         ev: float,
         color_params: ColorParamsProtocol | None,
         tone_mapping: str,
     ) -> tuple[bytes, str]:
         """Decode the selected channels and encode them as PNG bytes.
 
-        Synchronous and CPU-bound; callers run it through `to_thread`. Failures are
-        raised with the message the node reports, so the caller has one except clause
-        rather than one per stage.
-
-        OCIO dispatch happens in here too. That is already how EXRSequenceToPreview
-        calls it (per frame, on a thread pool), so the request path is known to work
-        off the loop.
+        Synchronous and CPU-bound; callers run it through `to_thread`. OCIO dispatch
+        happens in here too, which is already how EXRSequenceToPreview calls it (per
+        frame, on a thread pool), so the request path is known to work off the loop.
         """
-        try:
-            pixels = load_exr_channels(file_path, part_index, channels_to_load)
-        except (ValueError, RuntimeError) as e:
-            msg = f"Failed to load channels: {e}"
-            raise RuntimeError(msg) from e
-
-        try:
-            rgb = build_rgb_array(pixels, selected)
-        except Exception as e:
-            msg = f"Failed to build RGB: {e}"
-            raise RuntimeError(msg) from e
-
-        rgb = apply_exposure(rgb, ev)
-        # apply_color_management raises ValueError with a user-facing message already.
-        rgb, tone_mode = apply_color_management(rgb, color_params, tone_mapping)
-        uint8_rgb = to_uint8_srgb(rgb)
-
-        if alpha_channel:
-            alpha_plane = np.clip(pixels[alpha_channel].reshape(height, width), 0.0, 1.0)
-            alpha_uint8 = (alpha_plane * 255.0 + 0.5).astype(np.uint8)[..., np.newaxis]
-            uint8 = np.concatenate([uint8_rgb, alpha_uint8], axis=-1)
-        else:
-            uint8 = uint8_rgb
-
-        return _ndarray_to_png(uint8), tone_mode
+        return render_part_png(
+            file_path=file_path,
+            part_index=part_index,
+            width=width,
+            height=height,
+            selected=selected,
+            alpha_channel=alpha_channel,
+            ev=ev,
+            color_params=color_params,
+            tone_mapping=tone_mapping,
+        )
 
     def _emit_render(self, outputs: dict[str, Any]) -> None:
         """Publish a render's outputs, whether it was just computed or came from the cache."""
@@ -891,14 +868,3 @@ def _set_choices(parameter: Parameter, choices: list[str]) -> None:
     for trait in parameter.find_elements_by_type(Options):
         trait.choices = list(choices)
         return
-
-
-def _ndarray_to_png(uint8: np.ndarray) -> bytes:
-    """Encode a (H, W, 3) or (H, W, 4) uint8 array as PNG bytes."""
-    if uint8.ndim != 3 or uint8.shape[2] not in (3, 4):  # noqa: PLR2004
-        msg = f"expected (H, W, 3|4) uint8 array, got shape {uint8.shape}"
-        raise ValueError(msg)
-    mode = "RGBA" if uint8.shape[2] == 4 else "RGB"  # noqa: PLR2004
-    buf = io.BytesIO()
-    Image.fromarray(uint8, mode=mode).save(buf, format="PNG")
-    return buf.getvalue()

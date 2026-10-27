@@ -25,6 +25,7 @@ An **Open in external viewer** button opens the source EXR in a configured HDR v
 | `exposure`     | `float`           | Exposure in EV stops applied before tone mapping. Range -10 to +10, default `0.0`. In the Color Management group.            |
 | `color_mode`   | `str`             | `basic` (local tone mapping) or `ocio` (connected `OCIOColorParamsArtifact`). Defaults to `ocio` when OpenColorIO is loaded. |
 | `tone_mapping` | `str`             | `filmic` (Narkowicz 2015 curve) or `linear` (clamp to [0, 1]). Default `filmic`. Used when `color_mode` is `basic`.          |
+| `output_file`  | `str`             | Filename for the saved PNG. Carries the frame number for a sequence, e.g. `read_exr.1001.png`.                               |
 
 **Outputs**
 
@@ -33,7 +34,6 @@ An **Open in external viewer** button opens the source EXR in a configured HDR v
 | `image`                        | `ImageUrlArtifact`         | 8-bit sRGB (or RGBA) PNG of the current frame                     |
 | `part`                         | `EXRPartArtifact`          | Descriptor for the part that was read, carrying the float data on |
 | `channels`                     | `list[EXRChannelArtifact]` | One descriptor per channel in that part                           |
-| `output_file`                  | `str`                      | Path to the saved PNG                                             |
 | `image_width` / `image_height` | `int`                      | Dimensions from the data window                                   |
 | `part_count` / `channel_count` | `int`                      | Parts in the file, channels in the part that was read             |
 | `first_frame` / `last_frame`   | `int`                      | Sequence bounds; `0` for a single file                            |

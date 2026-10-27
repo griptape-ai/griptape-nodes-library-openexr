@@ -2,37 +2,27 @@
 
 from __future__ import annotations
 
-import io
 import logging
 from typing import TYPE_CHECKING, Any
 
-import numpy as np
 from griptape.artifacts import ImageUrlArtifact
 from griptape_nodes.exe_types.core_types import NodeMessageResult, Parameter, ParameterMode
 from griptape_nodes.exe_types.node_types import SuccessFailureNode
 from griptape_nodes.exe_types.param_components.project_file_parameter import ProjectFileParameter
 from griptape_nodes.exe_types.param_types.parameter_button import ParameterButton
 from griptape_nodes.exe_types.param_types.parameter_float import ParameterFloat
-from PIL import Image
 
 from griptape_nodes_openexr.exr.channel_selection import select_alpha_channel, select_display_channels
 from griptape_nodes_openexr.exr.exr_header_artifact import EXRPartArtifact
-from griptape_nodes_openexr.exr.exr_io import build_rgb_array, load_exr_channels
 from griptape_nodes_openexr.exr.ocio_helpers import (
     COLOR_MODE_BASIC,
     COLOR_MODE_OCIO,
     ColorParamsProtocol,
     add_color_mode_parameters,
-    apply_color_management,
     handle_color_mode_change,
 )
-from griptape_nodes_openexr.exr.tone_mapping import (
-    EV_MAX,
-    EV_MIN,
-    TONE_FILMIC,
-    apply_exposure,
-    to_uint8,
-)
+from griptape_nodes_openexr.exr.rendering import render_part_png
+from griptape_nodes_openexr.exr.tone_mapping import EV_MAX, EV_MIN, TONE_FILMIC
 from griptape_nodes_openexr.exr.viewer_launcher import handle_viewer_button_click
 
 if TYPE_CHECKING:
@@ -154,19 +144,6 @@ class DisplayEXRPart(SuccessFailureNode):
             return
 
         alpha_channel = select_alpha_channel(channel_names, selected)
-        channels_to_load = selected + ([alpha_channel] if alpha_channel else [])
-
-        try:
-            pixels = load_exr_channels(part.file_path, part.part_index, channels_to_load)
-        except (ValueError, RuntimeError) as e:
-            self._on_fail_handler(f"Failed to load channels: {e}")
-            return
-
-        try:
-            rgb = build_rgb_array(pixels, selected)
-        except Exception as e:
-            self._on_fail_handler(f"Failed to build RGB: {e}")
-            return
 
         ev = float(self.get_parameter_value(self._exposure_param.name) or 0.0)
         tone_mapping = str(self.get_parameter_value(self._tone_mapping_param.name) or TONE_FILMIC)
@@ -179,23 +156,23 @@ class DisplayEXRPart(SuccessFailureNode):
                 self._on_fail_handler("OCIO mode requires a connected color_params artifact.")
                 return
 
-        rgb = apply_exposure(rgb, ev)
         try:
-            rgb, tone_mode = apply_color_management(rgb, color_params, tone_mapping)
-        except ValueError as e:
+            png_bytes, tone_mode = render_part_png(
+                file_path=part.file_path,
+                part_index=part.part_index,
+                width=part.width,
+                height=part.height,
+                selected=selected,
+                alpha_channel=alpha_channel,
+                ev=ev,
+                color_params=color_params,
+                tone_mapping=tone_mapping,
+            )
+        except (ValueError, RuntimeError) as e:
             self._on_fail_handler(str(e))
             return
-        uint8_rgb = to_uint8(rgb)
-
-        if alpha_channel:
-            alpha_plane = pixels[alpha_channel].reshape(part.height, part.width)
-            alpha_uint8 = to_uint8(alpha_plane)[..., np.newaxis]
-            uint8 = np.concatenate([uint8_rgb, alpha_uint8], axis=-1)
-        else:
-            uint8 = uint8_rgb
 
         try:
-            png_bytes = _ndarray_to_png(uint8)
             dest = self._output_file.build_file()
             saved = dest.write_bytes(png_bytes)
             artifact = ImageUrlArtifact(saved.location)
@@ -210,14 +187,3 @@ class DisplayEXRPart(SuccessFailureNode):
         details = f"Rendered '{label}' — {part.width}×{part.height}, channels: {selected}{alpha_info}, EV={ev:+.1f}, {tone_mode}"
         self._set_status_results(was_successful=True, result_details=details)
         logger.info("DisplayEXRPart '%s': %s", self.name, details)
-
-
-def _ndarray_to_png(uint8: np.ndarray) -> bytes:
-    """Encode a (H, W, 3) or (H, W, 4) uint8 array as PNG bytes."""
-    if uint8.ndim != 3 or uint8.shape[2] not in (3, 4):  # noqa: PLR2004
-        msg = f"expected (H, W, 3|4) uint8 array, got shape {uint8.shape}"
-        raise ValueError(msg)
-    mode = "RGBA" if uint8.shape[2] == 4 else "RGB"  # noqa: PLR2004
-    buf = io.BytesIO()
-    Image.fromarray(uint8, mode=mode).save(buf, format="PNG")
-    return buf.getvalue()

@@ -41,11 +41,15 @@ from griptape_nodes_openexr.exr.exr_types import (
     StorageType,
     WindowCoordinates,
 )
+from griptape_nodes_openexr.nodes.read_exr import _DEFAULT_FRAME_MAX, _DEFAULT_FRAME_MIN
 
 DATA = Path(__file__).parents[1] / "data"
 SINGLE_PART_RGBA = DATA / "single_part_rgba.exr"
 
 _NODE_MODULE = "griptape_nodes_openexr.nodes.read_exr"
+# Decode and colour management live in the shared rendering helper, so that is
+# where they are patched from.
+_RENDER_MODULE = "griptape_nodes_openexr.exr.rendering"
 _OCIO_MODULE = "griptape_nodes_openexr.exr.ocio_helpers"
 
 WIDTH = 16
@@ -223,7 +227,7 @@ def harness(tmp_path: Path):
     bench = _Harness(tmp_path)
     with (
         patch(f"{_NODE_MODULE}.scan_exr_header", side_effect=bench.scan_exr_header),
-        patch(f"{_NODE_MODULE}.load_exr_channels", side_effect=bench.load_exr_channels),
+        patch(f"{_RENDER_MODULE}.load_exr_channels", side_effect=bench.load_exr_channels),
         patch(f"{_NODE_MODULE}.ProjectFileParameter", side_effect=bench.project_file_parameter),
         patch.object(GriptapeNodes, "handle_request", side_effect=bench.handle_request),
         # Node machinery (e.g. the connection lookup behind the preview suppression)
@@ -775,7 +779,7 @@ class TestColorParamsCacheKey:
     def test_mutating_the_artifact_in_place_rerenders(self, harness: _Harness, tmp_path: Path) -> None:
         params = self._params()
         node = self._node_with_ocio(harness, tmp_path, params)
-        with patch(f"{_NODE_MODULE}.apply_color_management", side_effect=_passthrough_ocio) as ocio:
+        with patch(f"{_RENDER_MODULE}.apply_color_management", side_effect=_passthrough_ocio) as ocio:
             asyncio.run(node.aprocess())
             assert _was_successful(node) is True, _result_details(node)
             renders = ocio.call_count
@@ -788,7 +792,7 @@ class TestColorParamsCacheKey:
 
     def test_an_unchanged_artifact_still_hits_the_cache(self, harness: _Harness, tmp_path: Path) -> None:
         node = self._node_with_ocio(harness, tmp_path, self._params())
-        with patch(f"{_NODE_MODULE}.apply_color_management", side_effect=_passthrough_ocio) as ocio:
+        with patch(f"{_RENDER_MODULE}.apply_color_management", side_effect=_passthrough_ocio) as ocio:
             asyncio.run(node.aprocess())
             renders = ocio.call_count
             asyncio.run(node.aprocess())
@@ -864,6 +868,23 @@ class TestFailureClearsOutputs:
 
         for name in ("first_frame", "last_frame", "frame_count"):
             assert not node.parameter_output_values.get(name), f"{name} kept a stale value"
+
+
+class TestFrameRangeReset:
+    def test_a_single_file_resets_the_slider_range(self, harness: _Harness, tmp_path: Path) -> None:
+        paths = _frames(tmp_path, range(1001, 1006))
+        harness.sequence = _make_sequence(paths, start=1001)
+        node = _make_node()
+        node.set_parameter_value("path", str(tmp_path / "frame.####.exr"))
+        assert node._frame_param.min_val == 1001
+
+        harness.sequence = _make_sequence([_single_file(tmp_path)], start=1)
+        node.set_parameter_value("path", str(_single_file(tmp_path)))
+
+        # The parameter is hidden for a single file, so this is cosmetic, but leaving
+        # the old sequence's range on it is just stale state.
+        assert node._frame_param.min_val == _DEFAULT_FRAME_MIN
+        assert node._frame_param.max_val == _DEFAULT_FRAME_MAX
 
 
 class TestPreview:
