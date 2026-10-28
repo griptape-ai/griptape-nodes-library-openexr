@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 from griptape.artifacts import ImageUrlArtifact
 from griptape_nodes.common.macro_parser import MacroSyntaxError, ParsedMacro
@@ -94,7 +94,7 @@ class ReadEXR(SuccessFailureNode):
         # alongside the key because the engine clears parameter_output_values whenever it
         # marks the node unresolved, so a cache hit has to re-emit rather than assume the
         # previous run's values are still there.
-        self._render_key: tuple | None = None
+        self._render_key: RenderKey | None = None
         self._render_outputs: dict[str, Any] | None = None
         self._current_exr_path: str | None = None
         # The after_value_set scan runs as a background task so the setter can return.
@@ -613,18 +613,18 @@ class ReadEXR(SuccessFailureNode):
                 self._on_fail("OCIO mode requires a connected color_params artifact.")
                 return
 
-        render_key = (
-            self._scan_key,
-            entry.number,
-            part_index,
-            layer,
-            ev,
-            color_mode,
-            tone_mapping,
+        render_key = RenderKey(
+            scan_key=self._scan_key or "",
+            frame_number=entry.number,
+            part_index=part_index,
+            layer=layer,
+            exposure_ev=ev,
+            color_mode=color_mode,
+            tone_mapping=tone_mapping,
             # The artifact's values, not its identity: an upstream OCIO node can mutate
             # and re-emit the same object, which leaves id() unchanged and would serve a
             # stale image for the new display.
-            _color_params_key(color_params),
+            color_params=_color_params_key(color_params),
         )
         if render_key == self._render_key and self._render_outputs is not None:
             self._emit_render(self._render_outputs)
@@ -805,6 +805,23 @@ class ReadEXR(SuccessFailureNode):
 # ---------------------------------------------------------------------------
 # Module helpers
 # ---------------------------------------------------------------------------
+
+
+class RenderKey(NamedTuple):
+    """Everything that changes the rendered pixels.
+
+    Named rather than a bare tuple so that adding a cache-affecting input is a type
+    error at every construction site instead of a silently stale render.
+    """
+
+    scan_key: str
+    frame_number: int
+    part_index: int
+    layer: str
+    exposure_ev: float
+    color_mode: str
+    tone_mapping: str
+    color_params: tuple | None
 
 
 def _color_params_key(color_params: ColorParamsProtocol | None) -> tuple | None:
