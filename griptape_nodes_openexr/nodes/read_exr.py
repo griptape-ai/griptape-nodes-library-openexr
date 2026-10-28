@@ -102,6 +102,17 @@ class ScanState:
     source_stamp: tuple[int, int] | None
 
 
+class _Unchanged:
+    """Sentinel: the cached scan still describes the path, so there is nothing to adopt.
+
+    Distinct from None, which means the path resolved to nothing and whatever is
+    cached belongs to a file the node is no longer pointing at.
+    """
+
+
+UNCHANGED = _Unchanged()
+
+
 @dataclass(frozen=True)
 class _FramePlan:
     """Everything resolved from the parameters before a frame can be rendered."""
@@ -441,7 +452,7 @@ class ReadEXR(SuccessFailureNode):
             return
         self._request_canvas_preview()
 
-    def _adopt_if_current(self, raw_path: Any, scanned: ScanState | None) -> bool:
+    def _adopt_if_current(self, raw_path: Any, scanned: ScanState | _Unchanged | None) -> bool:
         """Install a scan result, unless `path` has moved on since the scan started.
 
         Clicking through the file picker starts a scan per click, and they finish in
@@ -453,9 +464,12 @@ class ReadEXR(SuccessFailureNode):
         if _scan_key_for(raw_path) != wanted:
             logger.debug("ReadEXR '%s': discarding a superseded scan of '%s'", self.name, raw_path)
             return False
+        if isinstance(scanned, _Unchanged):
+            return False
         if scanned is None:
-            if not wanted:
-                self._clear_scan()
+            # Nothing resolved for the path the node is currently pointing at, so any
+            # cached scan and render describe a file it has navigated away from.
+            self._clear_scan()
             return False
         self._adopt_scan(scanned)
         return True
@@ -468,8 +482,12 @@ class ReadEXR(SuccessFailureNode):
         self._scan = None
         self._render = None
 
-    def _scan_blocking(self, raw_path: Any) -> ScanState | None:
-        """Resolve `raw_path` and read its first entry's header. Returns None when there is nothing to read.
+    def _scan_blocking(self, raw_path: Any) -> ScanState | _Unchanged | None:
+        """Resolve `raw_path` and read its first entry's header.
+
+        Returns `UNCHANGED` when the cached scan already covers the path, and `None`
+        when the path resolves to nothing, which the caller must treat as "drop what
+        you have" rather than "keep it".
 
         Synchronous and slow (a 4K multi-part header is ~1.8s), so callers on the event
         loop run it through `to_thread`. Reads `self._scan` to skip a redundant scan
@@ -486,7 +504,7 @@ class ReadEXR(SuccessFailureNode):
             # two Nones and keeping a stale header.
             stamp = _file_stamp(scan.sequence.entries[0].path)
             if stamp is not None and stamp == scan.source_stamp:
-                return None
+                return UNCHANGED
 
         sequence = _resolve_to_sequence(raw_path)
         if sequence is None or not sequence.entries:

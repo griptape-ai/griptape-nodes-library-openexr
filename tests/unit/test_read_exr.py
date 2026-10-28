@@ -141,6 +141,8 @@ class _Harness:
         self.exr_data_by_path: dict[str, EXRData] = {}
         self.pixels = _make_pixels()
         self.sequence: dict | None = None
+        # Paths the engine scan finds nothing for (a typo, or a deleted file).
+        self.unresolvable: set[str] = set()
         self.connected_params: set[str] = set()
         self.preview_succeeds = True
         self.scan_calls: list[str] = []
@@ -175,6 +177,13 @@ class _Harness:
         if isinstance(request, ScanSequencesRequest):
             from griptape_nodes.common.sequences import Sequence
 
+            if request.path in self.unresolvable:
+                return ScanSequencesResultSuccess(
+                    sequences=[],
+                    has_entries=False,
+                    directory_had_matching_files=False,
+                    result_details="",
+                )
             raw = self.sequence if self.sequence is not None else _make_sequence([Path(request.path)], start=1)
             sequence = Sequence.model_validate(raw)
             return ScanSequencesResultSuccess(
@@ -1151,3 +1160,61 @@ class TestInPlaceRewrite:
 
         assert _was_successful(node) is False
         assert str(paths[2]) in _result_details(node)
+
+
+class TestUnresolvablePath:
+    """Regression: a path that resolves to nothing must not keep serving the old file."""
+
+    def test_changing_to_a_missing_path_fails_rather_than_reusing_the_last_file(
+        self, harness: _Harness, tmp_path: Path
+    ) -> None:
+        good = _single_file(tmp_path)
+        node = _make_node()
+        node.set_parameter_value("path", str(good))
+        asyncio.run(node.aprocess())
+        assert _was_successful(node) is True, _result_details(node)
+
+        missing = str(tmp_path / "typo.exr")
+        harness.unresolvable.add(missing)
+        node.set_parameter_value("path", missing)
+        asyncio.run(node.aprocess())
+
+        assert _was_successful(node) is False, "reported success for a path that resolves to nothing"
+        assert node.parameter_output_values["image"] is None
+
+    def test_the_viewer_does_not_open_the_old_file_after_a_missing_path(
+        self, harness: _Harness, tmp_path: Path
+    ) -> None:
+        good = _single_file(tmp_path)
+        node = _make_node()
+        node.set_parameter_value("path", str(good))
+        asyncio.run(node.aprocess())
+
+        missing = str(tmp_path / "typo.exr")
+        harness.unresolvable.add(missing)
+        node.set_parameter_value("path", missing)
+        asyncio.run(node.aprocess())
+
+        result = node._on_open_viewer_click(MagicMock(), MagicMock())
+        assert result is not None
+        assert result.success is False
+
+    @pytest.mark.asyncio
+    async def test_a_superseded_unresolvable_scan_does_not_clear_the_current_one(
+        self, harness: _Harness, tmp_path: Path
+    ) -> None:
+        # Clearing on an unresolved path must not reach past a newer path: the slow
+        # scan of the bad path finishes last, but it is no longer the one on the node.
+        missing = str(tmp_path / "typo.exr")
+        good = _single_file(tmp_path)
+        harness.unresolvable.add(missing)
+        harness.scan_delay_by_path = {str(good): 0.0}
+
+        node = _make_node()
+        node.set_parameter_value("path", missing)
+        node.set_parameter_value("path", str(good))
+        await node.wait_for_pending_scan()
+        await asyncio.sleep(0.2)
+
+        assert node._scan is not None, "a superseded unresolvable scan cleared the live one"
+        assert node._scan.key == str(good)
