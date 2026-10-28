@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, NamedTuple
 
 from griptape.artifacts import ImageUrlArtifact
@@ -68,6 +69,50 @@ _DEFAULT_FRAME_MIN = 0
 _DEFAULT_FRAME_MAX = 100
 
 
+class RenderKey(NamedTuple):
+    """Everything that changes the rendered pixels.
+
+    Named rather than a bare tuple so that adding a cache-affecting input is a type
+    error at every construction site instead of a silently stale render.
+    """
+
+    scan_key: str
+    frame_number: int
+    part_index: int
+    layer: str
+    exposure_ev: float
+    color_mode: str
+    tone_mapping: str
+    color_params: tuple | None
+
+
+@dataclass(frozen=True)
+class ScanState:
+    """A completed header scan: the file it describes, and what it found.
+
+    Frozen so a worker thread reads the whole scan as one snapshot rather than
+    risking a tear across fields while the loop installs a newer one.
+    """
+
+    key: str
+    sequence: Sequence
+    exr_data: EXRData
+
+
+@dataclass(frozen=True)
+class RenderState:
+    """A completed render: its cache key, the outputs it published, and its source file.
+
+    The outputs are held alongside the key because the engine clears
+    parameter_output_values whenever it marks the node unresolved, so a cache hit
+    has to re-emit rather than assume the previous run's values survived.
+    """
+
+    key: RenderKey
+    outputs: dict[str, Any]
+    source_path: str
+
+
 class ReadEXR(SuccessFailureNode):
     """Read an EXR file or frame sequence and emit a viewable image in one node.
 
@@ -87,15 +132,8 @@ class ReadEXR(SuccessFailureNode):
         super().__init__(name, metadata)
 
         # Keyed on the resolved path, so a frame scrub reuses the scan.
-        self._scan_key: str | None = None
-        self._cached_sequence: Sequence | None = None
-        self._cached_exr_data: EXRData | None = None
-        # Keyed on everything that changes the rendered pixels. The outputs are cached
-        # alongside the key because the engine clears parameter_output_values whenever it
-        # marks the node unresolved, so a cache hit has to re-emit rather than assume the
-        # previous run's values are still there.
-        self._render_key: RenderKey | None = None
-        self._render_outputs: dict[str, Any] | None = None
+        self._scan: ScanState | None = None
+        self._render: RenderState | None = None
         self._current_exr_path: str | None = None
         # The after_value_set scan runs as a background task so the setter can return.
         self._pending_scan: asyncio.Task | None = None
@@ -317,8 +355,8 @@ class ReadEXR(SuccessFailureNode):
         if parameter.name == self._part_name_param.name:
             # Layers belong to a part, so the dropdown has to follow the part selection.
             # No rescan: the cached header already describes every part in the file.
-            if self._cached_exr_data is not None:
-                self._apply_layer_choices(self._cached_exr_data, str(value or ""))
+            if self._scan is not None:
+                self._apply_layer_choices(self._scan.exr_data, str(value or ""))
             return
 
         if parameter.name == self._path_param.name:
@@ -382,7 +420,7 @@ class ReadEXR(SuccessFailureNode):
             return
         self._request_canvas_preview()
 
-    def _adopt_if_current(self, raw_path: Any, scanned: tuple[str, Sequence, EXRData] | None) -> bool:
+    def _adopt_if_current(self, raw_path: Any, scanned: ScanState | None) -> bool:
         """Install a scan result, unless `path` has moved on since the scan started.
 
         Clicking through the file picker starts a scan per click, and they finish in
@@ -398,7 +436,7 @@ class ReadEXR(SuccessFailureNode):
             if not wanted:
                 self._clear_scan()
             return False
-        self._adopt_scan(*scanned)
+        self._adopt_scan(scanned)
         return True
 
     # ------------------------------------------------------------------
@@ -406,40 +444,39 @@ class ReadEXR(SuccessFailureNode):
     # ------------------------------------------------------------------
 
     def _clear_scan(self) -> None:
-        self._scan_key = None
-        self._cached_sequence = None
-        self._cached_exr_data = None
-        self._render_key = None
-        self._render_outputs = None
+        self._scan = None
+        self._render = None
 
-    def _scan_blocking(self, raw_path: Any) -> tuple[str, Sequence, EXRData] | None:
+    def _scan_blocking(self, raw_path: Any) -> ScanState | None:
         """Resolve `raw_path` and read its first entry's header. Returns None when there is nothing to read.
 
         Synchronous and slow (a 4K multi-part header is ~1.8s), so callers on the event
-        loop run it through `to_thread`. Reads `self._scan_key` to skip a redundant scan
+        loop run it through `to_thread`. Reads `self._scan` to skip a redundant scan
         but writes nothing: every mutation belongs to `_adopt_scan` or `_clear_scan` on
         the loop, which is what makes this safe to call from a worker thread.
         """
+        scan = self._scan
         key = _scan_key_for(raw_path)
-        if not key or key == self._scan_key:
+        if not key or (scan is not None and key == scan.key):
             return None
 
         sequence = _resolve_to_sequence(raw_path)
         if sequence is None or not sequence.entries:
             return None
 
-        return key, sequence, scan_exr_header(sequence.entries[0].path, header_only=True)
+        return ScanState(
+            key=key,
+            sequence=sequence,
+            exr_data=scan_exr_header(sequence.entries[0].path, header_only=True),
+        )
 
-    def _adopt_scan(self, key: str, sequence: Sequence, exr_data: EXRData) -> None:
+    def _adopt_scan(self, scan: ScanState) -> None:
         """Install a completed scan and refresh the UI from it."""
-        self._scan_key = key
-        self._cached_sequence = sequence
-        self._cached_exr_data = exr_data
+        self._scan = scan
         # Any cached render belongs to the file that just went away.
-        self._render_key = None
-        self._render_outputs = None
+        self._render = None
 
-        self._apply_scan_to_ui(sequence, exr_data)
+        self._apply_scan_to_ui(scan.sequence, scan.exr_data)
 
     async def _arefresh_scan(self, raw_path: Any) -> None:
         """Scan off the event loop, then adopt the result on it."""
@@ -492,9 +529,10 @@ class ReadEXR(SuccessFailureNode):
         """
         if self._param_has_incoming_connection(self._frame_param.name):
             return
-        sequence = self._cached_sequence
-        if sequence is None or not sequence.entries:
+        scan = self._scan
+        if scan is None or not scan.sequence.entries:
             return
+        sequence = scan.sequence
 
         try:
             macro_path = MacroPath(ParsedMacro(sequence.entries[0].path), {})
@@ -517,14 +555,14 @@ class ReadEXR(SuccessFailureNode):
     # ------------------------------------------------------------------
 
     def _part_choices(self) -> list[str]:
-        if self._cached_exr_data is None:
+        if self._scan is None:
             return []
-        return _part_choices_for(self._cached_exr_data)
+        return _part_choices_for(self._scan.exr_data)
 
     def _layer_choices(self) -> list[str]:
-        if self._cached_exr_data is None:
+        if self._scan is None:
             return []
-        part = _part_for(self._cached_exr_data, self.get_parameter_value(self._part_name_param.name))
+        part = _part_for(self._scan.exr_data, self.get_parameter_value(self._part_name_param.name))
         return list_layers([channel.name for channel in part.channels])
 
     def _set_hidden(self, parameter: Parameter, *, hidden: bool) -> None:
@@ -545,8 +583,7 @@ class ReadEXR(SuccessFailureNode):
         return handle_viewer_button_click(self.name, self._current_exr_path)
 
     def _on_fail(self, details: str) -> None:
-        self._render_key = None
-        self._render_outputs = None
+        self._render = None
         self.parameter_output_values[self._image_param.name] = None
         self.parameter_output_values[self._part_param.name] = None
         self.parameter_output_values[self._channels_param.name] = None
@@ -578,11 +615,12 @@ class ReadEXR(SuccessFailureNode):
             self._on_fail(f"Failed to scan EXR header: {e}")
             return
 
-        sequence = self._cached_sequence
-        exr_data = self._cached_exr_data
-        if sequence is None or exr_data is None:
+        scan = self._scan
+        if scan is None:
             self._on_fail(f"No EXR found at '{_describe_path(raw_path)}'")
             return
+        sequence = scan.sequence
+        exr_data = scan.exr_data
 
         is_sequence = len(sequence.entries) > 1
         self.parameter_output_values[self._first_frame_param.name] = sequence.first if is_sequence else 0
@@ -614,7 +652,7 @@ class ReadEXR(SuccessFailureNode):
                 return
 
         render_key = RenderKey(
-            scan_key=self._scan_key or "",
+            scan_key=scan.key,
             frame_number=entry.number,
             part_index=part_index,
             layer=layer,
@@ -626,8 +664,9 @@ class ReadEXR(SuccessFailureNode):
             # stale image for the new display.
             color_params=_color_params_key(color_params),
         )
-        if render_key == self._render_key and self._render_outputs is not None:
-            self._emit_render(self._render_outputs)
+        cached = self._render
+        if cached is not None and render_key == cached.key:
+            self._emit_render(cached.outputs)
             details = f"Reused cached render of {_part_label(part, part_index)}{frame_note}"
             self._set_status_results(was_successful=True, result_details=details)
             return
@@ -719,8 +758,7 @@ class ReadEXR(SuccessFailureNode):
         }
         self._emit_render(outputs)
 
-        self._render_key = render_key
-        self._render_outputs = outputs
+        self._render = RenderState(key=render_key, outputs=outputs, source_path=entry.path)
 
         alpha_info = f", alpha: {alpha_channel}" if alpha_channel else ""
         details = (
@@ -805,23 +843,6 @@ class ReadEXR(SuccessFailureNode):
 # ---------------------------------------------------------------------------
 # Module helpers
 # ---------------------------------------------------------------------------
-
-
-class RenderKey(NamedTuple):
-    """Everything that changes the rendered pixels.
-
-    Named rather than a bare tuple so that adding a cache-affecting input is a type
-    error at every construction site instead of a silently stale render.
-    """
-
-    scan_key: str
-    frame_number: int
-    part_index: int
-    layer: str
-    exposure_ev: float
-    color_mode: str
-    tone_mapping: str
-    color_params: tuple | None
 
 
 def _color_params_key(color_params: ColorParamsProtocol | None) -> tuple | None:

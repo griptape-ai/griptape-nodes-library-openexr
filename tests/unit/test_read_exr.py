@@ -882,7 +882,8 @@ class TestConcurrentPathChanges:
         await node.wait_for_pending_scan()
         await asyncio.sleep(0.4)
 
-        assert node._scan_key == str(fast)
+        assert node._scan is not None
+        assert node._scan.key == str(fast)
 
     @pytest.mark.asyncio
     async def test_a_superseded_scan_does_not_render_from_the_old_file(self, harness: _Harness, tmp_path: Path) -> None:
