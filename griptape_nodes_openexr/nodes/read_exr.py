@@ -134,7 +134,6 @@ class ReadEXR(SuccessFailureNode):
         # Keyed on the resolved path, so a frame scrub reuses the scan.
         self._scan: ScanState | None = None
         self._render: RenderState | None = None
-        self._current_exr_path: str | None = None
         # The after_value_set scan runs as a background task so the setter can return.
         self._pending_scan: asyncio.Task | None = None
 
@@ -580,7 +579,8 @@ class ReadEXR(SuccessFailureNode):
         button: Button,  # noqa: ARG002
         button_details: ButtonDetailsMessagePayload,  # noqa: ARG002
     ) -> NodeMessageResult | None:
-        return handle_viewer_button_click(self.name, self._current_exr_path)
+        render = self._render
+        return handle_viewer_button_click(self.name, render.source_path if render is not None else None)
 
     def _on_fail(self, details: str) -> None:
         self._render = None
@@ -687,8 +687,6 @@ class ReadEXR(SuccessFailureNode):
                 return
             exr_data = frame_data
             part = frame_data.parts[part_index]
-
-        self._current_exr_path = entry.path
 
         channel_names = [channel.name for channel in part.channels]
         candidates = channels_in_layer(channel_names, layer) if layer else channel_names

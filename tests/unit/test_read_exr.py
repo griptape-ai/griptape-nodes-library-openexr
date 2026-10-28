@@ -1043,3 +1043,36 @@ class TestFrameValueGuard:
 
         assert _was_successful(node) is False
         assert "not-a-frame" in _result_details(node)
+
+
+class TestViewerPath:
+    """Regression: the viewer button must follow the render, not outlive it."""
+
+    def test_clearing_the_path_disables_the_viewer(self, harness: _Harness, tmp_path: Path) -> None:
+        node = _make_node()
+        node.set_parameter_value("path", str(_single_file(tmp_path)))
+        asyncio.run(node.aprocess())
+        assert node._on_open_viewer_click(MagicMock(), MagicMock()) is None
+
+        # The node has navigated away, so there is no longer a file to open.
+        node.set_parameter_value("path", "")
+
+        result = node._on_open_viewer_click(MagicMock(), MagicMock())
+        assert result is not None
+        assert result.success is False
+
+    def test_a_cache_hit_keeps_the_viewer_on_the_rendered_frame(self, harness: _Harness, tmp_path: Path) -> None:
+        paths = _frames(tmp_path, range(1001, 1006))
+        harness.sequence = _make_sequence(paths, start=1001)
+        node = _make_node()
+        node.set_parameter_value("path", str(tmp_path / "frame.####.exr"))
+        node.set_parameter_value("frame", 1003)
+        asyncio.run(node.aprocess())
+
+        # Re-running with identical inputs hits the render cache, which returns before
+        # the path assignment the miss path makes.
+        node.clear_node()
+        asyncio.run(node.aprocess())
+
+        assert node._render is not None
+        assert node._render.source_path == str(paths[2])
