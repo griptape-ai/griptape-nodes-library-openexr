@@ -532,6 +532,10 @@ class ReadEXR(SuccessFailureNode):
         if is_sequence:
             self._frame_param.min_val = sequence.first
             self._frame_param.max_val = sequence.last
+            # Falsy means unset. ParameterInt's converter turns None and "" into 0 and
+            # the default is 0, so 0 is the only falsy value that reaches here and an
+            # explicit frame 0 cannot be told apart from an untouched slider. See
+            # _select_entry for why that costs nothing.
             if not self.get_parameter_value(self._frame_param.name):
                 self.set_parameter_value(self._frame_param.name, sequence.first, emit_change=False)
         else:
@@ -934,6 +938,10 @@ class ReadEXR(SuccessFailureNode):
             return sequence.entries[0], ""
 
         requested = self.get_parameter_value(self._frame_param.name)
+        # ParameterInt's converter maps None and "" to 0 and the parameter defaults to 0,
+        # so unset and an explicit frame 0 arrive here as the same int. They also pick the
+        # same entry either way: the engine's scanner drops negative frame numbers, so
+        # sequence.first is never below 0 and the clamp below would land on entries[0].
         if not requested:
             return sequence.entries[0], f" frame {sequence.entries[0].number}"
 
