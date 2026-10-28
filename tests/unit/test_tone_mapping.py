@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 
 from griptape_nodes_openexr.exr.tone_mapping import (
+    SRGB_LINEAR_CUTOFF,
     apply_exposure,
     apply_filmic,
     apply_tone_mapping,
@@ -133,8 +134,8 @@ class TestLinearToSrgb:
         np.testing.assert_allclose(result, [1.0], rtol=1e-6)
 
     def test_toe_breakpoint(self) -> None:
-        # The piecewise split at 0.0031308 must be continuous: 0.0031308 * 12.92.
-        result = linear_to_srgb(np.array([0.0031308], dtype=np.float32))
+        # The piecewise split must be continuous: SRGB_LINEAR_CUTOFF * 12.92.
+        result = linear_to_srgb(np.array([SRGB_LINEAR_CUTOFF], dtype=np.float32))
         assert result[0] == pytest.approx(0.040450, rel=1e-4)
 
     def test_mid_value(self) -> None:

@@ -14,6 +14,10 @@ EV_MIN = -10.0  # Exposure Value in stops (EV); range matches practical HDR capt
 EV_MAX = 10.0
 
 SRGB_LINEAR_CUTOFF = 0.0031308  # sRGB piecewise split: linear toe below, power curve above
+SRGB_TOE_SLOPE = 12.92  # linear toe: encoded = linear * SRGB_TOE_SLOPE
+SRGB_GAMMA = 1.0 / 2.4  # power-segment exponent
+SRGB_GAIN = 1.055  # power-segment scale
+SRGB_OFFSET = 0.055  # power-segment offset: encoded = SRGB_GAIN * linear**SRGB_GAMMA - SRGB_OFFSET
 
 
 def apply_exposure(arr: np.ndarray, ev: float) -> np.ndarray:
@@ -66,11 +70,11 @@ def linear_to_srgb(arr: np.ndarray) -> np.ndarray:
     x = np.clip(arr, 0.0, 1.0).astype(np.float32, copy=False)
 
     # Power segment over the whole array; the linear toe is patched in below.
-    encoded = np.power(x, np.float32(1.0 / 2.4), dtype=np.float32)
-    encoded *= np.float32(1.055)
-    encoded -= np.float32(0.055)
+    encoded = np.power(x, np.float32(SRGB_GAMMA), dtype=np.float32)
+    encoded *= np.float32(SRGB_GAIN)
+    encoded -= np.float32(SRGB_OFFSET)
 
-    np.copyto(encoded, x * np.float32(12.92), where=x <= SRGB_LINEAR_CUTOFF)
+    np.copyto(encoded, x * np.float32(SRGB_TOE_SLOPE), where=x <= SRGB_LINEAR_CUTOFF)
     return encoded
 
 
@@ -98,7 +102,8 @@ def apply_tone_mapping(rgb: np.ndarray, tone_mapping: str) -> np.ndarray:
     if tone == TONE_FILMIC:
         display_linear = apply_filmic(rgb)
     elif tone == TONE_LINEAR:
-        display_linear = np.clip(rgb, 0.0, 1.0).astype(np.float32)
+        # linear_to_srgb clips internally; no need to clip here too.
+        display_linear = rgb.astype(np.float32)
     else:
         msg = f"Unsupported tone mapping: {tone!r}"
         raise ValueError(msg)
