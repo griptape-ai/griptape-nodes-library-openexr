@@ -85,11 +85,11 @@ An **Open in external viewer** button opens the source EXR in a configured HDR v
 
 **Inputs**
 
-| Parameter      | Type              | Description                                                                        |
-| -------------- | ----------------- | ---------------------------------------------------------------------------------- |
-| `part`         | `EXRPartArtifact` | EXR part to render. Assumes scene-linear HDR data; no gamut conversion is applied. |
-| `exposure`     | `float`           | Exposure in EV stops applied before tone mapping. Range −10 to +10, default `0.0`. |
-| `tone_mapping` | `str`             | `filmic` (Narkowicz 2015 curve) or `linear` (clamp to [0, 1]). Default `filmic`.   |
+| Parameter      | Type              | Description                                                                                                         |
+| -------------- | ----------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `part`         | `EXRPartArtifact` | EXR part to render. Assumes scene-linear HDR data; no gamut conversion is applied.                                  |
+| `exposure`     | `float`           | Exposure in EV stops applied before tone mapping. Range −10 to +10, default `0.0`.                                  |
+| `tone_mapping` | `str`             | `filmic` (Narkowicz 2015 curve) or `linear` (clamp to [0, 1]). Both are sRGB-encoded for display. Default `filmic`. |
 
 **Outputs**
 
@@ -108,15 +108,15 @@ Combines 1–4 individual `EXRChannelArtifact` inputs into an 8-bit sRGB or RGBA
 
 **Inputs**
 
-| Parameter      | Type                                       | Description                                                                            |
-| -------------- | ------------------------------------------ | -------------------------------------------------------------------------------------- |
-| `channel_r`    | `EXRChannelArtifact`                       | Channel mapped to the red plane. Optional.                                             |
-| `channel_g`    | `EXRChannelArtifact`                       | Channel mapped to the green plane. Optional.                                           |
-| `channel_b`    | `EXRChannelArtifact`                       | Channel mapped to the blue plane. Optional.                                            |
-| `channel_a`    | `EXRChannelArtifact`                       | Channel used as alpha. Optional; when connected, output is RGBA.                       |
-| `exposure`     | `float`                                    | Exposure in EV stops applied before tone mapping. Range −10 to +10, default `0.0`.     |
-| `tone_mapping` | `str`                                      | `filmic` (Narkowicz 2015 curve) or `linear` (clamp to [0, 1]). Default `filmic`.       |
-| `background`   | `ImageArtifact \| ImageUrlArtifact \| str` | Background image for A-over-B compositing. Ignored when no alpha channel is connected. |
+| Parameter      | Type                                       | Description                                                                                                         |
+| -------------- | ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------- |
+| `channel_r`    | `EXRChannelArtifact`                       | Channel mapped to the red plane. Optional.                                                                          |
+| `channel_g`    | `EXRChannelArtifact`                       | Channel mapped to the green plane. Optional.                                                                        |
+| `channel_b`    | `EXRChannelArtifact`                       | Channel mapped to the blue plane. Optional.                                                                         |
+| `channel_a`    | `EXRChannelArtifact`                       | Channel used as alpha. Optional; when connected, output is RGBA.                                                    |
+| `exposure`     | `float`                                    | Exposure in EV stops applied before tone mapping. Range −10 to +10, default `0.0`.                                  |
+| `tone_mapping` | `str`                                      | `filmic` (Narkowicz 2015 curve) or `linear` (clamp to [0, 1]). Both are sRGB-encoded for display. Default `filmic`. |
+| `background`   | `ImageArtifact \| ImageUrlArtifact \| str` | Background image for A-over-B compositing. Ignored when no alpha channel is connected.                              |
 
 **Outputs**
 

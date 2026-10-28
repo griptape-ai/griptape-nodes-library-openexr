@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
+import numpy as np
 import pytest
 
 from griptape_nodes_openexr.exr.ocio_helpers import (
@@ -196,6 +197,26 @@ class TestApplyColorManagement:
             config_path="/path/to/config.ocio",
         )
 
+    def test_ocio_output_is_not_re_encoded(self) -> None:
+        """OCIO pixels must pass through untouched.
+
+        The opencolorio handler uses a DisplayViewTransform, which already applies the
+        display's transfer function. Applying the sRGB OETF again here would double-encode
+        and wash the image out, so this guards against the encode leaking into that branch.
+        """
+        handler_output = np.array([[[0.0, 0.5, 1.0]]], dtype=np.float32)
+        req_type = _cst_type()
+        mock_gn = MagicMock()
+        mock_gn.handle_request.return_value = _make_succeeded_result(handler_output)
+
+        with (
+            patch(f"{_OCIO_HELPERS}.LibraryRegistry", _mock_lr_with(req_type)),
+            patch(f"{_OCIO_HELPERS}.GriptapeNodes", mock_gn),
+        ):
+            pixels, _ = apply_color_management(_rgb(1, 1), _color_params(), TONE_FILMIC)
+
+        np.testing.assert_array_equal(pixels, handler_output)
+
     def test_config_path_none_forwarded_to_request(self) -> None:
         rgb = _rgb()
         req_type = _cst_type()
@@ -250,6 +271,15 @@ class TestApplyColorManagementBasicMode:
 
         mock_gn.handle_request.assert_not_called()
         assert label == TONE_LINEAR
+
+    def test_basic_mode_output_is_display_encoded(self) -> None:
+        """Basic mode must encode, so scene 0.18 lands near mid-grey rather than crushed."""
+        rgb = _rgb(1, 1)  # 0.18 scene-linear
+
+        with patch(f"{_OCIO_HELPERS}.GriptapeNodes", MagicMock()):
+            pixels, _ = apply_color_management(rgb, None, TONE_FILMIC)
+
+        assert pixels[0, 0, 0] == pytest.approx(0.5535, rel=1e-3)
 
     def test_output_shape_preserved_in_basic_mode(self) -> None:
         rgb = _rgb(8, 8)
