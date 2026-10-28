@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, NamedTuple
 
@@ -77,6 +78,7 @@ class RenderKey(NamedTuple):
     """
 
     scan_key: str
+    source_stamp: tuple[int, int]
     frame_number: int
     part_index: int
     layer: str
@@ -97,6 +99,7 @@ class ScanState:
     key: str
     sequence: Sequence
     exr_data: EXRData
+    source_stamp: tuple[int, int] | None
 
 
 @dataclass(frozen=True)
@@ -456,17 +459,29 @@ class ReadEXR(SuccessFailureNode):
         """
         scan = self._scan
         key = _scan_key_for(raw_path)
-        if not key or (scan is not None and key == scan.key):
+        if not key:
             return None
+        if scan is not None and key == scan.key:
+            # An artist re-rendering in place keeps the filenames, so the key alone
+            # cannot see the change. An unreadable file rescans rather than comparing
+            # two Nones and keeping a stale header.
+            stamp = _file_stamp(scan.sequence.entries[0].path)
+            if stamp is not None and stamp == scan.source_stamp:
+                return None
 
         sequence = _resolve_to_sequence(raw_path)
         if sequence is None or not sequence.entries:
             return None
 
+        # Stamped before the read, never after. A write landing in this window then
+        # pairs an old stamp with a new header, costing one redundant rescan later.
+        # The other order pins the stale header for good.
+        source_stamp = _file_stamp(sequence.entries[0].path)
         return ScanState(
             key=key,
             sequence=sequence,
             exr_data=scan_exr_header(sequence.entries[0].path, header_only=True),
+            source_stamp=source_stamp,
         )
 
     def _adopt_scan(self, scan: ScanState) -> None:
@@ -651,8 +666,17 @@ class ReadEXR(SuccessFailureNode):
                 self._on_fail("OCIO mode requires a connected color_params artifact.")
                 return
 
+        # The frame actually being read, not frame 1: one stat against a multi-second
+        # decode. A frame that vanished between the scan and now fails here rather than
+        # as an OpenEXR exception from inside the worker thread.
+        source_stamp = _file_stamp(entry.path)
+        if source_stamp is None:
+            self._on_fail(f"Cannot read{frame_note}: '{entry.path}' is missing or unreadable")
+            return
+
         render_key = RenderKey(
             scan_key=scan.key,
+            source_stamp=source_stamp,
             frame_number=entry.number,
             part_index=part_index,
             layer=layer,
@@ -861,6 +885,19 @@ def _running_loop() -> asyncio.AbstractEventLoop | None:
         return asyncio.get_running_loop()
     except RuntimeError:
         return None
+
+
+def _file_stamp(path: str) -> tuple[int, int] | None:
+    """(mtime_ns, size) for a frame, or None when it cannot be stat'd.
+
+    Deliberately not folded into `_scan_key_for`: that stays a pure, non-raising key
+    function, and it runs on the event loop for every superseded-scan check.
+    """
+    try:
+        stat = os.stat(path)
+    except OSError:
+        return None
+    return (stat.st_mtime_ns, stat.st_size)
 
 
 def _sequence_scan_key(directory: str, pattern: str, entries: list[Any]) -> str:

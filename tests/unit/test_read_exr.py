@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import threading
 import time
 from pathlib import Path
@@ -1076,3 +1077,77 @@ class TestViewerPath:
 
         assert node._render is not None
         assert node._render.source_path == str(paths[2])
+
+
+class TestInPlaceRewrite:
+    """Regression: re-rendering a frame under the same name must invalidate the caches.
+
+    Every case bumps mtime explicitly. The harness writes empty files, so same-second
+    filesystem granularity would otherwise make these flaky.
+    """
+
+    @staticmethod
+    def _touch(path: Path, content: bytes = b"changed") -> None:
+        path.write_bytes(content)
+        stamp = time.time_ns() + 1_000_000_000
+        os.utime(path, ns=(stamp, stamp))
+
+    def test_rewriting_the_file_in_place_redecodes_it(self, harness: _Harness, tmp_path: Path) -> None:
+        path = _single_file(tmp_path)
+        node = _make_node()
+        node.set_parameter_value("path", str(path))
+        asyncio.run(node.aprocess())
+        loads = len(harness.load_calls)
+
+        self._touch(path)
+        asyncio.run(node.aprocess())
+
+        assert _was_successful(node) is True, _result_details(node)
+        assert len(harness.load_calls) == loads + 1, "served a stale render of a rewritten file"
+
+    def test_rewriting_frame_one_in_place_rescans_the_header(self, harness: _Harness, tmp_path: Path) -> None:
+        paths = _frames(tmp_path, range(1001, 1004))
+        harness.sequence = _make_sequence(paths, start=1001)
+        node = _make_node()
+        node.set_parameter_value("path", str(tmp_path / "frame.####.exr"))
+        asyncio.run(node.aprocess())
+        assert node.parameter_output_values["part_count"] == 1
+
+        # The re-render added a part, which only a fresh header scan can see.
+        harness.exr_data_by_path[str(paths[0])] = _make_exr_data(_make_part("rgba"), _make_part("depth", ("Z",)))
+        self._touch(paths[0])
+        asyncio.run(node.aprocess())
+
+        assert _was_successful(node) is True, _result_details(node)
+        assert node.parameter_output_values["part_count"] == 2, "served a stale header"
+
+    def test_rewriting_a_later_frame_in_place_redecodes_it(self, harness: _Harness, tmp_path: Path) -> None:
+        # The render key has to stamp the frame being read, not frame 1.
+        paths = _frames(tmp_path, range(1001, 1006))
+        harness.sequence = _make_sequence(paths, start=1001)
+        node = _make_node()
+        node.set_parameter_value("path", str(tmp_path / "frame.####.exr"))
+        node.set_parameter_value("frame", 1004)
+        asyncio.run(node.aprocess())
+        loads = len(harness.load_calls)
+
+        self._touch(paths[3])
+        asyncio.run(node.aprocess())
+
+        assert _was_successful(node) is True, _result_details(node)
+        assert len(harness.load_calls) == loads + 1, "served a stale render of a rewritten frame"
+
+    def test_a_frame_deleted_after_the_scan_fails_cleanly(self, harness: _Harness, tmp_path: Path) -> None:
+        paths = _frames(tmp_path, range(1001, 1004))
+        harness.sequence = _make_sequence(paths, start=1001)
+        node = _make_node()
+        node.set_parameter_value("path", str(tmp_path / "frame.####.exr"))
+        node.set_parameter_value("frame", 1003)
+        asyncio.run(node.aprocess())
+        assert _was_successful(node) is True, _result_details(node)
+
+        paths[2].unlink()
+        asyncio.run(node.aprocess())
+
+        assert _was_successful(node) is False
+        assert str(paths[2]) in _result_details(node)

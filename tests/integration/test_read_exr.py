@@ -412,3 +412,29 @@ class TestSequenceOverRealFiles:
         asyncio.run(_run(node))
 
         assert engine.written[-1].name == "read_exr.1002.png"
+
+    def test_a_frame_rewritten_in_place_is_decoded_again(self, engine: _Engine, tmp_path: Path) -> None:
+        import asyncio
+        import os
+        import time
+
+        paths = _write_frames(tmp_path, range(1001, 1004))
+        node = _make_node()
+        node.set_parameter_value("path", _sequence_dict(paths, start=1001))
+        node.set_parameter_value("frame", 1002)
+        asyncio.run(_run(node))
+        assert _was_successful(node) is True, _result_details(node)
+        before = _rendered(node)[..., :3].astype(np.int32).sum()
+
+        # The same filename, re-rendered brighter, which is what an artist iterating on
+        # a shot leaves behind.
+        brighter = np.full((8, 8), 0.9, dtype=np.float32)
+        write_exr_channels(str(paths[1]), {"R": brighter, "G": brighter, "B": brighter}, pixel_type="float")
+        stamp = time.time_ns() + 1_000_000_000
+        os.utime(paths[1], ns=(stamp, stamp))
+
+        asyncio.run(_run(node))
+
+        assert _was_successful(node) is True, _result_details(node)
+        after = _rendered(node)[..., :3].astype(np.int32).sum()
+        assert after > before, "served a cached render of the old pixels"
