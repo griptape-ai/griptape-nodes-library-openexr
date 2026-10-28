@@ -71,8 +71,7 @@ def render_part_png(  # noqa: PLR0913
     uint8_rgb = to_uint8(rgb)
 
     if alpha_channel:
-        alpha_plane = np.clip(pixels[alpha_channel].reshape(uint8_rgb.shape[:2]), 0.0, 1.0)
-        alpha_uint8 = (alpha_plane * 255.0 + 0.5).astype(np.uint8)[..., np.newaxis]
+        alpha_uint8 = to_uint8(pixels[alpha_channel].reshape(uint8_rgb.shape[:2]))[..., np.newaxis]
         uint8 = np.concatenate([uint8_rgb, alpha_uint8], axis=-1)
     else:
         uint8 = uint8_rgb

@@ -819,15 +819,31 @@ def _running_loop() -> asyncio.AbstractEventLoop | None:
         return None
 
 
+def _sequence_scan_key(directory: str, pattern: str, entries: list[Any]) -> str:
+    """A cache key covering everything that identifies a connected Sequence's content.
+
+    The pattern alone (e.g. "render.####.exr") is shared by every version of a shot,
+    so a re-scan that picks up newly rendered frames, or a switch from one render
+    directory to another with the same filenames, must still produce a different key.
+    """
+    numbers = ",".join(str(e.number if isinstance(e, SequenceEntry) else e.get("number")) for e in entries)
+    return f"{directory}|{pattern}|{numbers}"
+
+
 def _scan_key_for(raw_path: Any) -> str:
     """A stable cache key for a path parameter value, empty when there is nothing to read."""
     if raw_path is None:
         return ""
     if isinstance(raw_path, Sequence):
-        return raw_path.pattern or (raw_path.entries[0].path if raw_path.entries else "")
+        if not raw_path.pattern:
+            return raw_path.entries[0].path if raw_path.entries else ""
+        return _sequence_scan_key(raw_path.directory, raw_path.pattern, raw_path.entries)
     if isinstance(raw_path, dict):
         entries = raw_path.get("entries") or []
-        return str(raw_path.get("pattern") or (entries[0].get("path", "") if entries else ""))
+        pattern = raw_path.get("pattern")
+        if not pattern:
+            return str(entries[0].get("path", "")) if entries else ""
+        return _sequence_scan_key(str(raw_path.get("directory") or ""), str(pattern), entries)
     return str(raw_path).strip()
 
 

@@ -652,6 +652,24 @@ class TestSequence:
         # A Sequence value is used directly; no path scan is issued for it.
         assert harness.load_calls[-1][0] == str(paths[0])
 
+    def test_a_rescanned_sequence_with_more_frames_is_not_served_from_the_stale_cache(
+        self, harness: _Harness, tmp_path: Path
+    ) -> None:
+        # Same pattern and directory as an earlier scan, but upstream has since picked
+        # up more rendered frames — the cache key must not be the bare pattern alone.
+        paths = _frames(tmp_path, range(1001, 1006))
+        node = _make_node()
+        node.set_parameter_value("path", _make_sequence(paths[:3], start=1001))
+        node.set_parameter_value("frame", 1005)
+        asyncio.run(node.aprocess())
+        assert node.parameter_output_values["last_frame"] == 1003
+
+        node.set_parameter_value("path", _make_sequence(paths, start=1001))
+        asyncio.run(node.aprocess())
+        assert _was_successful(node) is True, _result_details(node)
+        assert node.parameter_output_values["last_frame"] == 1005
+        assert node.parameter_output_values["part"].frame_number == 1005
+
 
 # ---------------------------------------------------------------------------
 # Caching and previews
