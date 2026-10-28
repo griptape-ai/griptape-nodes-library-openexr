@@ -1023,3 +1023,22 @@ class TestPerFrameHeader:
         assert _was_successful(node) is False
         assert "crypto" in _result_details(node)
         assert not harness.load_calls
+
+
+class TestFrameValueGuard:
+    """Regression: a frame value that is not a number must fail the node, not the run."""
+
+    def test_a_non_numeric_frame_fails_cleanly(self, harness: _Harness, tmp_path: Path) -> None:
+        # Written straight into parameter_values, which is the one path that skips the
+        # ParameterInt converter. That is how the engine materialises hydrated values,
+        # so it is the shape a future direct writer would take, not a connection.
+        paths = _frames(tmp_path, range(1001, 1006))
+        harness.sequence = _make_sequence(paths, start=1001)
+        node = _make_node()
+        node.set_parameter_value("path", str(tmp_path / "frame.####.exr"))
+        node.parameter_values["frame"] = "not-a-frame"
+
+        asyncio.run(node.aprocess())
+
+        assert _was_successful(node) is False
+        assert "not-a-frame" in _result_details(node)

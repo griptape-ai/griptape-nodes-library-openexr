@@ -775,7 +775,15 @@ class ReadEXR(SuccessFailureNode):
         if not requested:
             return sequence.entries[0], f" frame {sequence.entries[0].number}"
 
-        requested = int(requested)
+        try:
+            requested = int(requested)
+        except (TypeError, ValueError):
+            # Unreachable through a connection or a property set: ParameterInt's converter
+            # runs first and raises there. This catches a direct parameter_values write,
+            # so it fails the node rather than letting the exception escape aprocess and
+            # leave the previous run's outputs published.
+            return None, f"Frame value {requested!r} is not a number"
+
         clamped = max(sequence.first, min(sequence.last, requested))
         for entry in sequence.entries:
             if entry.number == clamped:
