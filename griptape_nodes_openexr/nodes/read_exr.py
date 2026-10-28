@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, NamedTuple
 
 from griptape.artifacts import ImageUrlArtifact
@@ -100,6 +100,25 @@ class ScanState:
     sequence: Sequence
     exr_data: EXRData
     source_stamp: tuple[int, int] | None
+
+
+@dataclass(frozen=True)
+class _FramePlan:
+    """Everything resolved from the parameters before a frame can be rendered."""
+
+    entry: SequenceEntry
+    frame_note: str
+    is_sequence: bool
+    # The dropdown label ("1: diffuse"), which is what failure messages quote back.
+    part_name: str
+    part_index: int
+    part: EXRPart
+    exr_data: EXRData
+    layer: str
+    exposure_ev: float
+    color_mode: str
+    tone_mapping: str
+    color_params: ColorParamsProtocol | None
 
 
 @dataclass(frozen=True)
@@ -613,13 +632,72 @@ class ReadEXR(SuccessFailureNode):
     # Execution
     # ------------------------------------------------------------------
 
-    async def aprocess(self) -> None:  # noqa: PLR0911, PLR0912, PLR0915
+    async def aprocess(self) -> None:
+        """Resolve the parameters to one frame, render it, and publish the outputs.
+
+        Each step below returns `None` when it has already called `_on_fail`, so the
+        spine stays a flat sequence of guards.
+        """
         self._clear_execution_status()
 
+        scan = await self._aresolve_scan()
+        if scan is None:
+            return
+
+        is_sequence = self._publish_sequence_info(scan)
+
+        plan = self._plan_frame(scan, is_sequence=is_sequence)
+        if plan is None:
+            return
+
+        render_key = self._render_key_for(scan, plan)
+        if render_key is None:
+            return
+
+        cached = self._render
+        if cached is not None and render_key == cached.key:
+            self._emit_render(cached.outputs)
+            details = f"Reused cached render of {_part_label(plan.part, plan.part_index)}{plan.frame_note}"
+            self._set_status_results(was_successful=True, result_details=details)
+            return
+
+        plan = await self._aread_frame_header(scan, plan)
+        if plan is None:
+            return
+
+        channels = self._select_channels(plan)
+        if channels is None:
+            return
+        selected, alpha_channel = channels
+
+        rendered = await self._arender_png(plan, selected, alpha_channel)
+        if rendered is None:
+            return
+        png_bytes, tone_mode = rendered
+
+        artifact = self._write_png(png_bytes, plan)
+        if artifact is None:
+            return
+
+        outputs = self._build_outputs(plan, artifact)
+        self._emit_render(outputs)
+        self._render = RenderState(key=render_key, outputs=outputs, source_path=plan.entry.path)
+
+        alpha_info = f", alpha: {alpha_channel}" if alpha_channel else ""
+        details = (
+            f"Read {_part_label(plan.part, plan.part_index)}{plan.frame_note} - "
+            f"{plan.part.width}x{plan.part.height}, "
+            f"channels: {selected}{alpha_info}, EV={plan.exposure_ev:+.1f}, {tone_mode}"
+        )
+        self._set_status_results(was_successful=True, result_details=details)
+        logger.info("ReadEXR '%s': %s", self.name, details)
+
+    async def _aresolve_scan(self) -> ScanState | None:
+        """Refresh the scan for the current path. Returns None after calling `_on_fail`."""
         raw_path = self.get_parameter_value(self._path_param.name)
         if not _scan_key_for(raw_path):
             self._on_fail("No path provided")
-            return
+            return None
 
         # LoadEXR hard-fails on a cache miss here. Scanning instead is what makes the
         # node work cold after a workflow reload, and in a worker that never saw the
@@ -628,167 +706,191 @@ class ReadEXR(SuccessFailureNode):
             await self._arefresh_scan(raw_path)
         except (ValueError, RuntimeError) as e:
             self._on_fail(f"Failed to scan EXR header: {e}")
-            return
+            return None
 
         scan = self._scan
         if scan is None:
             self._on_fail(f"No EXR found at '{_describe_path(raw_path)}'")
-            return
-        sequence = scan.sequence
-        exr_data = scan.exr_data
+            return None
+        return scan
 
+    def _publish_sequence_info(self, scan: ScanState) -> bool:
+        """Publish the sequence bounds and return whether this is a sequence at all."""
+        sequence = scan.sequence
         is_sequence = len(sequence.entries) > 1
         self.parameter_output_values[self._first_frame_param.name] = sequence.first if is_sequence else 0
         self.parameter_output_values[self._last_frame_param.name] = sequence.last if is_sequence else 0
         self.parameter_output_values[self._frame_count_param.name] = len(sequence.entries)
+        return is_sequence
 
-        entry, frame_note = self._select_entry(sequence, is_sequence=is_sequence)
+    def _plan_frame(self, scan: ScanState, *, is_sequence: bool) -> _FramePlan | None:
+        """Resolve frame, part and colour settings. Returns None after calling `_on_fail`."""
+        exr_data = scan.exr_data
+
+        entry, frame_note = self._select_entry(scan.sequence, is_sequence=is_sequence)
         if entry is None:
             self._on_fail(frame_note)
-            return
+            return None
 
         part_name = str(self.get_parameter_value(self._part_name_param.name) or "")
         part_index = _part_index_for(exr_data, part_name)
         if part_index is None:
             self._on_fail(f"Part '{part_name}' is not in this file")
-            return
-        part = exr_data.parts[part_index]
+            return None
 
-        ev = float(self.get_parameter_value(self._exposure_param.name) or 0.0)
-        tone_mapping = str(self.get_parameter_value(self._tone_mapping_param.name) or TONE_FILMIC)
         color_mode = str(self.get_parameter_value(self._color_mode_param.name) or COLOR_MODE_BASIC)
-        layer = str(self.get_parameter_value(self._layer_param.name) or "")
-
         color_params: ColorParamsProtocol | None = None
         if color_mode == COLOR_MODE_OCIO:
             color_params = self.get_parameter_value(self._color_params_param.name)  # type: ignore[assignment]
             if color_params is None:
                 self._on_fail("OCIO mode requires a connected color_params artifact.")
-                return
+                return None
 
+        return _FramePlan(
+            entry=entry,
+            frame_note=frame_note,
+            is_sequence=is_sequence,
+            part_name=part_name,
+            part_index=part_index,
+            part=exr_data.parts[part_index],
+            exr_data=exr_data,
+            layer=str(self.get_parameter_value(self._layer_param.name) or ""),
+            exposure_ev=float(self.get_parameter_value(self._exposure_param.name) or 0.0),
+            color_mode=color_mode,
+            tone_mapping=str(self.get_parameter_value(self._tone_mapping_param.name) or TONE_FILMIC),
+            color_params=color_params,
+        )
+
+    def _render_key_for(self, scan: ScanState, plan: _FramePlan) -> RenderKey | None:
+        """Build the render cache key. Returns None after calling `_on_fail`."""
         # The frame actually being read, not frame 1: one stat against a multi-second
         # decode. A frame that vanished between the scan and now fails here rather than
         # as an OpenEXR exception from inside the worker thread.
-        source_stamp = _file_stamp(entry.path)
+        source_stamp = _file_stamp(plan.entry.path)
         if source_stamp is None:
-            self._on_fail(f"Cannot read{frame_note}: '{entry.path}' is missing or unreadable")
-            return
+            self._on_fail(f"Cannot read{plan.frame_note}: '{plan.entry.path}' is missing or unreadable")
+            return None
 
-        render_key = RenderKey(
+        return RenderKey(
             scan_key=scan.key,
             source_stamp=source_stamp,
-            frame_number=entry.number,
-            part_index=part_index,
-            layer=layer,
-            exposure_ev=ev,
-            color_mode=color_mode,
-            tone_mapping=tone_mapping,
+            frame_number=plan.entry.number,
+            part_index=plan.part_index,
+            layer=plan.layer,
+            exposure_ev=plan.exposure_ev,
+            color_mode=plan.color_mode,
+            tone_mapping=plan.tone_mapping,
             # The artifact's values, not its identity: an upstream OCIO node can mutate
             # and re-emit the same object, which leaves id() unchanged and would serve a
             # stale image for the new display.
-            color_params=_color_params_key(color_params),
+            color_params=_color_params_key(plan.color_params),
         )
-        cached = self._render
-        if cached is not None and render_key == cached.key:
-            self._emit_render(cached.outputs)
-            details = f"Reused cached render of {_part_label(part, part_index)}{frame_note}"
-            self._set_status_results(was_successful=True, result_details=details)
-            return
 
-        # The cached scan is frame 1's header, which drives the dropdowns. Each frame
-        # carries its own data window and channel list, so the frame being read
-        # supplies its own.
-        if entry.path != sequence.entries[0].path:
-            try:
-                frame_data = await to_thread(scan_exr_header, entry.path, header_only=True)
-            except (ValueError, RuntimeError) as e:
-                self._on_fail(f"Failed to read the header of{frame_note}: {e}")
-                return
-            # Matched by name as well as index: a frame that drops a part shifts the
-            # ones after it, and reading by index alone would render the wrong one.
-            if part_index >= len(frame_data.parts) or frame_data.parts[part_index].header.name != part.header.name:
-                self._on_fail(f"Part '{part_name}' is not in{frame_note}")
-                return
-            exr_data = frame_data
-            part = frame_data.parts[part_index]
+    async def _aread_frame_header(self, scan: ScanState, plan: _FramePlan) -> _FramePlan | None:
+        """Re-read the header of a frame that is not frame 1, and re-aim the plan at it.
 
-        channel_names = [channel.name for channel in part.channels]
-        candidates = channels_in_layer(channel_names, layer) if layer else channel_names
+        The cached scan is frame 1's header, which drives the dropdowns. Each frame
+        carries its own data window and channel list, so the frame being read supplies
+        its own. Returns None after calling `_on_fail`.
+        """
+        if plan.entry.path == scan.sequence.entries[0].path:
+            return plan
+
+        try:
+            frame_data = await to_thread(scan_exr_header, plan.entry.path, header_only=True)
+        except (ValueError, RuntimeError) as e:
+            self._on_fail(f"Failed to read the header of{plan.frame_note}: {e}")
+            return None
+
+        # Matched by name as well as index: a frame that drops a part shifts the ones
+        # after it, and reading by index alone would render the wrong one.
+        part_index = plan.part_index
+        if part_index >= len(frame_data.parts) or frame_data.parts[part_index].header.name != plan.part.header.name:
+            self._on_fail(f"Part '{plan.part_name}' is not in{plan.frame_note}")
+            return None
+
+        return replace(plan, exr_data=frame_data, part=frame_data.parts[part_index])
+
+    def _select_channels(self, plan: _FramePlan) -> tuple[list[str], str | None] | None:
+        """Pick the channels to display. Returns None after calling `_on_fail`."""
+        channel_names = [channel.name for channel in plan.part.channels]
+        candidates = channels_in_layer(channel_names, plan.layer) if plan.layer else channel_names
         if not candidates:
             # The layer dropdown is built from frame 1, so a later frame can lack it.
-            self._on_fail(f"Layer '{layer}' is not in {_part_label(part, part_index)}{frame_note}")
-            return
+            self._on_fail(f"Layer '{plan.layer}' is not in {_part_label(plan.part, plan.part_index)}{plan.frame_note}")
+            return None
+
         selected = select_display_channels(candidates)
         if selected is None:
-            self._on_fail(f"No channels found in {_part_label(part, part_index)}")
-            return
-        alpha_channel = select_alpha_channel(candidates, selected)
+            self._on_fail(f"No channels found in {_part_label(plan.part, plan.part_index)}")
+            return None
 
-        # Decode, tone map and encode together on a worker thread. On a 4K frame this is
-        # ~3.2s of CPU, which would otherwise freeze the canvas for the whole run.
+        return selected, select_alpha_channel(candidates, selected)
+
+    async def _arender_png(
+        self, plan: _FramePlan, selected: list[str], alpha_channel: str | None
+    ) -> tuple[bytes, str] | None:
+        """Decode and encode the frame off the loop. Returns None after calling `_on_fail`.
+
+        On a 4K frame this is ~3.2s of CPU, which would otherwise freeze the canvas for
+        the whole run.
+        """
         try:
-            png_bytes, tone_mode = await to_thread(
+            return await to_thread(
                 self._render_png,
-                entry.path,
-                part_index,
+                plan.entry.path,
+                plan.part_index,
                 selected,
                 alpha_channel,
-                ev,
-                color_params,
-                tone_mapping,
+                plan.exposure_ev,
+                plan.color_params,
+                plan.tone_mapping,
             )
         except (ValueError, RuntimeError) as e:
             self._on_fail(str(e))
-            return
+            return None
 
+    def _write_png(self, png_bytes: bytes, plan: _FramePlan) -> ImageUrlArtifact | None:
+        """Save the PNG into the project. Returns None after calling `_on_fail`."""
         try:
             # The frame number goes into the filename so a loop leaves a clean numbered
             # set; a single file keeps the plain name.
-            extra_vars: dict[str, str | int] = {"_index": entry.number} if is_sequence else {}
+            extra_vars: dict[str, str | int] = {"_index": plan.entry.number} if plan.is_sequence else {}
             destination = self._output_file.build_file(**extra_vars)
             saved = destination.write_bytes(png_bytes)
-            artifact = ImageUrlArtifact(saved.location)
         except Exception as e:  # noqa: BLE001 - surfaced as a node failure
             self._on_fail(f"Failed to save image: {e}")
-            return
+            return None
+        return ImageUrlArtifact(saved.location)
 
-        frame_number = entry.number if is_sequence else None
+    def _build_outputs(self, plan: _FramePlan, artifact: ImageUrlArtifact) -> dict[str, Any]:
+        """Assemble the published outputs for a completed render."""
+        part = plan.part
         part_artifact = EXRPartArtifact(
-            file_path=entry.path,
-            part_index=part_index,
+            file_path=plan.entry.path,
+            part_index=plan.part_index,
             name=part.header.name,
             width=part.width,
             height=part.height,
             header=part.header,
             channels=part.channels,
-            frame_number=frame_number,
+            frame_number=plan.entry.number if plan.is_sequence else None,
         )
         channel_artifacts = [
-            EXRChannelArtifact(file_path=entry.path, part_index=part_index, channel=channel)
+            EXRChannelArtifact(file_path=plan.entry.path, part_index=plan.part_index, channel=channel)
             # R, G, B, A rather than the alphabetical order EXR stores, matching LoadEXR.
             for channel in order_channels_for_display(part.channels)
         ]
 
-        outputs = {
+        return {
             self._image_param.name: artifact,
             self._part_param.name: part_artifact,
             self._channels_param.name: channel_artifacts,
             self._image_width_param.name: part.width,
             self._image_height_param.name: part.height,
-            self._part_count_param.name: len(exr_data.parts),
+            self._part_count_param.name: len(plan.exr_data.parts),
             self._channel_count_param.name: len(part.channels),
         }
-        self._emit_render(outputs)
-
-        self._render = RenderState(key=render_key, outputs=outputs, source_path=entry.path)
-
-        alpha_info = f", alpha: {alpha_channel}" if alpha_channel else ""
-        details = (
-            f"Read {_part_label(part, part_index)}{frame_note} - {part.width}x{part.height}, "
-            f"channels: {selected}{alpha_info}, EV={ev:+.1f}, {tone_mode}"
-        )
-        self._set_status_results(was_successful=True, result_details=details)
-        logger.info("ReadEXR '%s': %s", self.name, details)
 
     def _render_png(  # noqa: PLR0913, PLR0917
         self,
