@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 from griptape_nodes_openexr.exr.channel_selection import (
+    ROOT_LAYER,
+    channels_in_layer,
+    default_layer,
+    list_layers,
     order_channels_for_display,
     select_alpha_channel,
     select_display_channels,
@@ -159,3 +163,61 @@ class TestOrderChannelsForDisplay:
 
     def test_empty(self) -> None:
         assert _ordered_names([]) == []
+
+
+class TestListLayers:
+    def test_undotted_channels_are_one_root_layer(self) -> None:
+        assert list_layers(["R", "G", "B", "A"]) == [ROOT_LAYER]
+
+    def test_dotted_prefixes_become_layers(self) -> None:
+        channels = ["beauty.R", "beauty.G", "beauty.B", "depth.Z"]
+        assert list_layers(channels) == ["beauty", "depth"]
+
+    def test_first_seen_order_preserved(self) -> None:
+        channels = ["diffuse.R", "beauty.R", "beauty.G"]
+        assert list_layers(channels) == ["diffuse", "beauty"]
+
+    def test_root_and_named_layers_coexist(self) -> None:
+        assert list_layers(["R", "G", "B", "depth.Z"]) == [ROOT_LAYER, "depth"]
+
+    def test_nested_prefix_is_one_layer(self) -> None:
+        assert list_layers(["char.beauty.R", "char.beauty.G"]) == ["char.beauty"]
+
+    def test_empty_channel_list(self) -> None:
+        assert list_layers([]) == []
+
+
+class TestChannelsInLayer:
+    def test_root_layer_returns_undotted_only(self) -> None:
+        channels = ["R", "G", "B", "depth.Z"]
+        assert channels_in_layer(channels, ROOT_LAYER) == ["R", "G", "B"]
+
+    def test_named_layer_returns_its_channels(self) -> None:
+        channels = ["beauty.R", "beauty.G", "beauty.B", "depth.Z"]
+        assert channels_in_layer(channels, "beauty") == ["beauty.R", "beauty.G", "beauty.B"]
+
+    def test_unknown_layer_returns_empty(self) -> None:
+        assert channels_in_layer(["R", "G", "B"], "beauty") == []
+
+    def test_nested_prefix_does_not_leak_into_parent(self) -> None:
+        channels = ["char.beauty.R", "char.R"]
+        assert channels_in_layer(channels, "char") == ["char.R"]
+
+
+class TestDefaultLayer:
+    def test_exact_rgb_defaults_to_root(self) -> None:
+        assert default_layer(["R", "G", "B", "A"]) == ROOT_LAYER
+
+    def test_matches_select_display_channels_choice(self) -> None:
+        channels = ["beauty.R", "beauty.G", "beauty.B", "depth.Z"]
+        selected = select_display_channels(channels)
+        assert selected is not None
+        assert default_layer(channels) == "beauty"
+
+    def test_first_three_fallback_uses_that_channel_layer(self) -> None:
+        # No R/G/B triple anywhere, so select_display_channels falls back to the
+        # first three channels; the default layer follows whatever it picked.
+        assert default_layer(["depth.Z", "depth.W", "depth.V"]) == "depth"
+
+    def test_empty_channel_list_has_no_default(self) -> None:
+        assert default_layer([]) is None

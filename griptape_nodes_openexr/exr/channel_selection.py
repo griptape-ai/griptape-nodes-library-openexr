@@ -37,6 +37,11 @@ def order_channels_for_display(channels: Sequence[EXRChannelInfo]) -> list[EXRCh
     return [ch for _, ch in sorted(enumerate(channels), key=sort_key)]
 
 
+# Layer name used for channels with no dot-separated prefix (R, G, B, A and friends).
+# EXR calls these the root layer; the dropdown needs a label for them.
+ROOT_LAYER = "(root)"
+
+
 def select_display_channels(channel_names: list[str]) -> list[str] | None:
     """Select up to 3 channels to display as RGB, in priority order.
 
@@ -101,6 +106,67 @@ def select_alpha_channel(channel_names: list[str], rgb_selected: list[str]) -> s
                 return candidate if candidate in name_set else None
 
     return None
+
+
+def layer_prefix(channel_name: str) -> str:
+    """Return the layer a channel belongs to, or ROOT_LAYER when it has no prefix.
+
+    The layer is everything before the final dot, so "char.beauty.R" belongs to
+    "char.beauty" rather than "char".
+    """
+    prefix, _, _ = channel_name.rpartition(".")
+    return prefix if prefix else ROOT_LAYER
+
+
+def list_layers(channel_names: list[str]) -> list[str]:
+    """List the distinct layers present in a part's channel names, in first-seen order.
+
+    Args:
+        channel_names: All channel names for the part.
+
+    Returns:
+        Layer names, with ROOT_LAYER standing in for undotted channels. Empty
+        when channel_names is empty.
+    """
+    layers: list[str] = []
+    seen: set[str] = set()
+    for name in channel_names:
+        layer = layer_prefix(name)
+        if layer not in seen:
+            seen.add(layer)
+            layers.append(layer)
+    return layers
+
+
+def channels_in_layer(channel_names: list[str], layer: str) -> list[str]:
+    """Return the channels belonging to `layer`, in their original order.
+
+    Args:
+        channel_names: All channel names for the part.
+        layer: A layer name as returned by `list_layers`.
+
+    Returns:
+        The subset of channel_names in that layer, empty if the layer is unknown.
+    """
+    return [name for name in channel_names if layer_prefix(name) == layer]
+
+
+def default_layer(channel_names: list[str]) -> str | None:
+    """Return the layer `select_display_channels` would render by default.
+
+    Keeps the layer dropdown's initial value consistent with what the node
+    renders when the user has not chosen a layer.
+
+    Args:
+        channel_names: All channel names for the part.
+
+    Returns:
+        A layer name from `list_layers`, or None when channel_names is empty.
+    """
+    selected = select_display_channels(channel_names)
+    if not selected:
+        return None
+    return layer_prefix(selected[0])
 
 
 def _find_layer_rgb(channel_names: list[str]) -> list[str] | None:
