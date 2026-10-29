@@ -21,7 +21,12 @@ from griptape_nodes_openexr.exr.icc_profiles import (
     build_icc_profile,
     profile_for_tone_mapping,
 )
-from griptape_nodes_openexr.exr.tone_mapping import TONE_CHOICES, apply_tone_mapping, to_uint8
+from griptape_nodes_openexr.exr.tone_mapping import (
+    REC709_CUTOFF,
+    TONE_CHOICES,
+    apply_tone_mapping,
+    to_uint8,
+)
 
 ImageCms = pytest.importorskip("PIL.ImageCms", reason="Pillow built without littlecms")
 
@@ -141,6 +146,28 @@ class TestColourRoundTrip:
         assert blob is not None
         converted = _convert_to_srgb(np.array([[[128, 128, 128]]], dtype=np.uint8), blob)
         np.testing.assert_allclose(converted, [188, 188, 188], atol=1)
+
+    # Scene values under the rec709 breakpoint of 0.018, which encode into the
+    # curve's linear toe. SCENE above sits entirely on the power segment, so
+    # without these the toe parameters of the parametric tag go unexercised.
+    SHADOW_SCENE = [0.002, 0.008, 0.016]
+
+    def test_tagged_shadows_convert_to_srgb_render(self) -> None:
+        # The 'd' breakpoint is the parameter most easily got wrong: ICC wants
+        # it in the encoded domain while tone_mapping states it as a linear
+        # value. Stating d as the linear cutoff instead passes every other
+        # test here and still shifts code 5 to 20 against a correct 14.
+        blob = profile_for_tone_mapping("rec709")
+        assert blob is not None
+        converted = _convert_to_srgb(_render(self.SHADOW_SCENE, "rec709"), blob)
+        np.testing.assert_allclose(converted, _render(self.SHADOW_SCENE, "sRGB")[0, 0], atol=1)
+
+    def test_shadow_renders_straddle_the_breakpoint(self) -> None:
+        # Guards the test above: it only exercises the toe while these values
+        # really do encode below the breakpoint.
+        encoded = _render(self.SHADOW_SCENE, "rec709")[0, 0]
+        breakpoint_code = _render([REC709_CUTOFF] * 3, "rec709")[0, 0, 0]
+        assert encoded.max() < breakpoint_code
 
     def test_untagged_and_tagged_pixels_are_identical(self) -> None:
         # The profile describes the pixels; it must never alter them.
