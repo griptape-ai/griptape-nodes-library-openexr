@@ -154,13 +154,25 @@ class TestAfterValueSetColorMode:
         node = _make_node()
         with patch(f"{_OCIO_MODULE}.apply_color_mode_visibility") as mock_vis:
             node.after_value_set(node._color_mode_param, COLOR_MODE_OCIO)
-        mock_vis.assert_called_once_with(node, True, node._tone_mapping_param.name, node._color_params_param.name)
+        mock_vis.assert_called_once_with(
+            node,
+            True,
+            node._tone_mapping_param.name,
+            node._color_params_param.name,
+            node._embed_color_profile_param.name,
+        )
 
     def test_switching_to_basic_calls_visibility_with_false(self) -> None:
         node = _make_node()
         with patch(f"{_OCIO_MODULE}.apply_color_mode_visibility") as mock_vis:
             node.after_value_set(node._color_mode_param, COLOR_MODE_BASIC)
-        mock_vis.assert_called_once_with(node, False, node._tone_mapping_param.name, node._color_params_param.name)
+        mock_vis.assert_called_once_with(
+            node,
+            False,
+            node._tone_mapping_param.name,
+            node._color_params_param.name,
+            node._embed_color_profile_param.name,
+        )
 
     def test_other_parameter_does_not_call_visibility(self) -> None:
         node = _make_node()
@@ -365,6 +377,13 @@ class TestAProcessPipeline:
 
         assert "libx264" in captured_cmd
         assert "yuv420p" in captured_cmd
+        # A video carries no ICC profile, so these tags are its only colour
+        # signalling. Without them a player guesses.
+        assert "-x264-params" in captured_cmd
+        params = captured_cmd[captured_cmd.index("-x264-params") + 1]
+        assert "colorprim=bt709" in params
+        assert "transfer=bt709" in params
+        assert "colormatrix=bt709" in params
 
     @pytest.mark.parametrize(
         ("speed", "expected_preset", "expected_crf"),
@@ -662,3 +681,38 @@ class TestManifestRegistration:
         manifest = json.loads(manifest_path.read_text())
         entry = next(n for n in manifest["nodes"] if n["class_name"] == "EXRSequenceToPreview")
         assert "exr_sequence_to_preview" in entry["file_path"]
+
+
+class TestVideoColourTags:
+    """The MP4's colour tags, which replace the ICC profile a video cannot carry."""
+
+    @pytest.mark.parametrize(
+        ("tone", "expected_trc"),
+        [
+            ("sRGB", "iec61966-2-1"),
+            ("rec709", "bt709"),
+            ("rec1886", "bt709"),
+            ("raw", "linear"),
+        ],
+    )
+    def test_transfer_characteristics_per_transform(self, tone: str, expected_trc: str) -> None:
+        from griptape_nodes_openexr.nodes.exr_sequence_to_preview import color_trc_for
+
+        assert color_trc_for(tone) == expected_trc
+
+    def test_unknown_transform_falls_back_to_bt709(self) -> None:
+        # An unrecognised -color_trc makes ffmpeg fail the whole encode, so
+        # never pass one through from an unexpected value.
+        from griptape_nodes_openexr.nodes.exr_sequence_to_preview import color_trc_for
+
+        assert color_trc_for("something-else") == "bt709"
+
+    def test_every_choice_maps_to_an_accepted_value(self) -> None:
+        from griptape_nodes_openexr.exr.tone_mapping import TONE_CHOICES
+        from griptape_nodes_openexr.nodes.exr_sequence_to_preview import _FFMPEG_TRC_VALUES, color_trc_for
+
+        accepted = set(_FFMPEG_TRC_VALUES.values())
+        for tone in TONE_CHOICES:
+            # Every choice must have an explicit entry, not reach the fallback.
+            assert tone.lower() in _FFMPEG_TRC_VALUES
+            assert color_trc_for(tone) in accepted

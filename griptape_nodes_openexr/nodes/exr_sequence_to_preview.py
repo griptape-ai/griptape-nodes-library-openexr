@@ -39,6 +39,10 @@ from griptape_nodes_openexr.exr.sequence_helpers import resolve_sequence, run_ov
 from griptape_nodes_openexr.exr.tone_mapping import (
     EV_MAX,
     EV_MIN,
+    TONE_RAW,
+    TONE_REC709,
+    TONE_REC1886,
+    TONE_SRGB,
     apply_exposure,
     to_uint8,
 )
@@ -49,6 +53,39 @@ _DEFAULT_FRAME_RATE = 24.0
 _DEFAULT_THREADS = 4
 _LOG_INTERVAL_PCT = 10
 _PIX_FMT = "yuv420p"
+
+# Transfer characteristics per display transform. A video carries no ICC
+# profile, so these tags are its only colour signalling.
+#
+# They are passed through -x264-params rather than ffmpeg's own -color_trc:
+# the bundled static_ffmpeg build accepts -color_trc without error but drops
+# it, leaving color_transfer=unknown in the output, while -colorspace does
+# apply. Setting all three through x264 keeps them consistent and verifiable.
+# An unrecognised value is ignored rather than honoured, hence the explicit
+# fallback rather than passing an arbitrary transform name through.
+_FFMPEG_TRC_VALUES = {
+    TONE_SRGB.lower(): "iec61966-2-1",
+    TONE_REC709.lower(): "bt709",
+    # No exact tag exists for gamma 2.4; bt709 is the closest available.
+    TONE_REC1886.lower(): "bt709",
+    TONE_RAW.lower(): "linear",
+}
+_DEFAULT_TRC = "bt709"
+
+
+def color_trc_for(tone_mapping: str) -> str:
+    """ffmpeg -color_trc value for a display transform.
+
+    Args:
+        tone_mapping: A display transform name (case-insensitive).
+
+    Returns:
+        An ffmpeg transfer characteristic string, falling back to bt709 for
+        an unrecognised name.
+    """
+    return _FFMPEG_TRC_VALUES.get(tone_mapping.lower(), _DEFAULT_TRC)
+
+
 _SPEED_FAST = "fast"
 _SPEED_BALANCED = "balanced"
 _SPEED_QUALITY = "quality"
@@ -103,7 +140,12 @@ class EXRSequenceToPreview(SuccessFailureNode):
         )
         self.add_parameter(self._exposure_param)
 
-        self._color_mode_param, self._tone_mapping_param, self._color_params_param = add_color_mode_parameters(self)
+        (
+            self._color_mode_param,
+            self._tone_mapping_param,
+            self._color_params_param,
+            self._embed_color_profile_param,
+        ) = add_color_mode_parameters(self)
 
         # TODO: output path/URL may be derivable from the Artifact Manager in future
         self._format_param = ParameterString(
@@ -178,7 +220,13 @@ class EXRSequenceToPreview(SuccessFailureNode):
 
     def after_value_set(self, parameter: Parameter, value: Any) -> None:
         if parameter.name == self._color_mode_param.name:
-            handle_color_mode_change(self, value, self._tone_mapping_param.name, self._color_params_param.name)
+            handle_color_mode_change(
+                self,
+                value,
+                self._tone_mapping_param.name,
+                self._color_params_param.name,
+                self._embed_color_profile_param.name,
+            )
 
     def _get_processing_speed_settings(self) -> tuple[str, int]:
         """Return (preset, crf) for the current processing_speed value."""
@@ -280,6 +328,12 @@ class EXRSequenceToPreview(SuccessFailureNode):
                 str(crf),
                 "-pix_fmt",
                 _PIX_FMT,
+                # All our transforms share Rec.709 primaries, so only the
+                # transfer curve varies.
+                "-x264-params",
+                f"colorprim=bt709:transfer={color_trc_for(tone_mapping)}:colormatrix=bt709",
+                "-color_range",
+                "tv",
                 "-movflags",
                 "+faststart",
                 "-an",

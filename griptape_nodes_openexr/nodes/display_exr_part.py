@@ -72,7 +72,12 @@ class DisplayEXRPart(SuccessFailureNode):
         )
         self.add_parameter(self._exposure_param)
 
-        self._color_mode_param, self._tone_mapping_param, self._color_params_param = add_color_mode_parameters(
+        (
+            self._color_mode_param,
+            self._tone_mapping_param,
+            self._color_params_param,
+            self._embed_color_profile_param,
+        ) = add_color_mode_parameters(
             self,
             color_mode_tooltip="Color management mode. 'basic' uses local tone mapping; 'ocio' uses the connected OCIOColorParamsArtifact.",
             color_params_tooltip="OCIO color parameters artifact (source colorspace, display, view). Required when color_mode is 'ocio'.",
@@ -111,7 +116,13 @@ class DisplayEXRPart(SuccessFailureNode):
 
     def after_value_set(self, parameter: Parameter, value: Any) -> None:
         if parameter.name == self._color_mode_param.name:
-            handle_color_mode_change(self, value, self._tone_mapping_param.name, self._color_params_param.name)
+            handle_color_mode_change(
+                self,
+                value,
+                self._tone_mapping_param.name,
+                self._color_params_param.name,
+                self._embed_color_profile_param.name,
+            )
 
     def _on_open_viewer_click(
         self,
@@ -165,6 +176,7 @@ class DisplayEXRPart(SuccessFailureNode):
                 ev=ev,
                 color_params=color_params,
                 tone_mapping=tone_mapping,
+                embed_color_profile=bool(self.get_parameter_value(self._embed_color_profile_param.name)),
             )
         except (ValueError, RuntimeError) as e:
             self._on_fail_handler(str(e))

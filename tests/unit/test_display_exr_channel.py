@@ -111,6 +111,7 @@ class TestAfterValueSetVisibility:
             True,
             node._tone_mapping_param.name,
             node._color_params_param.name,
+            node._embed_color_profile_param.name,
         )
 
     def test_switching_to_basic_calls_visibility_with_false(self) -> None:
@@ -123,6 +124,7 @@ class TestAfterValueSetVisibility:
             False,
             node._tone_mapping_param.name,
             node._color_params_param.name,
+            node._embed_color_profile_param.name,
         )
 
     def test_other_parameter_does_not_call_visibility(self) -> None:

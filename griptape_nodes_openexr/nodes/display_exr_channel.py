@@ -17,6 +17,7 @@ from PIL import Image
 
 from griptape_nodes_openexr.exr.exr_header_artifact import EXRChannelArtifact
 from griptape_nodes_openexr.exr.exr_io import load_exr_channels
+from griptape_nodes_openexr.exr.icc_profiles import profile_for_tone_mapping
 from griptape_nodes_openexr.exr.ocio_helpers import (
     COLOR_MODE_BASIC,
     COLOR_MODE_OCIO,
@@ -25,6 +26,7 @@ from griptape_nodes_openexr.exr.ocio_helpers import (
     apply_color_management,
     handle_color_mode_change,
 )
+from griptape_nodes_openexr.exr.rendering import ndarray_to_png
 from griptape_nodes_openexr.exr.tone_mapping import (
     TONE_DEFAULT,
     apply_exposure,
@@ -109,7 +111,12 @@ class DisplayEXRChannel(SuccessFailureNode):
         )
         self.add_parameter(self._exposure_param)
 
-        self._color_mode_param, self._tone_mapping_param, self._color_params_param = add_color_mode_parameters(self)
+        (
+            self._color_mode_param,
+            self._tone_mapping_param,
+            self._color_params_param,
+            self._embed_color_profile_param,
+        ) = add_color_mode_parameters(self)
 
         # TODO(DH): Add some preset backgrounds, "black"/"magenta"/"checkerboard"/"custom" when selecting custom,
         # the "background" input would be revealed.
@@ -155,7 +162,13 @@ class DisplayEXRChannel(SuccessFailureNode):
 
     def after_value_set(self, parameter: Parameter, value: Any) -> None:
         if parameter.name == self._color_mode_param.name:
-            handle_color_mode_change(self, value, self._tone_mapping_param.name, self._color_params_param.name)
+            handle_color_mode_change(
+                self,
+                value,
+                self._tone_mapping_param.name,
+                self._color_params_param.name,
+                self._embed_color_profile_param.name,
+            )
 
     def _on_open_viewer_click(
         self,
@@ -228,6 +241,7 @@ class DisplayEXRChannel(SuccessFailureNode):
 
         ev = float(self.get_parameter_value(self._exposure_param.name) or 0.0)
         tone_mapping = str(self.get_parameter_value(self._tone_mapping_param.name) or TONE_DEFAULT)
+        embed_color_profile = bool(self.get_parameter_value(self._embed_color_profile_param.name))
         color_mode = str(self.get_parameter_value(self._color_mode_param.name) or COLOR_MODE_BASIC)
 
         color_params: ColorParamsProtocol | None = None
@@ -260,8 +274,12 @@ class DisplayEXRChannel(SuccessFailureNode):
 
         uint8 = _composite(uint8_rgb, alpha_f32, bg_rgb_f32)
 
+        # OCIO output carries no profile: its display/view transform resolves
+        # to a config colorspace we cannot describe.
+        profile = profile_for_tone_mapping(tone_mapping) if embed_color_profile and color_params is None else None
+
         try:
-            png_bytes = _ndarray_to_png(uint8)
+            png_bytes = ndarray_to_png(uint8, icc_profile=profile)
             dest = self._output_file.build_file()
             saved = dest.write_bytes(png_bytes)
             artifact = ImageUrlArtifact(saved.location)
@@ -342,16 +360,3 @@ def _composite(
     a = np.clip(alpha_plane, 0.0, 1.0)[..., np.newaxis]
     fg = uint8_rgb.astype(np.float32) / 255.0
     return to_uint8(fg * a + bg_rgb_f32 * (1.0 - a))
-
-
-def _ndarray_to_png(uint8: np.ndarray) -> bytes:
-    """Encode a (H, W, 3) or (H, W, 4) uint8 array as PNG bytes.
-
-    Caller guarantees exactly 3 (RGB) or 4 (RGBA) channels — _build_rgb always
-    produces 3-channel output; alpha is optionally appended as a 4th channel.
-    """
-    assert uint8.ndim == 3 and uint8.shape[2] in (3, 4), uint8.shape  # noqa: S101
-    mode = "RGBA" if uint8.shape[2] == 4 else "RGB"  # noqa: PLR2004
-    buf = io.BytesIO()
-    Image.fromarray(uint8, mode=mode).save(buf, format="PNG")
-    return buf.getvalue()
