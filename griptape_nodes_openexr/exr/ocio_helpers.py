@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol, overload
 
 import numpy as np
 from griptape_nodes.exe_types.core_types import Parameter, ParameterMode
@@ -133,6 +133,30 @@ def apply_color_management(
     return apply_tone_mapping(rgb, tone_mapping), tone_mapping
 
 
+@overload
+def add_color_mode_parameters(
+    node: BaseNode,
+    *,
+    color_mode_tooltip: str = ...,
+    tone_mapping_tooltip: str = ...,
+    color_params_tooltip: str = ...,
+    embed_profile_tooltip: str = ...,
+    include_embed_profile: Literal[True] = ...,
+) -> tuple[ParameterString, ParameterString, Parameter, ParameterBool]: ...
+
+
+@overload
+def add_color_mode_parameters(
+    node: BaseNode,
+    *,
+    color_mode_tooltip: str = ...,
+    tone_mapping_tooltip: str = ...,
+    color_params_tooltip: str = ...,
+    embed_profile_tooltip: str = ...,
+    include_embed_profile: Literal[False],
+) -> tuple[ParameterString, ParameterString, Parameter, None]: ...
+
+
 def add_color_mode_parameters(
     node: BaseNode,
     *,
@@ -140,14 +164,19 @@ def add_color_mode_parameters(
     tone_mapping_tooltip: str = TONE_MAPPING_TOOLTIP,
     color_params_tooltip: str = "OCIO color parameters (source colorspace, display, view). Required when color_mode is 'ocio'.",
     embed_profile_tooltip: str = EMBED_PROFILE_TOOLTIP,
-) -> tuple[ParameterString, ParameterString, Parameter, ParameterBool]:
+    include_embed_profile: bool = True,
+) -> tuple[ParameterString, ParameterString, Parameter, ParameterBool | None]:
     """Create and register the colour management parameters.
 
-    Registers color_mode, tone_mapping, color_params and embed_color_profile.
+    Registers color_mode, tone_mapping, color_params and, unless
+    `include_embed_profile` is False, embed_color_profile. A node writing
+    video passes False: an MP4 cannot carry an ICC profile, so it signals
+    colour through stream tags and the switch would do nothing there.
 
     Sets default mode based on OCIO availability, restores the saved mode from
-    node.metadata, and applies initial visibility. Returns the three parameter
-    objects so the caller can store them as instance attributes.
+    node.metadata, and applies initial visibility. Returns the parameter
+    objects so the caller can store them as instance attributes, with None in
+    place of embed_color_profile when it was not registered.
     """
     default_mode = COLOR_MODE_OCIO if find_colorspace_transform_request_type() is not None else COLOR_MODE_BASIC
 
@@ -187,14 +216,16 @@ def add_color_mode_parameters(
     )
     node.add_parameter(color_params_param)
 
-    embed_profile_param = ParameterBool(
-        name="embed_color_profile",
-        default_value=False,
-        tooltip=embed_profile_tooltip,
-        allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
-        ui_options={"hide": ocio_active},
-    )
-    node.add_parameter(embed_profile_param)
+    embed_profile_param = None
+    if include_embed_profile:
+        embed_profile_param = ParameterBool(
+            name="embed_color_profile",
+            default_value=False,
+            tooltip=embed_profile_tooltip,
+            allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
+            ui_options={"hide": ocio_active},
+        )
+        node.add_parameter(embed_profile_param)
 
     # after_value_set is not called by the framework when restoring saved values,
     # so read the persisted mode from metadata to apply the correct initial visibility.
@@ -204,7 +235,7 @@ def add_color_mode_parameters(
         restored_mode == COLOR_MODE_OCIO,
         tone_mapping_param.name,
         color_params_param.name,
-        embed_profile_param.name,
+        embed_profile_param.name if embed_profile_param is not None else None,
     )
 
     return color_mode_param, tone_mapping_param, color_params_param, embed_profile_param
@@ -215,7 +246,7 @@ def handle_color_mode_change(
     value: Any,
     tone_mapping_param_name: str,
     color_params_param_name: str,
-    embed_profile_param_name: str,
+    embed_profile_param_name: str | None,
 ) -> None:
     """Persist the color mode to metadata and update parameter visibility."""
     node.metadata["_color_mode"] = value
@@ -233,18 +264,21 @@ def apply_color_mode_visibility(
     ocio_active: bool,
     tone_mapping_name: str,
     color_params_name: str,
-    embed_profile_name: str,
+    embed_profile_name: str | None,
 ) -> None:
     """Show/hide the basic-mode and OCIO parameters to match the active color mode.
 
     embed_color_profile follows tone_mapping: it describes a local display
-    transform, and OCIO output is already display-referred.
+    transform, and OCIO output is already display-referred. It is None on a
+    node that writes video, which has no profile to embed.
     """
     if ocio_active:
         node.hide_parameter_by_name(tone_mapping_name)
-        node.hide_parameter_by_name(embed_profile_name)
         node.show_parameter_by_name(color_params_name)
+        if embed_profile_name is not None:
+            node.hide_parameter_by_name(embed_profile_name)
     else:
         node.show_parameter_by_name(tone_mapping_name)
-        node.show_parameter_by_name(embed_profile_name)
         node.hide_parameter_by_name(color_params_name)
+        if embed_profile_name is not None:
+            node.show_parameter_by_name(embed_profile_name)

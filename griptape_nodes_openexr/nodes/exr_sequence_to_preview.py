@@ -73,16 +73,25 @@ _FFMPEG_TRC_VALUES = {
 _DEFAULT_TRC = "bt709"
 
 
-def color_trc_for(tone_mapping: str) -> str:
+def color_trc_for(tone_mapping: str, *, ocio_active: bool = False) -> str:
     """ffmpeg -color_trc value for a display transform.
+
+    Under OCIO the display/view transform resolves to a config colorspace we
+    cannot describe, and tone_mapping is a hidden basic-mode control whose
+    stale value would otherwise pick the tag. The PNG paths write no profile
+    at all in that case; a video has nowhere to put "unknown", so it gets the
+    Rec.709 default instead of a guess that changes with a hidden widget.
 
     Args:
         tone_mapping: A display transform name (case-insensitive).
+        ocio_active: Whether an OCIO transform produced the frames.
 
     Returns:
         An ffmpeg transfer characteristic string, falling back to bt709 for
         an unrecognised name.
     """
+    if ocio_active:
+        return _DEFAULT_TRC
     return _FFMPEG_TRC_VALUES.get(tone_mapping.lower(), _DEFAULT_TRC)
 
 
@@ -140,12 +149,14 @@ class EXRSequenceToPreview(SuccessFailureNode):
         )
         self.add_parameter(self._exposure_param)
 
+        # No embed_color_profile: an MP4 cannot carry an ICC profile, so this
+        # node signals colour through the stream tags written below instead.
         (
             self._color_mode_param,
             self._tone_mapping_param,
             self._color_params_param,
-            self._embed_color_profile_param,
-        ) = add_color_mode_parameters(self)
+            _,
+        ) = add_color_mode_parameters(self, include_embed_profile=False)
 
         # TODO: output path/URL may be derivable from the Artifact Manager in future
         self._format_param = ParameterString(
@@ -225,7 +236,7 @@ class EXRSequenceToPreview(SuccessFailureNode):
                 value,
                 self._tone_mapping_param.name,
                 self._color_params_param.name,
-                self._embed_color_profile_param.name,
+                None,
             )
 
     def _get_processing_speed_settings(self) -> tuple[str, int]:
@@ -331,9 +342,8 @@ class EXRSequenceToPreview(SuccessFailureNode):
                 # All our transforms share Rec.709 primaries, so only the
                 # transfer curve varies.
                 "-x264-params",
-                f"colorprim=bt709:transfer={color_trc_for(tone_mapping)}:colormatrix=bt709",
-                "-color_range",
-                "tv",
+                f"colorprim=bt709:transfer={color_trc_for(tone_mapping, ocio_active=color_params is not None)}"
+                ":colormatrix=bt709",
                 "-movflags",
                 "+faststart",
                 "-an",

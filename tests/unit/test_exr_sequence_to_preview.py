@@ -108,6 +108,20 @@ class TestNodeInit:
         assert node.get_parameter_value("processing_speed") == "balanced"
 
 
+class TestNoEmbedColorProfileParameter:
+    def test_video_node_has_no_embed_color_profile(self) -> None:
+        # An MP4 cannot carry an ICC profile, so the switch would do nothing
+        # here. Colour is signalled through the stream tags instead.
+        node = _make_node()
+        assert node.get_parameter_by_name("embed_color_profile") is None
+
+    def test_other_colour_parameters_are_still_registered(self) -> None:
+        # Control: dropping one parameter must not drop the rest.
+        node = _make_node()
+        for name in ("color_mode", "tone_mapping", "color_params"):
+            assert node.get_parameter_by_name(name) is not None, name
+
+
 class TestRetiredToneMappingIsRejected:
     """A retired name must fail at the point it is set, not render silently.
 
@@ -191,7 +205,7 @@ class TestAfterValueSetColorMode:
             True,
             node._tone_mapping_param.name,
             node._color_params_param.name,
-            node._embed_color_profile_param.name,
+            None,
         )
 
     def test_switching_to_basic_calls_visibility_with_false(self) -> None:
@@ -203,7 +217,7 @@ class TestAfterValueSetColorMode:
             False,
             node._tone_mapping_param.name,
             node._color_params_param.name,
-            node._embed_color_profile_param.name,
+            None,
         )
 
     def test_other_parameter_does_not_call_visibility(self) -> None:
@@ -597,6 +611,78 @@ class TestAProcessOCIOMode:
         call_args = mock_cm.call_args
         assert call_args[0][1] is fake_color_params
 
+    def test_ocio_render_is_tagged_bt709_not_from_tone_mapping(self, tmp_path: Path) -> None:
+        # End to end through aprocess: the stale basic-mode value is rec1886,
+        # whose basic-mode tag is bt709 too, so pick raw, whose tag differs.
+        from griptape_nodes.retained_mode.events.os_events import DeleteFileRequest
+        from griptape_nodes.retained_mode.griptape_nodes import GriptapeNodes
+
+        node = _make_node(ocio_available=True)
+        seq_dict = _make_sequence([SINGLE_PART_RGBA])
+        fake_pixels = _make_1x1_rgba_pixels()
+        fake_saved = MagicMock()
+        fake_saved.location = "/tmp/preview.mp4"
+        fake_dest = MagicMock()
+        fake_dest.write_bytes.return_value = fake_saved
+        node._output_file = MagicMock()
+        node._output_file.build_file.return_value = fake_dest
+
+        mock_situation_dest = MagicMock()
+        mock_situation_dest.resolve.return_value = tmp_path / "exr-preview" / "frame_0000.png"
+
+        def _handle_request(request):
+            if isinstance(request, DeleteFileRequest) and request.path:
+                target = Path(request.path)
+                shutil.rmtree(target, ignore_errors=True) if target.is_dir() else target.unlink(missing_ok=True)
+            return MagicMock()
+
+        fake_color_params = MagicMock()
+        fake_color_params.source_colorspace = "ACEScg"
+        fake_color_params.display = "sRGB"
+        fake_color_params.view = "ACES"
+        fake_color_params.config_path = None
+
+        node.set_parameter_value("sequence", seq_dict)
+        node.set_parameter_value("color_mode", COLOR_MODE_OCIO)
+        node.set_parameter_value("color_params", fake_color_params)
+        node.set_parameter_value("tone_mapping", "raw")
+        node.set_parameter_value("threads", 1)
+
+        captured_cmd = []
+
+        with (
+            patch(f"{_NODE_MODULE}.ProjectFileDestination") as mock_pfd,
+            patch.object(GriptapeNodes, "handle_request", side_effect=_handle_request),
+            patch(f"{_NODE_MODULE}.load_exr_channels", return_value=fake_pixels),
+            patch(f"{_NODE_MODULE}.select_display_channels", return_value=["R", "G", "B"]),
+            patch(
+                f"{_NODE_MODULE}.apply_color_management",
+                return_value=(np.ones((1, 1, 3), dtype=np.float32), "ocio:ACEScg→sRGB/ACES"),
+            ),
+            patch(f"{_NODE_MODULE}.subprocess") as mock_subproc,
+            patch(f"{_NODE_MODULE}.run") as mock_ffmpeg_run,
+        ):
+            mock_pfd.from_situation.return_value = mock_situation_dest
+            mock_ffmpeg_run.get_or_fetch_platform_executables_else_raise.return_value = (
+                "/usr/bin/ffmpeg",
+                "/usr/bin/ffprobe",
+            )
+
+            def capture_cmd(cmd, **kwargs):
+                captured_cmd.extend(cmd)
+                Path(cmd[-1]).write_bytes(b"FAKE")
+                return MagicMock(returncode=0)
+
+            mock_subproc.run.side_effect = capture_cmd
+            mock_subproc.TimeoutExpired = __import__("subprocess").TimeoutExpired
+            mock_subproc.CalledProcessError = __import__("subprocess").CalledProcessError
+
+            asyncio.run(node.aprocess())
+
+        params = captured_cmd[captured_cmd.index("-x264-params") + 1]
+        assert "transfer=bt709" in params
+        assert "transfer=linear" not in params
+
 
 # ---------------------------------------------------------------------------
 # Temp-dir situation usage
@@ -738,6 +824,23 @@ class TestVideoColourTags:
         from griptape_nodes_openexr.nodes.exr_sequence_to_preview import color_trc_for
 
         assert color_trc_for("something-else") == "bt709"
+
+    @pytest.mark.parametrize("tone", TONE_CHOICES)
+    def test_ocio_tags_bt709_whatever_the_hidden_tone_mapping_says(self, tone: str) -> None:
+        # tone_mapping is hidden in OCIO mode, so letting it pick the tag
+        # means two renders from one OCIO config carry different transfer
+        # characteristics depending on what basic mode was last set to.
+        from griptape_nodes_openexr.nodes.exr_sequence_to_preview import color_trc_for
+
+        assert color_trc_for(tone, ocio_active=True) == "bt709"
+
+    def test_basic_mode_still_follows_the_selected_transform(self) -> None:
+        # Control for the test above: the OCIO guard must not flatten the
+        # basic-mode mapping it sits next to.
+        from griptape_nodes_openexr.nodes.exr_sequence_to_preview import color_trc_for
+
+        assert color_trc_for("raw", ocio_active=False) == "linear"
+        assert color_trc_for("sRGB", ocio_active=False) == "iec61966-2-1"
 
     def test_every_choice_maps_to_an_accepted_value(self) -> None:
         from griptape_nodes_openexr.exr.tone_mapping import TONE_CHOICES

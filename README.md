@@ -228,10 +228,12 @@ So the switch chooses what the output is for:
 The parameter is hidden in `ocio` colour mode, where the display/view
 transform already resolves to a display colorspace we cannot describe.
 
-**Video** is always tagged. An MP4 cannot carry an ICC profile, so
-**EXR Sequence to Preview** writes Rec.709 primaries and a matching transfer
-characteristic into the stream regardless of this setting. Players do honour
-those tags, and leaving them absent means the player guesses.
+**Video** is always tagged, and has no `embed_color_profile` parameter. An MP4
+cannot carry an ICC profile, so **EXR Sequence to Preview** writes Rec.709
+primaries and a matching transfer characteristic into the stream instead.
+Players do honour those tags, and leaving them absent means the player
+guesses. In `ocio` colour mode the transfer tag is Rec.709, since the
+display/view transform resolves to a colorspace we cannot name.
 
 Alpha is included automatically when an alpha channel (`A`) is found in the part.
 
@@ -312,19 +314,18 @@ Bakes an EXR frame sequence down to a single MP4/MOV preview video, applying exp
 
 **Inputs**
 
-| Parameter             | Type                 | Description                                                                                                      |
-| --------------------- | -------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| `sequence`            | `Sequence`           | Frame sequence from **Scan Sequence** / **Scan Split Sequence**                                                  |
-| `frame_rate`          | `float`              | Output frame rate. Default `24.0`.                                                                               |
-| `part_index`          | `int`                | Part index to read from every frame. Default `0`.                                                                |
-| `exposure`            | `float`              | Exposure in EV stops applied before tone mapping. Default `0.0`.                                                 |
-| `color_mode`          | `str`                | `Basic` or `OCIO`.                                                                                               |
-| `tone_mapping`        | `str`                | `sRGB`, `rec709`, `rec1886`, or `raw`. Default `sRGB`. See [Display transforms](#display-transforms).            |
-| `embed_color_profile` | `bool`               | Embed an ICC profile describing the display transform. Default `false`. See [Colour profiles](#colour-profiles). |
-| `color_params`        | `OCIOConfigArtifact` | OCIO config. Required when `color_mode` is `OCIO`.                                                               |
-| `format`              | `str`                | Output container: `mp4` or `mov`. Default `mp4`.                                                                 |
-| `processing_speed`    | `str`                | `fast`, `balanced`, or `quality`. Trades encode speed for size/quality.                                          |
-| `threads`             | `int`                | Worker count for per-frame conversion. Range 1-16, default `4`. In the Advanced group.                           |
+| Parameter          | Type                 | Description                                                                                           |
+| ------------------ | -------------------- | ----------------------------------------------------------------------------------------------------- |
+| `sequence`         | `Sequence`           | Frame sequence from **Scan Sequence** / **Scan Split Sequence**                                       |
+| `frame_rate`       | `float`              | Output frame rate. Default `24.0`.                                                                    |
+| `part_index`       | `int`                | Part index to read from every frame. Default `0`.                                                     |
+| `exposure`         | `float`              | Exposure in EV stops applied before tone mapping. Default `0.0`.                                      |
+| `color_mode`       | `str`                | `Basic` or `OCIO`.                                                                                    |
+| `tone_mapping`     | `str`                | `sRGB`, `rec709`, `rec1886`, or `raw`. Default `sRGB`. See [Display transforms](#display-transforms). |
+| `color_params`     | `OCIOConfigArtifact` | OCIO config. Required when `color_mode` is `OCIO`.                                                    |
+| `format`           | `str`                | Output container: `mp4` or `mov`. Default `mp4`.                                                      |
+| `processing_speed` | `str`                | `fast`, `balanced`, or `quality`. Trades encode speed for size/quality.                               |
+| `threads`          | `int`                | Worker count for per-frame conversion. Range 1-16, default `4`. In the Advanced group.                |
 
 **Outputs**
 
