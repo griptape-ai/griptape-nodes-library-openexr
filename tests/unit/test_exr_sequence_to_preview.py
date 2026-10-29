@@ -12,7 +12,7 @@ import numpy as np
 import pytest
 
 from griptape_nodes_openexr.exr.ocio_helpers import COLOR_MODE_BASIC, COLOR_MODE_OCIO
-from griptape_nodes_openexr.exr.tone_mapping import TONE_REC709
+from griptape_nodes_openexr.exr.tone_mapping import TONE_CHOICES, TONE_REC709
 
 DATA = Path(__file__).parents[1] / "data"
 SINGLE_PART_RGBA = DATA / "single_part_rgba.exr"
@@ -106,6 +106,38 @@ class TestNodeInit:
     def test_processing_speed_default_is_balanced(self) -> None:
         node = _make_node()
         assert node.get_parameter_value("processing_speed") == "balanced"
+
+
+class TestRetiredToneMappingIsRejected:
+    """A retired name must fail at the point it is set, not render silently.
+
+    The engine's Options trait converts any off-list value to choices[0]
+    before validators run, so a workflow saved with 'filmic' would otherwise
+    load as sRGB and render with no warning: 23 levels off at scene 0.18, and
+    clipped where filmic held detail above 1.0.
+    """
+
+    @pytest.mark.parametrize("tone", TONE_CHOICES)
+    def test_supported_choices_are_stored_unchanged(self, tone: str) -> None:
+        # Control: the validator must not be rejecting or rewriting the
+        # choices the dropdown offers.
+        node = _make_node()
+        node.set_parameter_value("tone_mapping", tone)
+        assert node.get_parameter_value("tone_mapping") == tone
+
+    @pytest.mark.parametrize(("tone", "alternative"), [("filmic", "ocio"), ("linear", "raw")])
+    def test_retired_name_raises_naming_its_replacement(self, tone: str, alternative: str) -> None:
+        node = _make_node()
+        with pytest.raises(ValueError, match="no longer supported") as excinfo:
+            node.set_parameter_value("tone_mapping", tone)
+        message = str(excinfo.value)
+        assert "sRGB" in message
+        assert alternative in message
+
+    def test_unknown_name_raises_rather_than_falling_back(self) -> None:
+        node = _make_node()
+        with pytest.raises(ValueError, match="Unsupported tone mapping"):
+            node.set_parameter_value("tone_mapping", "reinhard")
 
 
 # ---------------------------------------------------------------------------

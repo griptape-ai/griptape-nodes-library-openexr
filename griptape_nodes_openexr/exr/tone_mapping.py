@@ -164,6 +164,25 @@ def apply_tone_mapping(rgb: np.ndarray, tone_mapping: str) -> np.ndarray:
     Raises:
         ValueError: If tone_mapping is not a supported curve.
     """
+    check_tone_mapping(tone_mapping)
+    return _TONE_TRANSFER_FUNCTIONS[tone_mapping.lower()](rgb.astype(np.float32))
+
+
+def check_tone_mapping(tone_mapping: str) -> None:
+    """Raise if `tone_mapping` is not a display transform this module applies.
+
+    Split out so a node can reject a retired name when the value is set,
+    rather than at render time. The engine's Options trait silently rewrites
+    an off-list value to the first choice, so a parameter carrying a retired
+    name never reaches `apply_tone_mapping` to be rejected there.
+
+    Args:
+        tone_mapping: A display transform name (case-insensitive).
+
+    Raises:
+        ValueError: If the name is retired, or is not a supported curve. A
+            retired name gets the message naming its replacement.
+    """
     tone = tone_mapping.lower()
 
     retired = _RETIRED_TONES.get(tone)
@@ -173,8 +192,6 @@ def apply_tone_mapping(rgb: np.ndarray, tone_mapping: str) -> np.ndarray:
     if tone not in _TONE_TRANSFER_FUNCTIONS:
         msg = f"Unsupported tone mapping: {tone_mapping!r}. Choose one of: {', '.join(TONE_CHOICES)}."
         raise ValueError(msg)
-
-    return _TONE_TRANSFER_FUNCTIONS[tone](rgb.astype(np.float32))
 
 
 def to_uint8(arr: np.ndarray) -> np.ndarray:
