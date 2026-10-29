@@ -312,6 +312,13 @@ class EXRSequenceToPreview(SuccessFailureNode):
             if errors:
                 logger.warning("%s: %d frame(s) failed conversion: %s", self.name, len(errors), "; ".join(errors))
 
+            # Every frame failing leaves an empty temp dir, and ffmpeg then
+            # reports only "Error opening input files", burying the real
+            # cause in the log. Report the first frame error instead.
+            if len(errors) == total:
+                self._on_fail(f"All {total} frame(s) failed conversion. First error: {errors[0]}")
+                return
+
             # --- ffmpeg encode ---
             try:
                 ffmpeg_path, _ = run.get_or_fetch_platform_executables_else_raise()

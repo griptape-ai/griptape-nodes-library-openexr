@@ -520,6 +520,46 @@ class TestAProcessPipeline:
         details = node.parameter_output_values.get("result_details", "")
         assert "1 frame error" in details
 
+    def test_every_frame_failing_reports_the_frame_error(self, tmp_path: Path) -> None:
+        # An empty temp dir makes ffmpeg report "Error opening input files",
+        # which says nothing about why the frames failed. The real cause has
+        # to reach the user.
+        from griptape_nodes.retained_mode.events.os_events import DeleteFileRequest
+        from griptape_nodes.retained_mode.griptape_nodes import GriptapeNodes
+
+        node = _make_node()
+        node._output_file = MagicMock()
+        mock_situation_dest = MagicMock()
+        mock_situation_dest.resolve.return_value = tmp_path / "exr-preview" / "frame_0000.png"
+
+        def _handle_request(request):
+            if isinstance(request, DeleteFileRequest) and request.path:
+                target = Path(request.path)
+                shutil.rmtree(target, ignore_errors=True) if target.is_dir() else target.unlink(missing_ok=True)
+            return MagicMock()
+
+        node.set_parameter_value("sequence", _make_sequence([SINGLE_PART_RGBA, SINGLE_PART_RGBA]))
+        node.set_parameter_value("threads", 1)
+
+        with (
+            patch(f"{_NODE_MODULE}.ProjectFileDestination") as mock_pfd,
+            patch.object(GriptapeNodes, "handle_request", side_effect=_handle_request),
+            patch(f"{_NODE_MODULE}.load_exr_channels", side_effect=ValueError("simulated bad EXR")),
+            patch(f"{_NODE_MODULE}.subprocess") as mock_subproc,
+            patch(f"{_NODE_MODULE}.run") as mock_ffmpeg_run,
+        ):
+            mock_pfd.from_situation.return_value = mock_situation_dest
+            mock_subproc.TimeoutExpired = __import__("subprocess").TimeoutExpired
+            mock_subproc.CalledProcessError = __import__("subprocess").CalledProcessError
+
+            asyncio.run(node.aprocess())
+
+        assert _was_successful(node) is False
+        details = node.parameter_output_values.get("result_details", "")
+        assert "simulated bad EXR" in details
+        # ffmpeg must never have been reached, so its noise cannot mask this.
+        mock_ffmpeg_run.get_or_fetch_platform_executables_else_raise.assert_not_called()
+
 
 # ---------------------------------------------------------------------------
 # aprocess — OCIO mode
