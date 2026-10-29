@@ -171,11 +171,11 @@ class TestAttemptGeneratePreviewRGBA:
         assert result == "preview.webp"
 
     @pytest.mark.asyncio
-    async def test_linear_tone_mapping_succeeds(self, tmp_path: Path) -> None:
+    async def test_srgb_tone_mapping_succeeds(self, tmp_path: Path) -> None:
         exr_path = DATA_DIR / "single_part_rgba.exr"
         engine = _make_engine()
 
-        gen = _make_generator(exr_path, tmp_path, params={"tone_mapping": "linear"}, engine=engine)
+        gen = _make_generator(exr_path, tmp_path, params={"tone_mapping": "sRGB"}, engine=engine)
         result = await gen.attempt_generate_preview()
 
         assert result == "preview.webp"
@@ -201,7 +201,7 @@ class TestAttemptGeneratePreviewRGBA:
             preview_format="webp",
             destination_preview_directory=str(tmp_path),
             destination_preview_file_name="dark.webp",
-            params={"exposure": -3.0, "tone_mapping": "linear"},
+            params={"exposure": -3.0, "tone_mapping": "sRGB"},
             engine=engine,
         )
         await gen_dark.attempt_generate_preview()
@@ -211,7 +211,7 @@ class TestAttemptGeneratePreviewRGBA:
             preview_format="webp",
             destination_preview_directory=str(tmp_path),
             destination_preview_file_name="bright.webp",
-            params={"exposure": 3.0, "tone_mapping": "linear"},
+            params={"exposure": 3.0, "tone_mapping": "sRGB"},
             engine=engine,
         )
         await gen_bright.attempt_generate_preview()

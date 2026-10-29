@@ -50,7 +50,7 @@ from griptape_nodes_openexr.exr.ocio_helpers import (
     handle_color_mode_change,
 )
 from griptape_nodes_openexr.exr.rendering import render_part_png
-from griptape_nodes_openexr.exr.tone_mapping import EV_MAX, EV_MIN, TONE_FILMIC
+from griptape_nodes_openexr.exr.tone_mapping import EV_MAX, EV_MIN, TONE_DEFAULT
 from griptape_nodes_openexr.exr.viewer_launcher import handle_viewer_button_click
 
 if TYPE_CHECKING:
@@ -250,7 +250,6 @@ class ReadEXR(SuccessFailureNode):
             self._color_mode_param, self._tone_mapping_param, self._color_params_param = add_color_mode_parameters(
                 self,
                 color_mode_tooltip="Color management mode. 'basic' uses local tone mapping; 'ocio' uses the connected OCIOColorParamsArtifact.",
-                tone_mapping_tooltip="Local tone mapping when color_mode is 'basic'. 'filmic' applies Narkowicz 2015 curve; 'linear' clamps to [0, 1].",
                 color_params_tooltip="OCIO color parameters artifact (source colorspace, display, view). Required when color_mode is 'ocio'.",
             )
         self.add_node_element(color_group)
@@ -779,7 +778,7 @@ class ReadEXR(SuccessFailureNode):
             layer=str(self.get_parameter_value(self._layer_param.name) or ""),
             exposure_ev=float(self.get_parameter_value(self._exposure_param.name) or 0.0),
             color_mode=color_mode,
-            tone_mapping=str(self.get_parameter_value(self._tone_mapping_param.name) or TONE_FILMIC),
+            tone_mapping=str(self.get_parameter_value(self._tone_mapping_param.name) or TONE_DEFAULT),
             color_params=color_params,
         )
 

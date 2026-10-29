@@ -27,6 +27,7 @@ from griptape_nodes_openexr.exr.channel_selection import select_alpha_channel, s
 from griptape_nodes_openexr.exr.exr_io import build_rgb_array, load_exr_channels, scan_exr_header
 from griptape_nodes_openexr.exr.tone_mapping import (
     TONE_CURVES_DESCRIPTION,
+    TONE_DEFAULT,
     apply_exposure,
     apply_tone_mapping,
     to_uint8,
@@ -40,8 +41,8 @@ class EXRPreviewParameters(BaseGeneratorParameters):
     """Parameters for EXR preview generation."""
 
     tone_mapping: str = Field(
-        default="filmic",
-        description=f"Tone mapping curve. {TONE_CURVES_DESCRIPTION}",
+        default=TONE_DEFAULT,
+        description=f"Display transform. {TONE_CURVES_DESCRIPTION}",
         editor_schema_type="string",
     )
 

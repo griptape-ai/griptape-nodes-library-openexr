@@ -12,7 +12,7 @@ from griptape_nodes_openexr.exr.ocio_helpers import (
     find_colorspace_transform_request_type,
     reset_colorspace_transform_request_type_cache,
 )
-from griptape_nodes_openexr.exr.tone_mapping import TONE_FILMIC, TONE_LINEAR
+from griptape_nodes_openexr.exr.tone_mapping import TONE_FILMIC, TONE_SRGB
 
 from .conftest import (
     _color_params,
@@ -262,15 +262,15 @@ class TestApplyColorManagementBasicMode:
         mock_gn.handle_request.assert_not_called()
         assert label == TONE_FILMIC
 
-    def test_linear_tone_mapping_used_when_no_artifact(self) -> None:
+    def test_srgb_tone_mapping_used_when_no_artifact(self) -> None:
         rgb = _rgb()
         mock_gn = MagicMock()
 
         with patch(f"{_OCIO_HELPERS}.GriptapeNodes", mock_gn):
-            _, label = apply_color_management(rgb, None, TONE_LINEAR)
+            _, label = apply_color_management(rgb, None, TONE_SRGB)
 
         mock_gn.handle_request.assert_not_called()
-        assert label == TONE_LINEAR
+        assert label == TONE_SRGB
 
     def test_basic_mode_output_is_display_encoded(self) -> None:
         """Basic mode must encode, so scene 0.18 lands near mid-grey rather than crushed."""

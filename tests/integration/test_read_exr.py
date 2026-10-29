@@ -34,7 +34,14 @@ from griptape_nodes_openexr.exr.channel_selection import select_display_channels
 from griptape_nodes_openexr.exr.exr_header_artifact import EXRChannelArtifact, EXRPartArtifact
 from griptape_nodes_openexr.exr.exr_io import scan_exr_header, write_exr_channels
 from griptape_nodes_openexr.exr.ocio_helpers import COLOR_MODE_BASIC, COLOR_MODE_OCIO
-from griptape_nodes_openexr.exr.tone_mapping import TONE_LINEAR
+from griptape_nodes_openexr.exr.tone_mapping import (
+    TONE_CHOICES,
+    TONE_FILMIC,
+    TONE_RAW,
+    TONE_REC709,
+    TONE_REC1886,
+    TONE_SRGB,
+)
 
 DATA = Path(__file__).parents[1] / "data"
 SINGLE_PART_RGBA = DATA / "single_part_rgba.exr"
@@ -266,7 +273,7 @@ class TestColorManagement:
 
         node = _make_node()
         node.set_parameter_value("path", str(SINGLE_PART_RGBA))
-        node.set_parameter_value("tone_mapping", TONE_LINEAR)
+        node.set_parameter_value("tone_mapping", TONE_SRGB)
         asyncio.run(_run(node))
         base = _rendered(node)[..., :3].astype(np.int32)
 
@@ -281,14 +288,36 @@ class TestColorManagement:
 
         node = _make_node()
         node.set_parameter_value("path", str(SINGLE_PART_RGBA))
+        # Set both ends explicitly: sRGB is the default, so relying on it for
+        # one side would compare a render against itself.
+        node.set_parameter_value("tone_mapping", TONE_FILMIC)
         asyncio.run(_run(node))
         filmic = _rendered(node)
 
-        node.set_parameter_value("tone_mapping", TONE_LINEAR)
+        node.set_parameter_value("tone_mapping", TONE_SRGB)
         asyncio.run(_run(node))
-        linear = _rendered(node)
+        srgb = _rendered(node)
 
-        assert not np.array_equal(filmic, linear)
+        assert not np.array_equal(filmic, srgb)
+
+    def test_each_display_transform_renders_differently(self, engine: _Engine) -> None:
+        """Every basic-mode choice must reach the render, not silently collapse."""
+        import asyncio
+
+        node = _make_node()
+        node.set_parameter_value("path", str(SINGLE_PART_RGBA))
+
+        renders = {}
+        for tone in TONE_CHOICES:
+            node.set_parameter_value("tone_mapping", tone)
+            asyncio.run(_run(node))
+            renders[tone] = _rendered(node)[..., :3].astype(np.int32)
+
+        # rec709 is darker than sRGB, which is darker than rec1886.
+        assert renders[TONE_REC709].sum() < renders[TONE_SRGB].sum()
+        assert renders[TONE_SRGB].sum() < renders[TONE_REC1886].sum()
+        # raw skips the transfer function entirely, so it is darkest of all.
+        assert renders[TONE_RAW].sum() < renders[TONE_REC709].sum()
 
     def test_ocio_mode_without_color_params_fails_loudly(self, engine: _Engine) -> None:
         import asyncio

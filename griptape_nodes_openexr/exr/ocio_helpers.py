@@ -14,9 +14,9 @@ from griptape_nodes.retained_mode.griptape_nodes import GriptapeNodes
 from griptape_nodes.traits.options import Options
 
 from griptape_nodes_openexr.exr.tone_mapping import (
+    TONE_CHOICES,
     TONE_CURVES_DESCRIPTION,
-    TONE_FILMIC,
-    TONE_LINEAR,
+    TONE_DEFAULT,
     apply_tone_mapping,
 )
 
@@ -25,7 +25,7 @@ logger = logging.getLogger("griptape_nodes")
 COLOR_MODE_BASIC = "basic"
 COLOR_MODE_OCIO = "ocio"
 
-TONE_MAPPING_TOOLTIP = f"Local tone mapping when color_mode is 'basic'. {TONE_CURVES_DESCRIPTION}"
+TONE_MAPPING_TOOLTIP = f"Display transform when color_mode is 'basic'. {TONE_CURVES_DESCRIPTION}"
 
 
 class ColorParamsProtocol(Protocol):
@@ -147,12 +147,12 @@ def add_color_mode_parameters(
 
     tone_mapping_param = ParameterString(
         name="tone_mapping",
-        default_value=TONE_FILMIC,
+        default_value=TONE_DEFAULT,
         tooltip=tone_mapping_tooltip,
         allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
         ui_options={"hide": ocio_active},
     )
-    tone_mapping_param.add_trait(Options(choices=[TONE_FILMIC, TONE_LINEAR]))
+    tone_mapping_param.add_trait(Options(choices=TONE_CHOICES))
     node.add_parameter(tone_mapping_param)
 
     color_params_param = Parameter(

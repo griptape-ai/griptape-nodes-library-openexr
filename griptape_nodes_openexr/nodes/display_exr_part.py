@@ -22,7 +22,7 @@ from griptape_nodes_openexr.exr.ocio_helpers import (
     handle_color_mode_change,
 )
 from griptape_nodes_openexr.exr.rendering import render_part_png
-from griptape_nodes_openexr.exr.tone_mapping import EV_MAX, EV_MIN, TONE_FILMIC
+from griptape_nodes_openexr.exr.tone_mapping import EV_MAX, EV_MIN, TONE_DEFAULT
 from griptape_nodes_openexr.exr.viewer_launcher import handle_viewer_button_click
 
 if TYPE_CHECKING:
@@ -146,7 +146,7 @@ class DisplayEXRPart(SuccessFailureNode):
         alpha_channel = select_alpha_channel(channel_names, selected)
 
         ev = float(self.get_parameter_value(self._exposure_param.name) or 0.0)
-        tone_mapping = str(self.get_parameter_value(self._tone_mapping_param.name) or TONE_FILMIC)
+        tone_mapping = str(self.get_parameter_value(self._tone_mapping_param.name) or TONE_DEFAULT)
         color_mode = str(self.get_parameter_value(self._color_mode_param.name) or COLOR_MODE_BASIC)
 
         color_params: ColorParamsProtocol | None = None
