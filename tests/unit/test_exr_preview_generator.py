@@ -14,14 +14,14 @@ from griptape_nodes_openexr.artifact_providers.exr_preview_generator import (
 class TestEXRPreviewParameters:
     def test_defaults(self) -> None:
         params = EXRPreviewParameters()
-        assert params.tone_mapping == "filmic"
+        assert params.tone_mapping == "sRGB"
         assert params.exposure == 0.0
         assert params.max_width == 1024
         assert params.max_height == 1024
 
     def test_custom_values(self) -> None:
-        params = EXRPreviewParameters(tone_mapping="linear", exposure=2.0, max_width=512, max_height=256)
-        assert params.tone_mapping == "linear"
+        params = EXRPreviewParameters(tone_mapping="rec709", exposure=2.0, max_width=512, max_height=256)
+        assert params.tone_mapping == "rec709"
         assert params.exposure == 2.0
         assert params.max_width == 512
         assert params.max_height == 256
@@ -59,13 +59,13 @@ class TestEXRPreviewParameters:
             EXRPreviewParameters(max_height=8193)
 
     def test_model_validate_from_dict(self) -> None:
-        params = EXRPreviewParameters.model_validate({"tone_mapping": "linear", "exposure": -1.0})
-        assert params.tone_mapping == "linear"
+        params = EXRPreviewParameters.model_validate({"tone_mapping": "rec709", "exposure": -1.0})
+        assert params.tone_mapping == "rec709"
         assert params.exposure == -1.0
 
     def test_extra_fields_ignored(self) -> None:
         params = EXRPreviewParameters.model_validate({"unknown_field": "ignored"})
-        assert params.tone_mapping == "filmic"
+        assert params.tone_mapping == "sRGB"
 
     def test_editor_schema_type_present(self) -> None:
         assert EXRPreviewParameters.get_json_schema_type("tone_mapping") == "string"

@@ -50,7 +50,7 @@ from griptape_nodes_openexr.exr.ocio_helpers import (
     handle_color_mode_change,
 )
 from griptape_nodes_openexr.exr.rendering import render_part_png
-from griptape_nodes_openexr.exr.tone_mapping import EV_MAX, EV_MIN, TONE_FILMIC
+from griptape_nodes_openexr.exr.tone_mapping import EV_MAX, EV_MIN, TONE_DEFAULT
 from griptape_nodes_openexr.exr.viewer_launcher import handle_viewer_button_click
 
 if TYPE_CHECKING:
@@ -85,6 +85,7 @@ class RenderKey(NamedTuple):
     exposure_ev: float
     color_mode: str
     tone_mapping: str
+    embed_color_profile: bool
     color_params: tuple | None
 
 
@@ -129,6 +130,7 @@ class _FramePlan:
     exposure_ev: float
     color_mode: str
     tone_mapping: str
+    embed_color_profile: bool
     color_params: ColorParamsProtocol | None
 
 
@@ -247,10 +249,14 @@ class ReadEXR(SuccessFailureNode):
                 tooltip="Exposure in EV stops applied before tone mapping or OCIO transform",
                 allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
             )
-            self._color_mode_param, self._tone_mapping_param, self._color_params_param = add_color_mode_parameters(
+            (
+                self._color_mode_param,
+                self._tone_mapping_param,
+                self._color_params_param,
+                self._embed_color_profile_param,
+            ) = add_color_mode_parameters(
                 self,
                 color_mode_tooltip="Color management mode. 'basic' uses local tone mapping; 'ocio' uses the connected OCIOColorParamsArtifact.",
-                tone_mapping_tooltip="Local tone mapping when color_mode is 'basic'. 'filmic' applies Narkowicz 2015 curve; 'linear' clamps to [0, 1].",
                 color_params_tooltip="OCIO color parameters artifact (source colorspace, display, view). Required when color_mode is 'ocio'.",
             )
         self.add_node_element(color_group)
@@ -381,7 +387,13 @@ class ReadEXR(SuccessFailureNode):
 
     def after_value_set(self, parameter: Parameter, value: Any) -> None:
         if parameter.name == self._color_mode_param.name:
-            handle_color_mode_change(self, value, self._tone_mapping_param.name, self._color_params_param.name)
+            handle_color_mode_change(
+                self,
+                value,
+                self._tone_mapping_param.name,
+                self._color_params_param.name,
+                self._embed_color_profile_param.name,
+            )
             return
 
         if parameter.name == self._part_name_param.name:
@@ -779,7 +791,8 @@ class ReadEXR(SuccessFailureNode):
             layer=str(self.get_parameter_value(self._layer_param.name) or ""),
             exposure_ev=float(self.get_parameter_value(self._exposure_param.name) or 0.0),
             color_mode=color_mode,
-            tone_mapping=str(self.get_parameter_value(self._tone_mapping_param.name) or TONE_FILMIC),
+            tone_mapping=str(self.get_parameter_value(self._tone_mapping_param.name) or TONE_DEFAULT),
+            embed_color_profile=bool(self.get_parameter_value(self._embed_color_profile_param.name)),
             color_params=color_params,
         )
 
@@ -802,6 +815,7 @@ class ReadEXR(SuccessFailureNode):
             exposure_ev=plan.exposure_ev,
             color_mode=plan.color_mode,
             tone_mapping=plan.tone_mapping,
+            embed_color_profile=plan.embed_color_profile,
             # The artifact's values, not its identity: an upstream OCIO node can mutate
             # and re-emit the same object, which leaves id() unchanged and would serve a
             # stale image for the new display.
@@ -867,6 +881,7 @@ class ReadEXR(SuccessFailureNode):
                 plan.exposure_ev,
                 plan.color_params,
                 plan.tone_mapping,
+                plan.embed_color_profile,
             )
         except (ValueError, RuntimeError) as e:
             self._on_fail(str(e))
@@ -923,6 +938,7 @@ class ReadEXR(SuccessFailureNode):
         ev: float,
         color_params: ColorParamsProtocol | None,
         tone_mapping: str,
+        embed_color_profile: bool,
     ) -> tuple[bytes, str]:
         """Decode the selected channels and encode them as PNG bytes.
 
@@ -938,6 +954,7 @@ class ReadEXR(SuccessFailureNode):
             ev=ev,
             color_params=color_params,
             tone_mapping=tone_mapping,
+            embed_color_profile=embed_color_profile,
         )
 
     def _emit_render(self, outputs: dict[str, Any]) -> None:

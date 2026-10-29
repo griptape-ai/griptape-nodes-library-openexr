@@ -39,6 +39,10 @@ from griptape_nodes_openexr.exr.sequence_helpers import resolve_sequence, run_ov
 from griptape_nodes_openexr.exr.tone_mapping import (
     EV_MAX,
     EV_MIN,
+    TONE_RAW,
+    TONE_REC709,
+    TONE_REC1886,
+    TONE_SRGB,
     apply_exposure,
     to_uint8,
 )
@@ -49,6 +53,48 @@ _DEFAULT_FRAME_RATE = 24.0
 _DEFAULT_THREADS = 4
 _LOG_INTERVAL_PCT = 10
 _PIX_FMT = "yuv420p"
+
+# Transfer characteristics per display transform. A video carries no ICC
+# profile, so these tags are its only colour signalling.
+#
+# They are passed through -x264-params rather than ffmpeg's own -color_trc:
+# the bundled static_ffmpeg build accepts -color_trc without error but drops
+# it, leaving color_transfer=unknown in the output, while -colorspace does
+# apply. Setting all three through x264 keeps them consistent and verifiable.
+# An unrecognised value is ignored rather than honoured, hence the explicit
+# fallback rather than passing an arbitrary transform name through.
+_FFMPEG_TRC_VALUES = {
+    TONE_SRGB.lower(): "iec61966-2-1",
+    TONE_REC709.lower(): "bt709",
+    # No exact tag exists for gamma 2.4; bt709 is the closest available.
+    TONE_REC1886.lower(): "bt709",
+    TONE_RAW.lower(): "linear",
+}
+_DEFAULT_TRC = "bt709"
+
+
+def color_trc_for(tone_mapping: str, *, ocio_active: bool = False) -> str:
+    """ffmpeg -color_trc value for a display transform.
+
+    Under OCIO the display/view transform resolves to a config colorspace we
+    cannot describe, and tone_mapping is a hidden basic-mode control whose
+    stale value would otherwise pick the tag. The PNG paths write no profile
+    at all in that case; a video has nowhere to put "unknown", so it gets the
+    Rec.709 default instead of a guess that changes with a hidden widget.
+
+    Args:
+        tone_mapping: A display transform name (case-insensitive).
+        ocio_active: Whether an OCIO transform produced the frames.
+
+    Returns:
+        An ffmpeg transfer characteristic string, falling back to bt709 for
+        an unrecognised name.
+    """
+    if ocio_active:
+        return _DEFAULT_TRC
+    return _FFMPEG_TRC_VALUES.get(tone_mapping.lower(), _DEFAULT_TRC)
+
+
 _SPEED_FAST = "fast"
 _SPEED_BALANCED = "balanced"
 _SPEED_QUALITY = "quality"
@@ -103,7 +149,14 @@ class EXRSequenceToPreview(SuccessFailureNode):
         )
         self.add_parameter(self._exposure_param)
 
-        self._color_mode_param, self._tone_mapping_param, self._color_params_param = add_color_mode_parameters(self)
+        # No embed_color_profile: an MP4 cannot carry an ICC profile, so this
+        # node signals colour through the stream tags written below instead.
+        (
+            self._color_mode_param,
+            self._tone_mapping_param,
+            self._color_params_param,
+            _,
+        ) = add_color_mode_parameters(self, include_embed_profile=False)
 
         # TODO: output path/URL may be derivable from the Artifact Manager in future
         self._format_param = ParameterString(
@@ -178,7 +231,13 @@ class EXRSequenceToPreview(SuccessFailureNode):
 
     def after_value_set(self, parameter: Parameter, value: Any) -> None:
         if parameter.name == self._color_mode_param.name:
-            handle_color_mode_change(self, value, self._tone_mapping_param.name, self._color_params_param.name)
+            handle_color_mode_change(
+                self,
+                value,
+                self._tone_mapping_param.name,
+                self._color_params_param.name,
+                None,
+            )
 
     def _get_processing_speed_settings(self) -> tuple[str, int]:
         """Return (preset, crf) for the current processing_speed value."""
@@ -253,6 +312,13 @@ class EXRSequenceToPreview(SuccessFailureNode):
             if errors:
                 logger.warning("%s: %d frame(s) failed conversion: %s", self.name, len(errors), "; ".join(errors))
 
+            # Every frame failing leaves an empty temp dir, and ffmpeg then
+            # reports only "Error opening input files", burying the real
+            # cause in the log. Report the first frame error instead.
+            if len(errors) == total:
+                self._on_fail(f"All {total} frame(s) failed conversion. First error: {errors[0]}")
+                return
+
             # --- ffmpeg encode ---
             try:
                 ffmpeg_path, _ = run.get_or_fetch_platform_executables_else_raise()
@@ -280,6 +346,11 @@ class EXRSequenceToPreview(SuccessFailureNode):
                 str(crf),
                 "-pix_fmt",
                 _PIX_FMT,
+                # All our transforms share Rec.709 primaries, so only the
+                # transfer curve varies.
+                "-x264-params",
+                f"colorprim=bt709:transfer={color_trc_for(tone_mapping, ocio_active=color_params is not None)}"
+                ":colormatrix=bt709",
                 "-movflags",
                 "+faststart",
                 "-an",

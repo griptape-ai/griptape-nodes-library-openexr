@@ -13,24 +13,22 @@ from griptape_nodes.exe_types.node_types import SuccessFailureNode
 from griptape_nodes.exe_types.param_components.project_file_parameter import ProjectFileParameter
 from griptape_nodes.exe_types.param_types.parameter_button import ParameterButton
 from griptape_nodes.exe_types.param_types.parameter_float import ParameterFloat
-from griptape_nodes.exe_types.param_types.parameter_string import ParameterString
-from griptape_nodes.traits.options import Options
 from PIL import Image
 
 from griptape_nodes_openexr.exr.exr_header_artifact import EXRChannelArtifact
 from griptape_nodes_openexr.exr.exr_io import load_exr_channels
+from griptape_nodes_openexr.exr.icc_profiles import profile_for_tone_mapping
 from griptape_nodes_openexr.exr.ocio_helpers import (
     COLOR_MODE_BASIC,
     COLOR_MODE_OCIO,
-    TONE_MAPPING_TOOLTIP,
     ColorParamsProtocol,
+    add_color_mode_parameters,
     apply_color_management,
-    apply_color_mode_visibility,
-    find_colorspace_transform_request_type,
+    handle_color_mode_change,
 )
+from griptape_nodes_openexr.exr.rendering import ndarray_to_png
 from griptape_nodes_openexr.exr.tone_mapping import (
-    TONE_FILMIC,
-    TONE_LINEAR,
+    TONE_DEFAULT,
     apply_exposure,
     to_uint8,
 )
@@ -55,7 +53,7 @@ class DisplayEXRChannel(SuccessFailureNode):
     Single RGB channel → placed in its colour plane (R-only → red, etc.). Missing RGB slots → zero-filled plane.
     Connected alpha slot → RGBA output PNG.
 
-    In 'basic' mode, local filmic or linear tone mapping is applied.
+    In 'basic' mode, a local display transform (sRGB, rec709, rec1886 or raw) is applied.
     In 'ocio' mode, a connected OCIOColorParamsArtifact drives an OCIO
     display-view transform. OCIO failures are always surfaced loudly.
     """
@@ -113,38 +111,12 @@ class DisplayEXRChannel(SuccessFailureNode):
         )
         self.add_parameter(self._exposure_param)
 
-        _default_mode = COLOR_MODE_OCIO if find_colorspace_transform_request_type() is not None else COLOR_MODE_BASIC
-
-        self._color_mode_param = ParameterString(
-            name="color_mode",
-            default_value=_default_mode,
-            tooltip="Color management mode. 'basic' uses local tone mapping; 'ocio' uses the connected OCIOColorParamsArtifact.",
-            allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
-        )
-        self._color_mode_param.add_trait(Options(choices=[COLOR_MODE_BASIC, COLOR_MODE_OCIO]))
-        self.add_parameter(self._color_mode_param)
-
-        _ocio_active = _default_mode == COLOR_MODE_OCIO
-
-        self._tone_mapping_param = ParameterString(
-            name="tone_mapping",
-            default_value=TONE_FILMIC,
-            tooltip=TONE_MAPPING_TOOLTIP,
-            allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
-            ui_options={"hide": _ocio_active},
-        )
-        self._tone_mapping_param.add_trait(Options(choices=[TONE_FILMIC, TONE_LINEAR]))
-        self.add_parameter(self._tone_mapping_param)
-
-        self._color_params_param = Parameter(
-            name="color_params",
-            input_types=["OCIOColorParamsArtifact"],
-            type="OCIOColorParamsArtifact",
-            tooltip="OCIO color parameters artifact (source colorspace, display, view). Required when color_mode is 'ocio'.",
-            allowed_modes={ParameterMode.INPUT},
-            ui_options={"hide": not _ocio_active},
-        )
-        self.add_parameter(self._color_params_param)
+        (
+            self._color_mode_param,
+            self._tone_mapping_param,
+            self._color_params_param,
+            self._embed_color_profile_param,
+        ) = add_color_mode_parameters(self)
 
         # TODO(DH): Add some preset backgrounds, "black"/"magenta"/"checkerboard"/"custom" when selecting custom,
         # the "background" input would be revealed.
@@ -188,24 +160,14 @@ class DisplayEXRChannel(SuccessFailureNode):
             parameter_group_initially_collapsed=True,
         )
 
-        # after_value_set is not called by the framework when restoring saved values,
-        # so read the persisted mode from metadata to apply the correct initial visibility.
-        _restored_mode = self.metadata.get("_color_mode", _default_mode)
-        apply_color_mode_visibility(
-            self,
-            _restored_mode == COLOR_MODE_OCIO,
-            self._tone_mapping_param.name,
-            self._color_params_param.name,
-        )
-
     def after_value_set(self, parameter: Parameter, value: Any) -> None:
         if parameter.name == self._color_mode_param.name:
-            self.metadata["_color_mode"] = value
-            apply_color_mode_visibility(
+            handle_color_mode_change(
                 self,
-                value == COLOR_MODE_OCIO,
+                value,
                 self._tone_mapping_param.name,
                 self._color_params_param.name,
+                self._embed_color_profile_param.name,
             )
 
     def _on_open_viewer_click(
@@ -278,7 +240,8 @@ class DisplayEXRChannel(SuccessFailureNode):
             return
 
         ev = float(self.get_parameter_value(self._exposure_param.name) or 0.0)
-        tone_mapping = str(self.get_parameter_value(self._tone_mapping_param.name) or TONE_FILMIC)
+        tone_mapping = str(self.get_parameter_value(self._tone_mapping_param.name) or TONE_DEFAULT)
+        embed_color_profile = bool(self.get_parameter_value(self._embed_color_profile_param.name))
         color_mode = str(self.get_parameter_value(self._color_mode_param.name) or COLOR_MODE_BASIC)
 
         color_params: ColorParamsProtocol | None = None
@@ -311,8 +274,12 @@ class DisplayEXRChannel(SuccessFailureNode):
 
         uint8 = _composite(uint8_rgb, alpha_f32, bg_rgb_f32)
 
+        # OCIO output carries no profile: its display/view transform resolves
+        # to a config colorspace we cannot describe.
+        profile = profile_for_tone_mapping(tone_mapping) if embed_color_profile and color_params is None else None
+
         try:
-            png_bytes = _ndarray_to_png(uint8)
+            png_bytes = ndarray_to_png(uint8, icc_profile=profile)
             dest = self._output_file.build_file()
             saved = dest.write_bytes(png_bytes)
             artifact = ImageUrlArtifact(saved.location)
@@ -393,16 +360,3 @@ def _composite(
     a = np.clip(alpha_plane, 0.0, 1.0)[..., np.newaxis]
     fg = uint8_rgb.astype(np.float32) / 255.0
     return to_uint8(fg * a + bg_rgb_f32 * (1.0 - a))
-
-
-def _ndarray_to_png(uint8: np.ndarray) -> bytes:
-    """Encode a (H, W, 3) or (H, W, 4) uint8 array as PNG bytes.
-
-    Caller guarantees exactly 3 (RGB) or 4 (RGBA) channels — _build_rgb always
-    produces 3-channel output; alpha is optionally appended as a 4th channel.
-    """
-    assert uint8.ndim == 3 and uint8.shape[2] in (3, 4), uint8.shape  # noqa: S101
-    mode = "RGBA" if uint8.shape[2] == 4 else "RGB"  # noqa: PLR2004
-    buf = io.BytesIO()
-    Image.fromarray(uint8, mode=mode).save(buf, format="PNG")
-    return buf.getvalue()

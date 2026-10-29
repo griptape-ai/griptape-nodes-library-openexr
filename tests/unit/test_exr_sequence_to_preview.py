@@ -12,7 +12,7 @@ import numpy as np
 import pytest
 
 from griptape_nodes_openexr.exr.ocio_helpers import COLOR_MODE_BASIC, COLOR_MODE_OCIO
-from griptape_nodes_openexr.exr.tone_mapping import TONE_FILMIC
+from griptape_nodes_openexr.exr.tone_mapping import TONE_CHOICES, TONE_REC709
 
 DATA = Path(__file__).parents[1] / "data"
 SINGLE_PART_RGBA = DATA / "single_part_rgba.exr"
@@ -108,6 +108,99 @@ class TestNodeInit:
         assert node.get_parameter_value("processing_speed") == "balanced"
 
 
+class TestNoEmbedColorProfileParameter:
+    def test_video_node_has_no_embed_color_profile(self) -> None:
+        # An MP4 cannot carry an ICC profile, so the switch would do nothing
+        # here. Colour is signalled through the stream tags instead.
+        node = _make_node()
+        assert node.get_parameter_by_name("embed_color_profile") is None
+
+    def test_other_colour_parameters_are_still_registered(self) -> None:
+        # Control: dropping one parameter must not drop the rest.
+        node = _make_node()
+        for name in ("color_mode", "tone_mapping", "color_params"):
+            assert node.get_parameter_by_name(name) is not None, name
+
+
+@pytest.fixture()
+def node_in_flow():
+    """Register a node with the real engine, as loading a saved workflow does."""
+    from griptape_nodes.retained_mode.events.flow_events import CreateFlowRequest, DeleteFlowRequest
+    from griptape_nodes.retained_mode.griptape_nodes import GriptapeNodes
+
+    context = GriptapeNodes.ContextManager()
+    flow_name = "retired_tone_flow"
+    node = _make_node()
+    context.push_workflow("retired_tone_workflow")
+    try:
+        assert GriptapeNodes.handle_request(CreateFlowRequest(parent_flow_name=None, flow_name=flow_name)).succeeded()
+        GriptapeNodes.ObjectManager().add_object_by_name(node.name, node)
+        GriptapeNodes.NodeManager()._name_to_parent_flow_name[node.name] = flow_name
+        yield node
+    finally:
+        GriptapeNodes.NodeManager()._name_to_parent_flow_name.pop(node.name, None)
+        if GriptapeNodes.ObjectManager().has_object_with_name(node.name):
+            GriptapeNodes.ObjectManager().del_obj_by_name(node.name)
+        GriptapeNodes.handle_request(DeleteFlowRequest(flow_name=flow_name))
+        context.pop_workflow()
+
+
+class TestRetiredToneMappingIsReported:
+    """A workflow saved with a retired name must fail when run, not render sRGB.
+
+    Saved values are restored through SetParameterValueRequest with
+    initial_setup=True, and a failed set there only reaches the log, so the
+    retired name has to be stored as-is and rejected by the renderer.
+    """
+
+    @pytest.mark.parametrize("tone", TONE_CHOICES)
+    def test_supported_choices_are_stored_unchanged(self, tone: str) -> None:
+        node = _make_node()
+        node.set_parameter_value("tone_mapping", tone)
+        assert node.get_parameter_value("tone_mapping") == tone
+
+    @pytest.mark.parametrize("tone", ["filmic", "linear", "reinhard"])
+    def test_saved_value_survives_workflow_load(self, node_in_flow, tone: str) -> None:
+        from griptape_nodes.retained_mode.events.parameter_events import SetParameterValueRequest
+        from griptape_nodes.retained_mode.griptape_nodes import GriptapeNodes
+
+        result = GriptapeNodes.handle_request(
+            SetParameterValueRequest(
+                parameter_name="tone_mapping", node_name=node_in_flow.name, value=tone, initial_setup=True
+            )
+        )
+        assert result.succeeded()
+        assert node_in_flow.get_parameter_value("tone_mapping") == tone
+
+    @pytest.mark.parametrize(("tone", "alternative"), [("filmic", "ocio"), ("linear", "raw")])
+    def test_running_a_retired_name_reports_its_replacement(self, tmp_path: Path, tone: str, alternative: str) -> None:
+        from griptape_nodes.retained_mode.griptape_nodes import GriptapeNodes
+
+        node = _make_node()
+        node._output_file = MagicMock()
+        mock_situation_dest = MagicMock()
+        mock_situation_dest.resolve.return_value = tmp_path / "exr-preview" / "frame_0000.png"
+
+        node.set_parameter_value("sequence", _make_sequence([SINGLE_PART_RGBA]))
+        node.set_parameter_value("color_mode", COLOR_MODE_BASIC)
+        node.set_parameter_value("tone_mapping", tone)
+
+        with (
+            patch(f"{_NODE_MODULE}.ProjectFileDestination") as mock_pfd,
+            patch.object(GriptapeNodes, "handle_request", return_value=MagicMock()),
+            patch(f"{_NODE_MODULE}.run") as mock_ffmpeg_run,
+        ):
+            mock_pfd.from_situation.return_value = mock_situation_dest
+            asyncio.run(node.aprocess())
+
+        assert _was_successful(node) is False
+        details = node.parameter_output_values.get("result_details", "")
+        assert "no longer supported" in details
+        assert "sRGB" in details
+        assert alternative in details
+        mock_ffmpeg_run.get_or_fetch_platform_executables_else_raise.assert_not_called()
+
+
 # ---------------------------------------------------------------------------
 # Color mode visibility — same pattern as DisplayEXRPart
 # ---------------------------------------------------------------------------
@@ -154,13 +247,25 @@ class TestAfterValueSetColorMode:
         node = _make_node()
         with patch(f"{_OCIO_MODULE}.apply_color_mode_visibility") as mock_vis:
             node.after_value_set(node._color_mode_param, COLOR_MODE_OCIO)
-        mock_vis.assert_called_once_with(node, True, node._tone_mapping_param.name, node._color_params_param.name)
+        mock_vis.assert_called_once_with(
+            node,
+            True,
+            node._tone_mapping_param.name,
+            node._color_params_param.name,
+            None,
+        )
 
     def test_switching_to_basic_calls_visibility_with_false(self) -> None:
         node = _make_node()
         with patch(f"{_OCIO_MODULE}.apply_color_mode_visibility") as mock_vis:
             node.after_value_set(node._color_mode_param, COLOR_MODE_BASIC)
-        mock_vis.assert_called_once_with(node, False, node._tone_mapping_param.name, node._color_params_param.name)
+        mock_vis.assert_called_once_with(
+            node,
+            False,
+            node._tone_mapping_param.name,
+            node._color_params_param.name,
+            None,
+        )
 
     def test_other_parameter_does_not_call_visibility(self) -> None:
         node = _make_node()
@@ -232,7 +337,7 @@ class TestAProcessPipeline:
         node.set_parameter_value("threads", threads)
         node.set_parameter_value("frame_rate", 24.0)
         node.set_parameter_value("color_mode", COLOR_MODE_BASIC)
-        node.set_parameter_value("tone_mapping", TONE_FILMIC)
+        node.set_parameter_value("tone_mapping", TONE_REC709)
         node.set_parameter_value("exposure", 0.0)
         node.set_parameter_value("format", "mp4")
         node.set_parameter_value("processing_speed", "balanced")
@@ -244,7 +349,7 @@ class TestAProcessPipeline:
             patch(f"{_NODE_MODULE}.select_display_channels", return_value=["R", "G", "B"]),
             patch(
                 f"{_NODE_MODULE}.apply_color_management",
-                return_value=(np.ones((1, 1, 3), dtype=np.float32), TONE_FILMIC),
+                return_value=(np.ones((1, 1, 3), dtype=np.float32), TONE_REC709),
             ),
             patch(f"{_NODE_MODULE}.subprocess") as mock_subproc,
             patch(f"{_NODE_MODULE}.run") as mock_ffmpeg_run,
@@ -325,7 +430,7 @@ class TestAProcessPipeline:
         node.set_parameter_value("threads", 1)
         node.set_parameter_value("frame_rate", 24.0)
         node.set_parameter_value("color_mode", COLOR_MODE_BASIC)
-        node.set_parameter_value("tone_mapping", TONE_FILMIC)
+        node.set_parameter_value("tone_mapping", TONE_REC709)
         node.set_parameter_value("exposure", 0.0)
         node.set_parameter_value("format", "mp4")
         node.set_parameter_value("processing_speed", "balanced")
@@ -339,7 +444,7 @@ class TestAProcessPipeline:
             patch(f"{_NODE_MODULE}.select_display_channels", return_value=["R", "G", "B"]),
             patch(
                 f"{_NODE_MODULE}.apply_color_management",
-                return_value=(np.ones((1, 1, 3), dtype=np.float32), TONE_FILMIC),
+                return_value=(np.ones((1, 1, 3), dtype=np.float32), TONE_REC709),
             ),
             patch(f"{_NODE_MODULE}.subprocess") as mock_subproc,
             patch(f"{_NODE_MODULE}.run") as mock_ffmpeg_run,
@@ -365,6 +470,13 @@ class TestAProcessPipeline:
 
         assert "libx264" in captured_cmd
         assert "yuv420p" in captured_cmd
+        # A video carries no ICC profile, so these tags are its only colour
+        # signalling. Without them a player guesses.
+        assert "-x264-params" in captured_cmd
+        params = captured_cmd[captured_cmd.index("-x264-params") + 1]
+        assert "colorprim=bt709" in params
+        assert "transfer=bt709" in params
+        assert "colormatrix=bt709" in params
 
     @pytest.mark.parametrize(
         ("speed", "expected_preset", "expected_crf"),
@@ -409,7 +521,7 @@ class TestAProcessPipeline:
         node.set_parameter_value("threads", 1)
         node.set_parameter_value("frame_rate", 24.0)
         node.set_parameter_value("color_mode", COLOR_MODE_BASIC)
-        node.set_parameter_value("tone_mapping", TONE_FILMIC)
+        node.set_parameter_value("tone_mapping", TONE_REC709)
         node.set_parameter_value("exposure", 0.0)
         node.set_parameter_value("format", "mp4")
         node.set_parameter_value("processing_speed", "balanced")
@@ -430,7 +542,7 @@ class TestAProcessPipeline:
             patch(f"{_NODE_MODULE}.select_display_channels", return_value=["R", "G", "B"]),
             patch(
                 f"{_NODE_MODULE}.apply_color_management",
-                return_value=(np.ones((1, 1, 3), dtype=np.float32), TONE_FILMIC),
+                return_value=(np.ones((1, 1, 3), dtype=np.float32), TONE_REC709),
             ),
             patch(f"{_NODE_MODULE}.subprocess") as mock_subproc,
             patch(f"{_NODE_MODULE}.run") as mock_ffmpeg_run,
@@ -454,6 +566,46 @@ class TestAProcessPipeline:
         assert _was_successful(node) is True
         details = node.parameter_output_values.get("result_details", "")
         assert "1 frame error" in details
+
+    def test_every_frame_failing_reports_the_frame_error(self, tmp_path: Path) -> None:
+        # An empty temp dir makes ffmpeg report "Error opening input files",
+        # which says nothing about why the frames failed. The real cause has
+        # to reach the user.
+        from griptape_nodes.retained_mode.events.os_events import DeleteFileRequest
+        from griptape_nodes.retained_mode.griptape_nodes import GriptapeNodes
+
+        node = _make_node()
+        node._output_file = MagicMock()
+        mock_situation_dest = MagicMock()
+        mock_situation_dest.resolve.return_value = tmp_path / "exr-preview" / "frame_0000.png"
+
+        def _handle_request(request):
+            if isinstance(request, DeleteFileRequest) and request.path:
+                target = Path(request.path)
+                shutil.rmtree(target, ignore_errors=True) if target.is_dir() else target.unlink(missing_ok=True)
+            return MagicMock()
+
+        node.set_parameter_value("sequence", _make_sequence([SINGLE_PART_RGBA, SINGLE_PART_RGBA]))
+        node.set_parameter_value("threads", 1)
+
+        with (
+            patch(f"{_NODE_MODULE}.ProjectFileDestination") as mock_pfd,
+            patch.object(GriptapeNodes, "handle_request", side_effect=_handle_request),
+            patch(f"{_NODE_MODULE}.load_exr_channels", side_effect=ValueError("simulated bad EXR")),
+            patch(f"{_NODE_MODULE}.subprocess") as mock_subproc,
+            patch(f"{_NODE_MODULE}.run") as mock_ffmpeg_run,
+        ):
+            mock_pfd.from_situation.return_value = mock_situation_dest
+            mock_subproc.TimeoutExpired = __import__("subprocess").TimeoutExpired
+            mock_subproc.CalledProcessError = __import__("subprocess").CalledProcessError
+
+            asyncio.run(node.aprocess())
+
+        assert _was_successful(node) is False
+        details = node.parameter_output_values.get("result_details", "")
+        assert "simulated bad EXR" in details
+        # ffmpeg must never have been reached, so its noise cannot mask this.
+        mock_ffmpeg_run.get_or_fetch_platform_executables_else_raise.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -546,6 +698,78 @@ class TestAProcessOCIOMode:
         call_args = mock_cm.call_args
         assert call_args[0][1] is fake_color_params
 
+    def test_ocio_render_is_tagged_bt709_not_from_tone_mapping(self, tmp_path: Path) -> None:
+        # End to end through aprocess: the stale basic-mode value is rec1886,
+        # whose basic-mode tag is bt709 too, so pick raw, whose tag differs.
+        from griptape_nodes.retained_mode.events.os_events import DeleteFileRequest
+        from griptape_nodes.retained_mode.griptape_nodes import GriptapeNodes
+
+        node = _make_node(ocio_available=True)
+        seq_dict = _make_sequence([SINGLE_PART_RGBA])
+        fake_pixels = _make_1x1_rgba_pixels()
+        fake_saved = MagicMock()
+        fake_saved.location = "/tmp/preview.mp4"
+        fake_dest = MagicMock()
+        fake_dest.write_bytes.return_value = fake_saved
+        node._output_file = MagicMock()
+        node._output_file.build_file.return_value = fake_dest
+
+        mock_situation_dest = MagicMock()
+        mock_situation_dest.resolve.return_value = tmp_path / "exr-preview" / "frame_0000.png"
+
+        def _handle_request(request):
+            if isinstance(request, DeleteFileRequest) and request.path:
+                target = Path(request.path)
+                shutil.rmtree(target, ignore_errors=True) if target.is_dir() else target.unlink(missing_ok=True)
+            return MagicMock()
+
+        fake_color_params = MagicMock()
+        fake_color_params.source_colorspace = "ACEScg"
+        fake_color_params.display = "sRGB"
+        fake_color_params.view = "ACES"
+        fake_color_params.config_path = None
+
+        node.set_parameter_value("sequence", seq_dict)
+        node.set_parameter_value("color_mode", COLOR_MODE_OCIO)
+        node.set_parameter_value("color_params", fake_color_params)
+        node.set_parameter_value("tone_mapping", "raw")
+        node.set_parameter_value("threads", 1)
+
+        captured_cmd = []
+
+        with (
+            patch(f"{_NODE_MODULE}.ProjectFileDestination") as mock_pfd,
+            patch.object(GriptapeNodes, "handle_request", side_effect=_handle_request),
+            patch(f"{_NODE_MODULE}.load_exr_channels", return_value=fake_pixels),
+            patch(f"{_NODE_MODULE}.select_display_channels", return_value=["R", "G", "B"]),
+            patch(
+                f"{_NODE_MODULE}.apply_color_management",
+                return_value=(np.ones((1, 1, 3), dtype=np.float32), "ocio:ACEScg→sRGB/ACES"),
+            ),
+            patch(f"{_NODE_MODULE}.subprocess") as mock_subproc,
+            patch(f"{_NODE_MODULE}.run") as mock_ffmpeg_run,
+        ):
+            mock_pfd.from_situation.return_value = mock_situation_dest
+            mock_ffmpeg_run.get_or_fetch_platform_executables_else_raise.return_value = (
+                "/usr/bin/ffmpeg",
+                "/usr/bin/ffprobe",
+            )
+
+            def capture_cmd(cmd, **kwargs):
+                captured_cmd.extend(cmd)
+                Path(cmd[-1]).write_bytes(b"FAKE")
+                return MagicMock(returncode=0)
+
+            mock_subproc.run.side_effect = capture_cmd
+            mock_subproc.TimeoutExpired = __import__("subprocess").TimeoutExpired
+            mock_subproc.CalledProcessError = __import__("subprocess").CalledProcessError
+
+            asyncio.run(node.aprocess())
+
+        params = captured_cmd[captured_cmd.index("-x264-params") + 1]
+        assert "transfer=bt709" in params
+        assert "transfer=linear" not in params
+
 
 # ---------------------------------------------------------------------------
 # Temp-dir situation usage
@@ -572,7 +796,7 @@ class TestProcessUsesSituationTempDir:
         node.set_parameter_value("threads", 1)
         node.set_parameter_value("frame_rate", 24.0)
         node.set_parameter_value("color_mode", COLOR_MODE_BASIC)
-        node.set_parameter_value("tone_mapping", TONE_FILMIC)
+        node.set_parameter_value("tone_mapping", TONE_REC709)
         node.set_parameter_value("exposure", 0.0)
         node.set_parameter_value("format", "mp4")
         node.set_parameter_value("processing_speed", "balanced")
@@ -597,7 +821,7 @@ class TestProcessUsesSituationTempDir:
             patch(f"{_NODE_MODULE}.select_display_channels", return_value=["R", "G", "B"]),
             patch(
                 f"{_NODE_MODULE}.apply_color_management",
-                return_value=(np.ones((1, 1, 3), dtype=np.float32), TONE_FILMIC),
+                return_value=(np.ones((1, 1, 3), dtype=np.float32), TONE_REC709),
             ),
             patch(f"{_NODE_MODULE}.subprocess") as mock_subproc,
             patch(f"{_NODE_MODULE}.run") as mock_ffmpeg_run,
@@ -662,3 +886,55 @@ class TestManifestRegistration:
         manifest = json.loads(manifest_path.read_text())
         entry = next(n for n in manifest["nodes"] if n["class_name"] == "EXRSequenceToPreview")
         assert "exr_sequence_to_preview" in entry["file_path"]
+
+
+class TestVideoColourTags:
+    """The MP4's colour tags, which replace the ICC profile a video cannot carry."""
+
+    @pytest.mark.parametrize(
+        ("tone", "expected_trc"),
+        [
+            ("sRGB", "iec61966-2-1"),
+            ("rec709", "bt709"),
+            ("rec1886", "bt709"),
+            ("raw", "linear"),
+        ],
+    )
+    def test_transfer_characteristics_per_transform(self, tone: str, expected_trc: str) -> None:
+        from griptape_nodes_openexr.nodes.exr_sequence_to_preview import color_trc_for
+
+        assert color_trc_for(tone) == expected_trc
+
+    def test_unknown_transform_falls_back_to_bt709(self) -> None:
+        # An unrecognised -color_trc makes ffmpeg fail the whole encode, so
+        # never pass one through from an unexpected value.
+        from griptape_nodes_openexr.nodes.exr_sequence_to_preview import color_trc_for
+
+        assert color_trc_for("something-else") == "bt709"
+
+    @pytest.mark.parametrize("tone", TONE_CHOICES)
+    def test_ocio_tags_bt709_whatever_the_hidden_tone_mapping_says(self, tone: str) -> None:
+        # tone_mapping is hidden in OCIO mode, so letting it pick the tag
+        # means two renders from one OCIO config carry different transfer
+        # characteristics depending on what basic mode was last set to.
+        from griptape_nodes_openexr.nodes.exr_sequence_to_preview import color_trc_for
+
+        assert color_trc_for(tone, ocio_active=True) == "bt709"
+
+    def test_basic_mode_still_follows_the_selected_transform(self) -> None:
+        # Control for the test above: the OCIO guard must not flatten the
+        # basic-mode mapping it sits next to.
+        from griptape_nodes_openexr.nodes.exr_sequence_to_preview import color_trc_for
+
+        assert color_trc_for("raw", ocio_active=False) == "linear"
+        assert color_trc_for("sRGB", ocio_active=False) == "iec61966-2-1"
+
+    def test_every_choice_maps_to_an_accepted_value(self) -> None:
+        from griptape_nodes_openexr.exr.tone_mapping import TONE_CHOICES
+        from griptape_nodes_openexr.nodes.exr_sequence_to_preview import _FFMPEG_TRC_VALUES, color_trc_for
+
+        accepted = set(_FFMPEG_TRC_VALUES.values())
+        for tone in TONE_CHOICES:
+            # Every choice must have an explicit entry, not reach the fallback.
+            assert tone.lower() in _FFMPEG_TRC_VALUES
+            assert color_trc_for(tone) in accepted

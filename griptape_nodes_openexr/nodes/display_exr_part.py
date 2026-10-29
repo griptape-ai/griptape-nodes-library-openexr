@@ -22,7 +22,7 @@ from griptape_nodes_openexr.exr.ocio_helpers import (
     handle_color_mode_change,
 )
 from griptape_nodes_openexr.exr.rendering import render_part_png
-from griptape_nodes_openexr.exr.tone_mapping import EV_MAX, EV_MIN, TONE_FILMIC
+from griptape_nodes_openexr.exr.tone_mapping import EV_MAX, EV_MIN, TONE_DEFAULT
 from griptape_nodes_openexr.exr.viewer_launcher import handle_viewer_button_click
 
 if TYPE_CHECKING:
@@ -38,7 +38,7 @@ class DisplayEXRPart(SuccessFailureNode):
     and colour management, and outputs an ImageUrlArtifact saved via the
     project's save_node_output situation.
 
-    In 'basic' mode, local filmic or linear tone mapping is applied.
+    In 'basic' mode, a local display transform (sRGB, rec709, rec1886 or raw) is applied.
     In 'ocio' mode, a connected OCIOColorParamsArtifact drives an OCIO
     display-view transform. OCIO failures are always surfaced loudly.
 
@@ -72,7 +72,12 @@ class DisplayEXRPart(SuccessFailureNode):
         )
         self.add_parameter(self._exposure_param)
 
-        self._color_mode_param, self._tone_mapping_param, self._color_params_param = add_color_mode_parameters(
+        (
+            self._color_mode_param,
+            self._tone_mapping_param,
+            self._color_params_param,
+            self._embed_color_profile_param,
+        ) = add_color_mode_parameters(
             self,
             color_mode_tooltip="Color management mode. 'basic' uses local tone mapping; 'ocio' uses the connected OCIOColorParamsArtifact.",
             color_params_tooltip="OCIO color parameters artifact (source colorspace, display, view). Required when color_mode is 'ocio'.",
@@ -111,7 +116,13 @@ class DisplayEXRPart(SuccessFailureNode):
 
     def after_value_set(self, parameter: Parameter, value: Any) -> None:
         if parameter.name == self._color_mode_param.name:
-            handle_color_mode_change(self, value, self._tone_mapping_param.name, self._color_params_param.name)
+            handle_color_mode_change(
+                self,
+                value,
+                self._tone_mapping_param.name,
+                self._color_params_param.name,
+                self._embed_color_profile_param.name,
+            )
 
     def _on_open_viewer_click(
         self,
@@ -146,7 +157,7 @@ class DisplayEXRPart(SuccessFailureNode):
         alpha_channel = select_alpha_channel(channel_names, selected)
 
         ev = float(self.get_parameter_value(self._exposure_param.name) or 0.0)
-        tone_mapping = str(self.get_parameter_value(self._tone_mapping_param.name) or TONE_FILMIC)
+        tone_mapping = str(self.get_parameter_value(self._tone_mapping_param.name) or TONE_DEFAULT)
         color_mode = str(self.get_parameter_value(self._color_mode_param.name) or COLOR_MODE_BASIC)
 
         color_params: ColorParamsProtocol | None = None
@@ -165,6 +176,7 @@ class DisplayEXRPart(SuccessFailureNode):
                 ev=ev,
                 color_params=color_params,
                 tone_mapping=tone_mapping,
+                embed_color_profile=bool(self.get_parameter_value(self._embed_color_profile_param.name)),
             )
         except (ValueError, RuntimeError) as e:
             self._on_fail_handler(str(e))

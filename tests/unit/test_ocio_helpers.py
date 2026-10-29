@@ -12,7 +12,7 @@ from griptape_nodes_openexr.exr.ocio_helpers import (
     find_colorspace_transform_request_type,
     reset_colorspace_transform_request_type_cache,
 )
-from griptape_nodes_openexr.exr.tone_mapping import TONE_FILMIC, TONE_LINEAR
+from griptape_nodes_openexr.exr.tone_mapping import TONE_REC709, TONE_SRGB
 
 from .conftest import (
     _color_params,
@@ -106,7 +106,7 @@ class TestApplyColorManagement:
             patch(f"{_OCIO_HELPERS}.LibraryRegistry", _mock_lr_with(req_type)),
             patch(f"{_OCIO_HELPERS}.GriptapeNodes", mock_gn),
         ):
-            pixels, label = apply_color_management(rgb, _color_params(), TONE_FILMIC)
+            pixels, label = apply_color_management(rgb, _color_params(), TONE_REC709)
 
         mock_gn.handle_request.assert_called_once()
         assert pixels is expected
@@ -122,7 +122,7 @@ class TestApplyColorManagement:
             patch(f"{_OCIO_HELPERS}.LibraryRegistry", _mock_lr_with(req_type)),
             patch(f"{_OCIO_HELPERS}.GriptapeNodes", mock_gn),
         ):
-            _, label = apply_color_management(rgb, _color_params("ACEScg", "sRGB", "ACES"), TONE_FILMIC)
+            _, label = apply_color_management(rgb, _color_params("ACEScg", "sRGB", "ACES"), TONE_REC709)
 
         assert "ACEScg" in label
         assert "sRGB" in label
@@ -139,7 +139,7 @@ class TestApplyColorManagement:
             patch(f"{_OCIO_HELPERS}.GriptapeNodes", mock_gn),
             pytest.raises(ValueError, match="No manager found"),
         ):
-            apply_color_management(rgb, _color_params(), TONE_FILMIC)
+            apply_color_management(rgb, _color_params(), TONE_REC709)
 
     def test_raises_on_failed_ocio_result(self) -> None:
         rgb = _rgb()
@@ -152,7 +152,7 @@ class TestApplyColorManagement:
             patch(f"{_OCIO_HELPERS}.GriptapeNodes", mock_gn),
             pytest.raises(ValueError, match="unknown colorspace"),
         ):
-            apply_color_management(rgb, _color_params(), TONE_FILMIC)
+            apply_color_management(rgb, _color_params(), TONE_REC709)
 
     def test_raises_when_ocio_library_not_loaded(self) -> None:
         rgb = _rgb()
@@ -163,7 +163,7 @@ class TestApplyColorManagement:
             patch(f"{_OCIO_HELPERS}.GriptapeNodes", mock_gn),
             pytest.raises(ValueError, match="not loaded"),
         ):
-            apply_color_management(rgb, _color_params(), TONE_FILMIC)
+            apply_color_management(rgb, _color_params(), TONE_REC709)
 
         mock_gn.handle_request.assert_not_called()
 
@@ -175,7 +175,7 @@ class TestApplyColorManagement:
             patch(f"{_OCIO_HELPERS}.LibraryRegistry", _mock_lr_empty()),
             pytest.raises(ValueError),
         ):
-            apply_color_management(rgb, _color_params(), TONE_FILMIC)
+            apply_color_management(rgb, _color_params(), TONE_REC709)
 
     def test_config_path_forwarded_to_request(self) -> None:
         rgb = _rgb()
@@ -187,7 +187,7 @@ class TestApplyColorManagement:
             patch(f"{_OCIO_HELPERS}.LibraryRegistry", _mock_lr_with(req_type)),
             patch(f"{_OCIO_HELPERS}.GriptapeNodes", mock_gn),
         ):
-            apply_color_management(rgb, _color_params(config_path="/path/to/config.ocio"), TONE_FILMIC)
+            apply_color_management(rgb, _color_params(config_path="/path/to/config.ocio"), TONE_REC709)
 
         req_type.assert_called_once_with(
             pixels=rgb,
@@ -213,7 +213,7 @@ class TestApplyColorManagement:
             patch(f"{_OCIO_HELPERS}.LibraryRegistry", _mock_lr_with(req_type)),
             patch(f"{_OCIO_HELPERS}.GriptapeNodes", mock_gn),
         ):
-            pixels, _ = apply_color_management(_rgb(1, 1), _color_params(), TONE_FILMIC)
+            pixels, _ = apply_color_management(_rgb(1, 1), _color_params(), TONE_REC709)
 
         np.testing.assert_array_equal(pixels, handler_output)
 
@@ -227,7 +227,7 @@ class TestApplyColorManagement:
             patch(f"{_OCIO_HELPERS}.LibraryRegistry", _mock_lr_with(req_type)),
             patch(f"{_OCIO_HELPERS}.GriptapeNodes", mock_gn),
         ):
-            apply_color_management(rgb, _color_params(config_path=None), TONE_FILMIC)
+            apply_color_management(rgb, _color_params(config_path=None), TONE_REC709)
 
         req_type.assert_called_once_with(
             pixels=rgb,
@@ -243,7 +243,7 @@ class TestApplyColorManagement:
         bad_params = object()  # no .source_colorspace, .display, .view attributes
 
         with pytest.raises(ValueError, match="missing a required attribute"):
-            apply_color_management(rgb, bad_params, TONE_FILMIC)  # type: ignore[arg-type]
+            apply_color_management(rgb, bad_params, TONE_REC709)  # type: ignore[arg-type]
 
 
 # ---------------------------------------------------------------------------
@@ -252,39 +252,41 @@ class TestApplyColorManagement:
 
 
 class TestApplyColorManagementBasicMode:
-    def test_filmic_tone_mapping_used_when_no_artifact(self) -> None:
+    def test_rec709_tone_mapping_used_when_no_artifact(self) -> None:
         rgb = _rgb()
         mock_gn = MagicMock()
 
         with patch(f"{_OCIO_HELPERS}.GriptapeNodes", mock_gn):
-            _, label = apply_color_management(rgb, None, TONE_FILMIC)
+            _, label = apply_color_management(rgb, None, TONE_REC709)
 
         mock_gn.handle_request.assert_not_called()
-        assert label == TONE_FILMIC
+        assert label == TONE_REC709
 
-    def test_linear_tone_mapping_used_when_no_artifact(self) -> None:
+    def test_srgb_tone_mapping_used_when_no_artifact(self) -> None:
         rgb = _rgb()
         mock_gn = MagicMock()
 
         with patch(f"{_OCIO_HELPERS}.GriptapeNodes", mock_gn):
-            _, label = apply_color_management(rgb, None, TONE_LINEAR)
+            _, label = apply_color_management(rgb, None, TONE_SRGB)
 
         mock_gn.handle_request.assert_not_called()
-        assert label == TONE_LINEAR
+        assert label == TONE_SRGB
 
     def test_basic_mode_output_is_display_encoded(self) -> None:
         """Basic mode must encode, so scene 0.18 lands near mid-grey rather than crushed."""
         rgb = _rgb(1, 1)  # 0.18 scene-linear
 
         with patch(f"{_OCIO_HELPERS}.GriptapeNodes", MagicMock()):
-            pixels, _ = apply_color_management(rgb, None, TONE_FILMIC)
+            pixels, _ = apply_color_management(rgb, None, TONE_REC709)
 
-        assert pixels[0, 0, 0] == pytest.approx(0.5535, rel=1e-3)
+        # rec709 encodes 0.18 to 0.4090. The point is that an encode happened
+        # at all: unencoded, 0.18 would pass through and crush the shadows.
+        assert pixels[0, 0, 0] == pytest.approx(0.409008, rel=1e-3)
 
     def test_output_shape_preserved_in_basic_mode(self) -> None:
         rgb = _rgb(8, 8)
 
         with patch(f"{_OCIO_HELPERS}.GriptapeNodes", MagicMock()):
-            pixels, _ = apply_color_management(rgb, None, TONE_FILMIC)
+            pixels, _ = apply_color_management(rgb, None, TONE_REC709)
 
         assert pixels.shape == rgb.shape
