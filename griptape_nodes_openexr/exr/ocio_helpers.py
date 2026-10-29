@@ -19,7 +19,6 @@ from griptape_nodes_openexr.exr.tone_mapping import (
     TONE_CURVES_DESCRIPTION,
     TONE_DEFAULT,
     apply_tone_mapping,
-    check_tone_mapping,
 )
 
 logger = logging.getLogger("griptape_nodes")
@@ -35,11 +34,6 @@ EMBED_PROFILE_TOOLTIP = (
     "On: the file is correctly labelled for other applications, and all transforms then "
     "look the same in a colour-managed viewer."
 )
-
-
-def _validate_tone_mapping(param: Parameter, value: Any) -> None:  # noqa: ARG001
-    """Reject a tone_mapping value the renderer cannot apply, at the point it is set."""
-    check_tone_mapping(str(value))
 
 
 class ColorParamsProtocol(Protocol):
@@ -197,12 +191,13 @@ def add_color_mode_parameters(
         tooltip=tone_mapping_tooltip,
         allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
         ui_options={"hide": ocio_active},
-        validators=[_validate_tone_mapping],
     )
     # allow_custom keeps the dropdown but disables the Options converter, which
-    # rewrites any off-list value to choices[0] before validation runs. Without
-    # that, a workflow saved with a retired name would load as sRGB and render
-    # silently, instead of reporting the name that is no longer supported.
+    # rewrites any off-list value to choices[0]. A workflow saved with a retired
+    # name then keeps that name, and apply_tone_mapping reports it when the node
+    # runs. There is deliberately no validator: a saved value is restored with
+    # initial_setup=True, where a validator's error only reaches the log and the
+    # parameter stays at its default, so the workflow would render sRGB silently.
     tone_mapping_param.add_trait(Options(choices=TONE_CHOICES, allow_custom=True))
     node.add_parameter(tone_mapping_param)
 

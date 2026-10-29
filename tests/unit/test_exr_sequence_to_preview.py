@@ -122,36 +122,83 @@ class TestNoEmbedColorProfileParameter:
             assert node.get_parameter_by_name(name) is not None, name
 
 
-class TestRetiredToneMappingIsRejected:
-    """A retired name must fail at the point it is set, not render silently.
+@pytest.fixture()
+def node_in_flow():
+    """Register a node with the real engine, as loading a saved workflow does."""
+    from griptape_nodes.retained_mode.events.flow_events import CreateFlowRequest, DeleteFlowRequest
+    from griptape_nodes.retained_mode.griptape_nodes import GriptapeNodes
 
-    The engine's Options trait converts any off-list value to choices[0]
-    before validators run, so a workflow saved with 'filmic' would otherwise
-    load as sRGB and render with no warning: 23 levels off at scene 0.18, and
-    clipped where filmic held detail above 1.0.
+    context = GriptapeNodes.ContextManager()
+    flow_name = "retired_tone_flow"
+    node = _make_node()
+    context.push_workflow("retired_tone_workflow")
+    try:
+        assert GriptapeNodes.handle_request(CreateFlowRequest(parent_flow_name=None, flow_name=flow_name)).succeeded()
+        GriptapeNodes.ObjectManager().add_object_by_name(node.name, node)
+        GriptapeNodes.NodeManager()._name_to_parent_flow_name[node.name] = flow_name
+        yield node
+    finally:
+        GriptapeNodes.NodeManager()._name_to_parent_flow_name.pop(node.name, None)
+        if GriptapeNodes.ObjectManager().has_object_with_name(node.name):
+            GriptapeNodes.ObjectManager().del_obj_by_name(node.name)
+        GriptapeNodes.handle_request(DeleteFlowRequest(flow_name=flow_name))
+        context.pop_workflow()
+
+
+class TestRetiredToneMappingIsReported:
+    """A workflow saved with a retired name must fail when run, not render sRGB.
+
+    Saved values are restored through SetParameterValueRequest with
+    initial_setup=True, and a failed set there only reaches the log, so the
+    retired name has to be stored as-is and rejected by the renderer.
     """
 
     @pytest.mark.parametrize("tone", TONE_CHOICES)
     def test_supported_choices_are_stored_unchanged(self, tone: str) -> None:
-        # Control: the validator must not be rejecting or rewriting the
-        # choices the dropdown offers.
         node = _make_node()
         node.set_parameter_value("tone_mapping", tone)
         assert node.get_parameter_value("tone_mapping") == tone
 
-    @pytest.mark.parametrize(("tone", "alternative"), [("filmic", "ocio"), ("linear", "raw")])
-    def test_retired_name_raises_naming_its_replacement(self, tone: str, alternative: str) -> None:
-        node = _make_node()
-        with pytest.raises(ValueError, match="no longer supported") as excinfo:
-            node.set_parameter_value("tone_mapping", tone)
-        message = str(excinfo.value)
-        assert "sRGB" in message
-        assert alternative in message
+    @pytest.mark.parametrize("tone", ["filmic", "linear", "reinhard"])
+    def test_saved_value_survives_workflow_load(self, node_in_flow, tone: str) -> None:
+        from griptape_nodes.retained_mode.events.parameter_events import SetParameterValueRequest
+        from griptape_nodes.retained_mode.griptape_nodes import GriptapeNodes
 
-    def test_unknown_name_raises_rather_than_falling_back(self) -> None:
+        result = GriptapeNodes.handle_request(
+            SetParameterValueRequest(
+                parameter_name="tone_mapping", node_name=node_in_flow.name, value=tone, initial_setup=True
+            )
+        )
+        assert result.succeeded()
+        assert node_in_flow.get_parameter_value("tone_mapping") == tone
+
+    @pytest.mark.parametrize(("tone", "alternative"), [("filmic", "ocio"), ("linear", "raw")])
+    def test_running_a_retired_name_reports_its_replacement(self, tmp_path: Path, tone: str, alternative: str) -> None:
+        from griptape_nodes.retained_mode.griptape_nodes import GriptapeNodes
+
         node = _make_node()
-        with pytest.raises(ValueError, match="Unsupported tone mapping"):
-            node.set_parameter_value("tone_mapping", "reinhard")
+        node._output_file = MagicMock()
+        mock_situation_dest = MagicMock()
+        mock_situation_dest.resolve.return_value = tmp_path / "exr-preview" / "frame_0000.png"
+
+        node.set_parameter_value("sequence", _make_sequence([SINGLE_PART_RGBA]))
+        node.set_parameter_value("color_mode", COLOR_MODE_BASIC)
+        node.set_parameter_value("tone_mapping", tone)
+
+        with (
+            patch(f"{_NODE_MODULE}.ProjectFileDestination") as mock_pfd,
+            patch.object(GriptapeNodes, "handle_request", return_value=MagicMock()),
+            patch(f"{_NODE_MODULE}.run") as mock_ffmpeg_run,
+        ):
+            mock_pfd.from_situation.return_value = mock_situation_dest
+            asyncio.run(node.aprocess())
+
+        assert _was_successful(node) is False
+        details = node.parameter_output_values.get("result_details", "")
+        assert "no longer supported" in details
+        assert "sRGB" in details
+        assert alternative in details
+        mock_ffmpeg_run.get_or_fetch_platform_executables_else_raise.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
