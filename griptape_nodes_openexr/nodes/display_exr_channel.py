@@ -51,7 +51,7 @@ class DisplayEXRChannel(SuccessFailureNode):
     Single RGB channel → placed in its colour plane (R-only → red, etc.). Missing RGB slots → zero-filled plane.
     Connected alpha slot → RGBA output PNG.
 
-    In 'basic' mode, local filmic or linear tone mapping is applied.
+    In 'basic' mode, a local display transform (sRGB, rec709, rec1886 or raw) is applied.
     In 'ocio' mode, a connected OCIOColorParamsArtifact drives an OCIO
     display-view transform. OCIO failures are always surfaced loudly.
     """

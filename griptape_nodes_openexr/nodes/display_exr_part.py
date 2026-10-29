@@ -38,7 +38,7 @@ class DisplayEXRPart(SuccessFailureNode):
     and colour management, and outputs an ImageUrlArtifact saved via the
     project's save_node_output situation.
 
-    In 'basic' mode, local filmic or linear tone mapping is applied.
+    In 'basic' mode, a local display transform (sRGB, rec709, rec1886 or raw) is applied.
     In 'ocio' mode, a connected OCIOColorParamsArtifact drives an OCIO
     display-view transform. OCIO failures are always surfaced loudly.
 

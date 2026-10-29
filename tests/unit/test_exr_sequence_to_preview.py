@@ -12,7 +12,7 @@ import numpy as np
 import pytest
 
 from griptape_nodes_openexr.exr.ocio_helpers import COLOR_MODE_BASIC, COLOR_MODE_OCIO
-from griptape_nodes_openexr.exr.tone_mapping import TONE_FILMIC
+from griptape_nodes_openexr.exr.tone_mapping import TONE_REC709
 
 DATA = Path(__file__).parents[1] / "data"
 SINGLE_PART_RGBA = DATA / "single_part_rgba.exr"
@@ -232,7 +232,7 @@ class TestAProcessPipeline:
         node.set_parameter_value("threads", threads)
         node.set_parameter_value("frame_rate", 24.0)
         node.set_parameter_value("color_mode", COLOR_MODE_BASIC)
-        node.set_parameter_value("tone_mapping", TONE_FILMIC)
+        node.set_parameter_value("tone_mapping", TONE_REC709)
         node.set_parameter_value("exposure", 0.0)
         node.set_parameter_value("format", "mp4")
         node.set_parameter_value("processing_speed", "balanced")
@@ -244,7 +244,7 @@ class TestAProcessPipeline:
             patch(f"{_NODE_MODULE}.select_display_channels", return_value=["R", "G", "B"]),
             patch(
                 f"{_NODE_MODULE}.apply_color_management",
-                return_value=(np.ones((1, 1, 3), dtype=np.float32), TONE_FILMIC),
+                return_value=(np.ones((1, 1, 3), dtype=np.float32), TONE_REC709),
             ),
             patch(f"{_NODE_MODULE}.subprocess") as mock_subproc,
             patch(f"{_NODE_MODULE}.run") as mock_ffmpeg_run,
@@ -325,7 +325,7 @@ class TestAProcessPipeline:
         node.set_parameter_value("threads", 1)
         node.set_parameter_value("frame_rate", 24.0)
         node.set_parameter_value("color_mode", COLOR_MODE_BASIC)
-        node.set_parameter_value("tone_mapping", TONE_FILMIC)
+        node.set_parameter_value("tone_mapping", TONE_REC709)
         node.set_parameter_value("exposure", 0.0)
         node.set_parameter_value("format", "mp4")
         node.set_parameter_value("processing_speed", "balanced")
@@ -339,7 +339,7 @@ class TestAProcessPipeline:
             patch(f"{_NODE_MODULE}.select_display_channels", return_value=["R", "G", "B"]),
             patch(
                 f"{_NODE_MODULE}.apply_color_management",
-                return_value=(np.ones((1, 1, 3), dtype=np.float32), TONE_FILMIC),
+                return_value=(np.ones((1, 1, 3), dtype=np.float32), TONE_REC709),
             ),
             patch(f"{_NODE_MODULE}.subprocess") as mock_subproc,
             patch(f"{_NODE_MODULE}.run") as mock_ffmpeg_run,
@@ -409,7 +409,7 @@ class TestAProcessPipeline:
         node.set_parameter_value("threads", 1)
         node.set_parameter_value("frame_rate", 24.0)
         node.set_parameter_value("color_mode", COLOR_MODE_BASIC)
-        node.set_parameter_value("tone_mapping", TONE_FILMIC)
+        node.set_parameter_value("tone_mapping", TONE_REC709)
         node.set_parameter_value("exposure", 0.0)
         node.set_parameter_value("format", "mp4")
         node.set_parameter_value("processing_speed", "balanced")
@@ -430,7 +430,7 @@ class TestAProcessPipeline:
             patch(f"{_NODE_MODULE}.select_display_channels", return_value=["R", "G", "B"]),
             patch(
                 f"{_NODE_MODULE}.apply_color_management",
-                return_value=(np.ones((1, 1, 3), dtype=np.float32), TONE_FILMIC),
+                return_value=(np.ones((1, 1, 3), dtype=np.float32), TONE_REC709),
             ),
             patch(f"{_NODE_MODULE}.subprocess") as mock_subproc,
             patch(f"{_NODE_MODULE}.run") as mock_ffmpeg_run,
@@ -572,7 +572,7 @@ class TestProcessUsesSituationTempDir:
         node.set_parameter_value("threads", 1)
         node.set_parameter_value("frame_rate", 24.0)
         node.set_parameter_value("color_mode", COLOR_MODE_BASIC)
-        node.set_parameter_value("tone_mapping", TONE_FILMIC)
+        node.set_parameter_value("tone_mapping", TONE_REC709)
         node.set_parameter_value("exposure", 0.0)
         node.set_parameter_value("format", "mp4")
         node.set_parameter_value("processing_speed", "balanced")
@@ -597,7 +597,7 @@ class TestProcessUsesSituationTempDir:
             patch(f"{_NODE_MODULE}.select_display_channels", return_value=["R", "G", "B"]),
             patch(
                 f"{_NODE_MODULE}.apply_color_management",
-                return_value=(np.ones((1, 1, 3), dtype=np.float32), TONE_FILMIC),
+                return_value=(np.ones((1, 1, 3), dtype=np.float32), TONE_REC709),
             ),
             patch(f"{_NODE_MODULE}.subprocess") as mock_subproc,
             patch(f"{_NODE_MODULE}.run") as mock_ffmpeg_run,

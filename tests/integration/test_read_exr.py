@@ -36,7 +36,6 @@ from griptape_nodes_openexr.exr.exr_io import scan_exr_header, write_exr_channel
 from griptape_nodes_openexr.exr.ocio_helpers import COLOR_MODE_BASIC, COLOR_MODE_OCIO
 from griptape_nodes_openexr.exr.tone_mapping import (
     TONE_CHOICES,
-    TONE_FILMIC,
     TONE_RAW,
     TONE_REC709,
     TONE_REC1886,
@@ -290,7 +289,7 @@ class TestColorManagement:
         node.set_parameter_value("path", str(SINGLE_PART_RGBA))
         # Set both ends explicitly: sRGB is the default, so relying on it for
         # one side would compare a render against itself.
-        node.set_parameter_value("tone_mapping", TONE_FILMIC)
+        node.set_parameter_value("tone_mapping", TONE_REC709)
         asyncio.run(_run(node))
         filmic = _rendered(node)
 

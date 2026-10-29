@@ -11,7 +11,6 @@ from griptape_nodes_openexr.exr.tone_mapping import (
     TONE_CHOICES,
     TONE_DEFAULT,
     apply_exposure,
-    apply_filmic,
     apply_tone_mapping,
     linear_to_rec709,
     linear_to_rec1886,
@@ -49,46 +48,6 @@ class TestApplyExposure:
     def test_output_dtype_float32(self) -> None:
         arr = np.array([0.5], dtype=np.float32)
         result = apply_exposure(arr, 1.0)
-        assert result.dtype == np.float32
-
-
-class TestApplyFilmic:
-    def test_zero_maps_to_zero(self) -> None:
-        arr = np.array([0.0], dtype=np.float32)
-        result = apply_filmic(arr)
-        np.testing.assert_allclose(result, [0.0], atol=1e-6)
-
-    def test_output_range_0_to_1(self) -> None:
-        arr = np.linspace(0.0, 100.0, 1000).astype(np.float32)
-        result = apply_filmic(arr)
-        assert result.min() >= 0.0
-        assert result.max() <= 1.0
-
-    def test_monotonically_increasing(self) -> None:
-        arr = np.linspace(0.0, 10.0, 500).astype(np.float32)
-        result = apply_filmic(arr)
-        assert np.all(np.diff(result) >= 0)
-
-    def test_mid_gray_compressed(self) -> None:
-        # 0.18 (photographic middle grey) should map below 0.5 (compressed highlights)
-        arr = np.array([0.18], dtype=np.float32)
-        result = apply_filmic(arr)
-        assert result[0] < 0.5
-
-    def test_high_value_saturates_to_one(self) -> None:
-        # The filmic curve asymptote exceeds 1.0; np.clip brings it to exactly 1.0
-        arr = np.array([100.0], dtype=np.float32)
-        result = apply_filmic(arr)
-        assert result[0] == pytest.approx(1.0)
-
-    def test_preserves_shape(self) -> None:
-        arr = np.ones((4, 8, 3), dtype=np.float32)
-        result = apply_filmic(arr)
-        assert result.shape == (4, 8, 3)
-
-    def test_output_dtype_float32(self) -> None:
-        arr = np.array([0.5], dtype=np.float32)
-        result = apply_filmic(arr)
         assert result.dtype == np.float32
 
 
@@ -286,26 +245,6 @@ class TestApplyToneMapping:
     display-encoded values, not display-linear ones.
     """
 
-    def test_filmic_middle_grey(self) -> None:
-        arr = np.full((1, 1, 3), 0.18, dtype=np.float32)
-        result = to_uint8(apply_tone_mapping(arr, "filmic"))
-        np.testing.assert_array_equal(result[0, 0], [141, 141, 141])
-
-    def test_filmic_shadow(self) -> None:
-        arr = np.full((1, 1, 3), 0.05, dtype=np.float32)
-        result = to_uint8(apply_tone_mapping(arr, "filmic"))
-        np.testing.assert_array_equal(result[0, 0], [59, 59, 59])
-
-    def test_filmic_scene_white(self) -> None:
-        arr = np.full((1, 1, 3), 1.0, dtype=np.float32)
-        result = to_uint8(apply_tone_mapping(arr, "filmic"))
-        np.testing.assert_array_equal(result[0, 0], [232, 232, 232])
-
-    def test_filmic_black_stays_black(self) -> None:
-        arr = np.zeros((1, 1, 3), dtype=np.float32)
-        result = to_uint8(apply_tone_mapping(arr, "filmic"))
-        np.testing.assert_array_equal(result[0, 0], [0, 0, 0])
-
     def test_srgb_half(self) -> None:
         arr = np.full((1, 1, 3), 0.5, dtype=np.float32)
         result = to_uint8(apply_tone_mapping(arr, "sRGB"))
@@ -327,7 +266,6 @@ class TestApplyToneMapping:
             ("sRGB", 118),
             ("rec709", 104),
             ("rec1886", 125),
-            ("filmic", 141),
             ("raw", 46),
         ],
     )
@@ -343,7 +281,6 @@ class TestApplyToneMapping:
             ("sRGB", 188),
             ("rec709", 180),
             ("rec1886", 191),
-            ("filmic", 206),
             ("raw", 128),
         ],
     )
@@ -388,6 +325,25 @@ class TestApplyToneMapping:
         assert "sRGB" in message
         assert "raw" in message
 
+    def test_filmic_is_retired_and_names_alternatives(self) -> None:
+        # Dropped to match Nuke's default viewer, which offers only the
+        # encodings. Real tone mapping belongs in ocio mode.
+        arr = np.zeros((1, 1, 3), dtype=np.float32)
+        with pytest.raises(ValueError, match="no longer supported") as excinfo:
+            apply_tone_mapping(arr, "filmic")
+        message = str(excinfo.value)
+        assert "sRGB" in message
+        assert "ocio" in message
+
+    def test_no_choice_rolls_off_above_one(self) -> None:
+        # Every remaining choice is a pure transfer function, so scene values
+        # above 1.0 clip. This is Nuke default-viewer behaviour, and is the
+        # tradeoff accepted when filmic was dropped.
+        arr = np.full((1, 1, 3), 4.0, dtype=np.float32)
+        for tone in TONE_CHOICES:
+            result = to_uint8(apply_tone_mapping(arr, tone))
+            np.testing.assert_array_equal(result[0, 0], [255, 255, 255], err_msg=tone)
+
     @pytest.mark.parametrize("tone", ["srgb", "SRGB", "sRGB", "sRgB"])
     def test_srgb_name_is_case_insensitive(self, tone: str) -> None:
         # The only mixed-case choice, so dispatch cannot compare it directly.
@@ -410,8 +366,8 @@ class TestApplyToneMapping:
     def test_case_insensitive(self) -> None:
         arr = np.full((1, 1, 3), 0.18, dtype=np.float32)
         np.testing.assert_array_equal(
-            apply_tone_mapping(arr, "FILMIC"),
-            apply_tone_mapping(arr, "filmic"),
+            apply_tone_mapping(arr, "REC709"),
+            apply_tone_mapping(arr, "rec709"),
         )
 
     def test_unsupported_tone_raises(self) -> None:
@@ -421,8 +377,8 @@ class TestApplyToneMapping:
 
     def test_output_dtype_float32(self) -> None:
         arr = np.full((1, 1, 3), 0.18, dtype=np.float32)
-        assert apply_tone_mapping(arr, "filmic").dtype == np.float32
+        assert apply_tone_mapping(arr, "rec709").dtype == np.float32
 
     def test_preserves_shape(self) -> None:
         arr = np.ones((4, 8, 3), dtype=np.float32)
-        assert apply_tone_mapping(arr, "filmic").shape == (4, 8, 3)
+        assert apply_tone_mapping(arr, "rec709").shape == (4, 8, 3)

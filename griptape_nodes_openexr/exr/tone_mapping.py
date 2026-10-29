@@ -7,21 +7,26 @@ import numpy as np
 TONE_SRGB = "sRGB"
 TONE_REC709 = "rec709"
 TONE_REC1886 = "rec1886"
-TONE_FILMIC = "filmic"
 TONE_RAW = "raw"
 
-TONE_CHOICES = [TONE_SRGB, TONE_REC709, TONE_REC1886, TONE_FILMIC, TONE_RAW]
+TONE_CHOICES = [TONE_SRGB, TONE_REC709, TONE_REC1886, TONE_RAW]
 TONE_DEFAULT = TONE_SRGB
 
 TONE_CURVES_DESCRIPTION = (
     "'sRGB' applies the sRGB transfer function; 'rec709' applies the BT.709 OETF; "
-    "'rec1886' applies BT.1886 (gamma 2.4); 'filmic' applies the Narkowicz 2015 curve, "
-    "then sRGB-encodes it; 'raw' clamps to [0, 1] with no transfer function. "
-    "The rec709 and rec1886 names match the two Rec.709 views in Nuke's default config."
+    "'rec1886' applies BT.1886 (gamma 2.4); 'raw' clamps to [0, 1] with no transfer "
+    "function. These match the views in Nuke's default config, and like that viewer "
+    "they clip scene values above 1.0. Use 'ocio' mode for a tone-mapped view."
 )
 
 # Retired choice names, mapped to the message shown when one is still in use.
 _RETIRED_TONES = {
+    "filmic": (
+        "'filmic' is no longer supported: it was a Narkowicz 2015 approximation of "
+        "the ACES RRT, and basic mode now offers only display encodings, matching "
+        "Nuke's default viewer. Use 'sRGB' for a similar look, or switch to 'ocio' "
+        "mode for a real tone-mapped view transform."
+    ),
     "linear": (
         "'linear' is no longer supported: despite the name it sRGB-encoded the image. "
         "Use 'sRGB' for the same result, or 'raw' for true unencoded linear."
@@ -57,30 +62,6 @@ def apply_exposure(arr: np.ndarray, ev: float) -> np.ndarray:
         Scaled float32 array, same shape as input.
     """
     return (arr * (2.0**ev)).astype(np.float32)
-
-
-def apply_filmic(arr: np.ndarray) -> np.ndarray:
-    """Apply Narkowicz 2015 filmic tone curve.
-
-    Formula: (x*(2.51x+0.03))/(x*(2.43x+0.59)+0.14)
-
-    The curve output is display-linear. The sRGB transfer function is applied
-    separately by `apply_tone_mapping`, which is what callers should use.
-
-    Args:
-        arr: Float32 pixel array, any shape. Values may exceed [0, 1].
-
-    Returns:
-        Tone-mapped float32 array in approximately [0, 1], same shape as input.
-
-    # TODO: Revisit when colorspace handling is enabled. Assumes scene-linear input
-    # in display-referred primaries (Rec.709/sRGB). Wide-gamut (AP1) input will have a
-    # slight gamut mismatch: acceptable for preview, not for delivery.
-    """
-    x = arr.astype(np.float32)
-    numerator = x * (2.51 * x + 0.03)
-    denominator = x * (2.43 * x + 0.59) + 0.14
-    return np.clip(numerator / denominator, 0.0, 1.0).astype(np.float32)
 
 
 def linear_to_srgb(arr: np.ndarray) -> np.ndarray:
@@ -149,14 +130,12 @@ def _clamp_only(arr: np.ndarray) -> np.ndarray:
     return np.clip(arr, 0.0, 1.0).astype(np.float32, copy=False)
 
 
-# Transfer function per choice, keyed by the lowercased name. Both the tone
-# curve and the encode are selected from the one name, so a new choice needs
-# an entry here and in TONE_CHOICES.
+# Transfer function per choice, keyed by the lowercased name. A new choice
+# needs an entry here and in TONE_CHOICES.
 _TONE_TRANSFER_FUNCTIONS = {
     TONE_SRGB.lower(): linear_to_srgb,
     TONE_REC709.lower(): linear_to_rec709,
     TONE_REC1886.lower(): linear_to_rec1886,
-    TONE_FILMIC.lower(): linear_to_srgb,
     TONE_RAW.lower(): _clamp_only,
 }
 
@@ -164,9 +143,9 @@ _TONE_TRANSFER_FUNCTIONS = {
 def apply_tone_mapping(rgb: np.ndarray, tone_mapping: str) -> np.ndarray:
     """Convert scene-linear RGB to display-encoded RGB.
 
-    Applies the selected tone curve, then that choice's display transfer
-    function. Both steps are needed: a tone curve produces display-linear
-    values, which still have to be encoded for a display.
+    Every choice is a pure display transfer function, so scene values above
+    1.0 clip. Nuke's default viewer behaves the same way; a tone-mapped view
+    that rolls off highlights belongs in 'ocio' mode.
 
     Output is an 8-bit PNG with no embedded profile, which viewers read as
     sRGB. Choosing 'rec709' or 'rec1886' therefore shows the same deliberate
@@ -195,10 +174,7 @@ def apply_tone_mapping(rgb: np.ndarray, tone_mapping: str) -> np.ndarray:
         msg = f"Unsupported tone mapping: {tone_mapping!r}. Choose one of: {', '.join(TONE_CHOICES)}."
         raise ValueError(msg)
 
-    # Tone curve first, then the display transfer function. 'raw' skips both
-    # and only clamps, so the caller sees the scene-linear value itself.
-    display_linear = apply_filmic(rgb) if tone == TONE_FILMIC else rgb.astype(np.float32)
-    return _TONE_TRANSFER_FUNCTIONS[tone](display_linear)
+    return _TONE_TRANSFER_FUNCTIONS[tone](rgb.astype(np.float32))
 
 
 def to_uint8(arr: np.ndarray) -> np.ndarray:

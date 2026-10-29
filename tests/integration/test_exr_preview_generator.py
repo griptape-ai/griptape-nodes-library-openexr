@@ -161,11 +161,11 @@ class TestAttemptGeneratePreviewRGBA:
         assert img.height <= 64
 
     @pytest.mark.asyncio
-    async def test_filmic_tone_mapping_succeeds(self, tmp_path: Path) -> None:
+    async def test_rec709_tone_mapping_succeeds(self, tmp_path: Path) -> None:
         exr_path = DATA_DIR / "single_part_rgba.exr"
         engine = _make_engine()
 
-        gen = _make_generator(exr_path, tmp_path, params={"tone_mapping": "filmic"}, engine=engine)
+        gen = _make_generator(exr_path, tmp_path, params={"tone_mapping": "rec709"}, engine=engine)
         result = await gen.attempt_generate_preview()
 
         assert result == "preview.webp"
