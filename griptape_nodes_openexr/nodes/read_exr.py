@@ -263,7 +263,12 @@ class ReadEXR(SuccessFailureNode):
         # add_color_mode_parameters registers its parameters on the node directly, which
         # re-parents them out of the group context. Pull them back in so the whole colour
         # section collapses together.
-        for parameter in (self._color_mode_param, self._tone_mapping_param, self._color_params_param):
+        for parameter in (
+            self._color_mode_param,
+            self._tone_mapping_param,
+            self._color_params_param,
+            self._embed_color_profile_param,
+        ):
             color_group.add_child(parameter)
 
         # --- Outputs ---

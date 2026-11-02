@@ -32,6 +32,7 @@ from griptape_nodes_openexr.exr.tone_mapping import (
     REC709_GAMMA,
     REC709_OFFSET,
     REC709_TOE_SLOPE,
+    REC1886_GAMMA,
     SRGB_GAIN,
     SRGB_GAMMA,
     SRGB_LINEAR_CUTOFF,
@@ -53,7 +54,7 @@ _GREEN_XYZ = (0.3851, 0.7169, 0.0971)
 _BLUE_XYZ = (0.1431, 0.0606, 0.7141)
 _D50_XYZ = (0.9642, 1.0000, 0.8249)
 
-_REC1886_GAMMA = 2.4  # BT.1886 display EOTF; the decode a viewer must apply
+_REC1886_GAMMA = 1.0 / REC1886_GAMMA  # invert the forward encode gamma to get the decode (EOTF) gamma
 _LINEAR_GAMMA = 1.0  # 'raw' has no transfer function
 
 _ICC_HEADER_SIZE = 128

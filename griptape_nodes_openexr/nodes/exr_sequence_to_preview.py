@@ -74,7 +74,7 @@ _DEFAULT_TRC = "bt709"
 
 
 def color_trc_for(tone_mapping: str, *, ocio_active: bool = False) -> str:
-    """ffmpeg -color_trc value for a display transform.
+    """x264 transfer= value for a display transform.
 
     Under OCIO the display/view transform resolves to a config colorspace we
     cannot describe, and tone_mapping is a hidden basic-mode control whose
@@ -87,8 +87,8 @@ def color_trc_for(tone_mapping: str, *, ocio_active: bool = False) -> str:
         ocio_active: Whether an OCIO transform produced the frames.
 
     Returns:
-        An ffmpeg transfer characteristic string, falling back to bt709 for
-        an unrecognised name.
+        An x264 transfer characteristic value (passed via -x264-params),
+        falling back to bt709 for an unrecognised name.
     """
     if ocio_active:
         return _DEFAULT_TRC

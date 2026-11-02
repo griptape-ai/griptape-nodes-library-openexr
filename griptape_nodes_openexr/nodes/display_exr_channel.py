@@ -275,8 +275,14 @@ class DisplayEXRChannel(SuccessFailureNode):
         uint8 = _composite(uint8_rgb, alpha_f32, bg_rgb_f32)
 
         # OCIO output carries no profile: its display/view transform resolves
-        # to a config colorspace we cannot describe.
-        profile = profile_for_tone_mapping(tone_mapping) if embed_color_profile and color_params is None else None
+        # to a config colorspace we cannot describe. A composited background
+        # also rules a profile out: its pixels keep their original sRGB-ish
+        # encoding, so one embedded profile can't describe both regions.
+        profile = (
+            profile_for_tone_mapping(tone_mapping)
+            if embed_color_profile and color_params is None and bg_rgb_f32 is None
+            else None
+        )
 
         try:
             png_bytes = ndarray_to_png(uint8, icc_profile=profile)

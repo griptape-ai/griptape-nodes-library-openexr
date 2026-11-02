@@ -21,11 +21,12 @@ from griptape_nodes.retained_mode.managers.artifact_providers.base_generator_par
 )
 from griptape_nodes.utils.async_utils import to_thread
 from PIL import Image
-from pydantic import PositiveInt
+from pydantic import PositiveInt, field_validator
 
 from griptape_nodes_openexr.exr.channel_selection import select_alpha_channel, select_display_channels
 from griptape_nodes_openexr.exr.exr_io import build_rgb_array, load_exr_channels, scan_exr_header
 from griptape_nodes_openexr.exr.tone_mapping import (
+    _RETIRED_TONES,
     TONE_CURVES_DESCRIPTION,
     TONE_DEFAULT,
     apply_exposure,
@@ -45,6 +46,21 @@ class EXRPreviewParameters(BaseGeneratorParameters):
         description=f"Display transform. {TONE_CURVES_DESCRIPTION}",
         editor_schema_type="string",
     )
+
+    @field_validator("tone_mapping")
+    @classmethod
+    def _reject_retired_tone_mapping(cls, value: str) -> str:
+        """Fail config validation for a retired name instead of silently rendering it.
+
+        A stored default from before a tone was retired (e.g. "filmic") still
+        validates as a plain string. Rejecting it here makes the engine reset
+        the stored config to defaults instead of reaching apply_tone_mapping,
+        which would raise at preview-render time for every file.
+        """
+        retired = _RETIRED_TONES.get(value.lower())
+        if retired is not None:
+            raise ValueError(retired)
+        return value
 
     exposure: float = Field(
         default=0.0,

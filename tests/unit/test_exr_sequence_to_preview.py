@@ -906,8 +906,9 @@ class TestVideoColourTags:
         assert color_trc_for(tone) == expected_trc
 
     def test_unknown_transform_falls_back_to_bt709(self) -> None:
-        # An unrecognised -color_trc makes ffmpeg fail the whole encode, so
-        # never pass one through from an unexpected value.
+        # An unrecognised x264 transfer= value, passed through -x264-params,
+        # makes ffmpeg fail the whole encode, so never pass one through from
+        # an unexpected value.
         from griptape_nodes_openexr.nodes.exr_sequence_to_preview import color_trc_for
 
         assert color_trc_for("something-else") == "bt709"

@@ -63,6 +63,21 @@ class TestEXRPreviewParameters:
         assert params.tone_mapping == "rec709"
         assert params.exposure == -1.0
 
+    def test_retired_tone_mapping_raises(self) -> None:
+        # A stored "filmic" default from before the tone was retired must fail
+        # validation, not pass through to apply_tone_mapping at render time.
+        with pytest.raises(ValidationError):
+            EXRPreviewParameters(tone_mapping="filmic")
+
+    def test_retired_tone_mapping_raises_via_model_validate(self) -> None:
+        # Mirrors the registration path, which loads a stored config dict.
+        with pytest.raises(ValidationError):
+            EXRPreviewParameters.model_validate({"tone_mapping": "filmic", "exposure": 0.0})
+
+    def test_retired_tone_mapping_case_insensitive(self) -> None:
+        with pytest.raises(ValidationError):
+            EXRPreviewParameters(tone_mapping="Filmic")
+
     def test_extra_fields_ignored(self) -> None:
         params = EXRPreviewParameters.model_validate({"unknown_field": "ignored"})
         assert params.tone_mapping == "sRGB"
