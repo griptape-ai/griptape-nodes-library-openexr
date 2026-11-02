@@ -167,13 +167,12 @@ def add_color_mode_parameters(
     video passes False: an MP4 cannot carry an ICC profile, so it signals
     colour through stream tags and the switch would do nothing there.
 
-    Defaults a new node to 'basic' so it renders without any OCIO setup,
-    restores the saved mode from node.metadata on reload, and applies initial
-    visibility. Returns the parameter objects so the caller can store them as
-    instance attributes, with None in place of embed_color_profile when it
-    was not registered.
+    Sets default mode based on OCIO availability, restores the saved mode from
+    node.metadata, and applies initial visibility. Returns the parameter
+    objects so the caller can store them as instance attributes, with None in
+    place of embed_color_profile when it was not registered.
     """
-    default_mode = COLOR_MODE_BASIC
+    default_mode = COLOR_MODE_OCIO if find_colorspace_transform_request_type() is not None else COLOR_MODE_BASIC
 
     color_mode_param = ParameterString(
         name="color_mode",
@@ -184,7 +183,7 @@ def add_color_mode_parameters(
     color_mode_param.add_trait(Options(choices=[COLOR_MODE_BASIC, COLOR_MODE_OCIO]))
     node.add_parameter(color_mode_param)
 
-    ocio_active = False  # default_mode is always 'basic'; a saved 'ocio' mode is restored below
+    ocio_active = default_mode == COLOR_MODE_OCIO
 
     tone_mapping_param = ParameterString(
         name="tone_mapping",
