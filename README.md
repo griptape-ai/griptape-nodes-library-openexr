@@ -23,7 +23,7 @@ An **Open in external viewer** button opens the source EXR in a configured HDR v
 | `layer`               | `str`             | Which layer of the part to render. Populated after the scan, hidden when the part has one layer.                                         |
 | `frame`               | `int`             | Absolute frame number, matching the filenames on disk. Hidden for a single file.                                                         |
 | `exposure`            | `float`           | Exposure in EV stops applied before tone mapping. Range -10 to +10, default `0.0`. In the Color Management group.                        |
-| `color_mode`          | `str`             | `basic` (local tone mapping) or `ocio` (connected `OCIOColorParamsArtifact`). Defaults to `ocio` when OpenColorIO is loaded.             |
+| `color_mode`          | `str`             | `basic` (local tone mapping) or `ocio` (connected `OCIOColorParamsArtifact`). Default `basic`.                                           |
 | `tone_mapping`        | `str`             | `sRGB`, `rec709`, `rec1886`, or `raw`. Default `sRGB`. See [Display transforms](#display-transforms). Used when `color_mode` is `basic`. |
 | `embed_color_profile` | `bool`            | Embed an ICC profile describing the display transform. Default `false`. See [Colour profiles](#colour-profiles).                         |
 | `output_file`         | `str`             | Filename for the saved PNG. Carries the frame number for a sequence, e.g. `read_exr.1001.png`.                                           |
@@ -162,6 +162,10 @@ An **Open in external viewer** button opens the source EXR in a configured HDR v
 | `output_file` | `str`              | Path to the saved PNG file                   |
 
 #### Display transforms
+
+`color_mode` defaults to `basic` and `tone_mapping` to `sRGB`, so a node
+renders as soon as it's placed, with no OCIO config required. Switch to
+`ocio` once you have a config and want a real view transform.
 
 In `basic` colour mode, `tone_mapping` selects how scene-linear values are
 encoded for display. The names match the views in Nuke's default OCIO config,
@@ -320,7 +324,7 @@ Bakes an EXR frame sequence down to a single MP4/MOV preview video, applying exp
 | `frame_rate`       | `float`              | Output frame rate. Default `24.0`.                                                                    |
 | `part_index`       | `int`                | Part index to read from every frame. Default `0`.                                                     |
 | `exposure`         | `float`              | Exposure in EV stops applied before tone mapping. Default `0.0`.                                      |
-| `color_mode`       | `str`                | `Basic` or `OCIO`.                                                                                    |
+| `color_mode`       | `str`                | `Basic` or `OCIO`. Default `Basic`.                                                                   |
 | `tone_mapping`     | `str`                | `sRGB`, `rec709`, `rec1886`, or `raw`. Default `sRGB`. See [Display transforms](#display-transforms). |
 | `color_params`     | `OCIOConfigArtifact` | OCIO config. Required when `color_mode` is `OCIO`.                                                    |
 | `format`           | `str`                | Output container: `mp4` or `mov`. Default `mp4`.                                                      |

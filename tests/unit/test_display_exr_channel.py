@@ -33,12 +33,13 @@ class TestInitialVisibility:
         # second positional arg is ocio_active
         assert mock_vis.call_args[0][1] is False
 
-    def test_new_node_with_ocio_starts_in_ocio_mode(self) -> None:
+    def test_new_node_with_ocio_available_still_starts_in_basic_mode(self) -> None:
+        """New nodes always default to basic, even when OCIO is loaded — see #57."""
         with patch(f"{_OCIO_MODULE}.apply_color_mode_visibility") as mock_vis:
             _make_node(ocio_available=True)
 
         mock_vis.assert_called_once()
-        assert mock_vis.call_args[0][1] is True
+        assert mock_vis.call_args[0][1] is False
 
     def test_new_node_no_metadata_basic_mode_color_mode_default(self) -> None:
         node = _make_node(ocio_available=False)
