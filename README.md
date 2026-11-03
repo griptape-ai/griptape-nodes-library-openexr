@@ -32,7 +32,7 @@ An **Open in external viewer** button opens the source EXR in a configured HDR v
 
 | Parameter                      | Type                       | Description                                                       |
 | ------------------------------ | -------------------------- | ----------------------------------------------------------------- |
-| `image`                        | `ImageUrlArtifact`         | 8-bit sRGB (or RGBA) PNG of the current frame                     |
+| `image`                        | `ImageUrlArtifact`         | 8-bit PNG (RGB or RGBA) of the current frame                      |
 | `part`                         | `EXRPartArtifact`          | Descriptor for the part that was read, carrying the float data on |
 | `channels`                     | `list[EXRChannelArtifact]` | One descriptor per channel in that part                           |
 | `image_width` / `image_height` | `int`                      | Dimensions from the data window                                   |
@@ -141,7 +141,7 @@ ______________________________________________________________________
 
 ### Display EXR Part
 
-Renders an EXR part to an 8-bit sRGB (or RGBA) PNG. Accepts an `EXRPartArtifact` from **Load EXR**, auto-selects RGB display channels, applies exposure and tone mapping, and writes the result as an `ImageUrlArtifact`.
+Renders an EXR part to an 8-bit PNG (RGB or RGBA). Accepts an `EXRPartArtifact` from **Load EXR**, auto-selects RGB display channels, applies exposure and tone mapping, and writes the result as an `ImageUrlArtifact`.
 
 An **Open in external viewer** button opens the source EXR in a configured HDR viewer (or the OS default) after the node has been run. See [Library Settings](#library-settings).
 
@@ -156,10 +156,10 @@ An **Open in external viewer** button opens the source EXR in a configured HDR v
 
 **Outputs**
 
-| Parameter     | Type               | Description                                  |
-| ------------- | ------------------ | -------------------------------------------- |
-| `image`       | `ImageUrlArtifact` | 8-bit sRGB or RGBA PNG for in-canvas display |
-| `output_file` | `str`              | Path to the saved PNG file                   |
+| Parameter     | Type               | Description                                   |
+| ------------- | ------------------ | --------------------------------------------- |
+| `image`       | `ImageUrlArtifact` | 8-bit PNG (RGB or RGBA) for in-canvas display |
+| `output_file` | `str`              | Path to the saved PNG file                    |
 
 #### Display transforms
 
@@ -184,9 +184,9 @@ white. Nuke's default viewer behaves the same way. Lower the `exposure` to
 bring highlights into range, or use `ocio` mode with a config that provides a
 tone-mapped view transform such as ACES.
 
-Output is an 8-bit PNG with no embedded colour profile, which viewers decode as
-sRGB. Picking `rec709` or `rec1886` therefore shows the same mismatch you get
-when viewing a Rec.709 output on an sRGB monitor.
+Without an embedded profile, viewers decode the PNG as sRGB, so picking
+`rec709` or `rec1886` shows the same mismatch you get when viewing a Rec.709
+output on an sRGB monitor. See [Colour profiles](#colour-profiles).
 
 > **Note:** `linear` and `filmic` were removed, and workflows still set to
 > either fail with an error naming the replacement.
@@ -241,7 +241,7 @@ ______________________________________________________________________
 
 ### Display EXR Channel
 
-Combines 1–4 individual `EXRChannelArtifact` inputs into an 8-bit sRGB or RGBA PNG. An **Open in external viewer** button opens the source EXR after the node has been run. See [Library Settings](#library-settings). Each slot (R, G, B, A) is optional and can come from different EXR files or different parts. Missing RGB slots are zero-filled; connecting the A slot produces RGBA output with optional background compositing.
+Combines 1–4 individual `EXRChannelArtifact` inputs into an 8-bit PNG (RGB or RGBA). An **Open in external viewer** button opens the source EXR after the node has been run. See [Library Settings](#library-settings). Each slot (R, G, B, A) is optional and can come from different EXR files or different parts. Missing RGB slots are zero-filled; connecting the A slot produces RGBA output with optional background compositing.
 
 **Inputs**
 
@@ -258,10 +258,10 @@ Combines 1–4 individual `EXRChannelArtifact` inputs into an 8-bit sRGB or RGBA
 
 **Outputs**
 
-| Parameter     | Type               | Description                                  |
-| ------------- | ------------------ | -------------------------------------------- |
-| `image`       | `ImageUrlArtifact` | 8-bit sRGB or RGBA PNG for in-canvas display |
-| `output_file` | `str`              | Path to the saved PNG file                   |
+| Parameter     | Type               | Description                                   |
+| ------------- | ------------------ | --------------------------------------------- |
+| `image`       | `ImageUrlArtifact` | 8-bit PNG (RGB or RGBA) for in-canvas display |
+| `output_file` | `str`              | Path to the saved PNG file                    |
 
 At least one RGB slot must be connected. All connected channels must have the same pixel dimensions.
 

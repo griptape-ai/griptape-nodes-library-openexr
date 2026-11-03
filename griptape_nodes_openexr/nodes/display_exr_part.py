@@ -32,7 +32,7 @@ logger = logging.getLogger("griptape_nodes")
 
 
 class DisplayEXRPart(SuccessFailureNode):
-    """Display an EXR part as an 8-bit sRGB PNG.
+    """Display an EXR part as an 8-bit PNG.
 
     Accepts an EXRPartArtifact, auto-selects RGB channels, applies exposure
     and colour management, and outputs an ImageUrlArtifact saved via the
@@ -87,7 +87,7 @@ class DisplayEXRPart(SuccessFailureNode):
             name="image",
             type="ImageUrlArtifact",
             output_type="ImageUrlArtifact",
-            tooltip="8-bit sRGB PNG for in-canvas display",
+            tooltip="8-bit PNG for in-canvas display, encoded with the selected display transform",
             allowed_modes={ParameterMode.OUTPUT},
             ui_options={"expander": True, "pulse_on_run": True},
         )

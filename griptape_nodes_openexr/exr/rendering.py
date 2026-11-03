@@ -105,8 +105,5 @@ def ndarray_to_png(uint8: np.ndarray, icc_profile: bytes | None = None) -> bytes
         raise ValueError(msg)
     mode = "RGBA" if uint8.shape[2] == _RGBA_CHANNELS else "RGB"
     buf = io.BytesIO()
-    # Only pass icc_profile when set: Pillow writes an empty iCCP chunk for an
-    # explicit None on some formats.
-    save_kwargs = {"icc_profile": icc_profile} if icc_profile is not None else {}
-    Image.fromarray(uint8, mode=mode).save(buf, format="PNG", **save_kwargs)
+    Image.fromarray(uint8, mode=mode).save(buf, format="PNG", icc_profile=icc_profile)
     return buf.getvalue()

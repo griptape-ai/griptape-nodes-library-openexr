@@ -323,13 +323,13 @@ class TestColorManagement:
         # one side would compare a render against itself.
         node.set_parameter_value("tone_mapping", TONE_REC709)
         asyncio.run(_run(node))
-        filmic = _rendered(node)
+        rec709 = _rendered(node)
 
         node.set_parameter_value("tone_mapping", TONE_SRGB)
         asyncio.run(_run(node))
         srgb = _rendered(node)
 
-        assert not np.array_equal(filmic, srgb)
+        assert not np.array_equal(rec709, srgb)
 
     def test_each_display_transform_renders_differently(self, engine: _Engine) -> None:
         """Every basic-mode choice must reach the render, not silently collapse."""

@@ -140,6 +140,11 @@ _TONE_TRANSFER_FUNCTIONS = {
 }
 
 
+def retired_tone_message(tone_mapping: str) -> str | None:
+    """The message for a retired display transform name, or None if it isn't retired."""
+    return _RETIRED_TONES.get(tone_mapping.lower())
+
+
 def apply_tone_mapping(rgb: np.ndarray, tone_mapping: str) -> np.ndarray:
     """Convert scene-linear RGB to display-encoded RGB.
 
@@ -147,9 +152,10 @@ def apply_tone_mapping(rgb: np.ndarray, tone_mapping: str) -> np.ndarray:
     1.0 clip. Nuke's default viewer behaves the same way; a tone-mapped view
     that rolls off highlights belongs in 'ocio' mode.
 
-    Output is an 8-bit PNG with no embedded profile, which viewers read as
-    sRGB. Choosing 'rec709' or 'rec1886' therefore shows the same deliberate
-    mismatch a Rec.709 view shows on an sRGB monitor.
+    Output is an 8-bit PNG with no embedded profile unless `embed_color_profile`
+    is set, so by default viewers read it as sRGB. Choosing 'rec709' or
+    'rec1886' therefore shows the same deliberate mismatch a Rec.709 view
+    shows on an sRGB monitor.
 
     Not used for OCIO colour management, where the display/view transform already
     includes the display's transfer function.
@@ -166,7 +172,7 @@ def apply_tone_mapping(rgb: np.ndarray, tone_mapping: str) -> np.ndarray:
     """
     tone = tone_mapping.lower()
 
-    retired = _RETIRED_TONES.get(tone)
+    retired = retired_tone_message(tone)
     if retired is not None:
         raise ValueError(retired)
 

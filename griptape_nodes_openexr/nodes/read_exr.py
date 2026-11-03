@@ -276,7 +276,10 @@ class ReadEXR(SuccessFailureNode):
             name="image",
             type="ImageUrlArtifact",
             output_type="ImageUrlArtifact",
-            tooltip="8-bit sRGB PNG of the current frame, for in-canvas display and downstream image nodes",
+            tooltip=(
+                "8-bit PNG of the current frame, encoded with the selected display transform, "
+                "for in-canvas display and downstream image nodes"
+            ),
             allowed_modes={ParameterMode.OUTPUT},
             ui_options={"expander": True, "pulse_on_run": True},
         )

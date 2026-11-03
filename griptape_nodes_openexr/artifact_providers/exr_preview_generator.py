@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from io import BytesIO
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -26,16 +27,18 @@ from pydantic import PositiveInt, field_validator
 from griptape_nodes_openexr.exr.channel_selection import select_alpha_channel, select_display_channels
 from griptape_nodes_openexr.exr.exr_io import build_rgb_array, load_exr_channels, scan_exr_header
 from griptape_nodes_openexr.exr.tone_mapping import (
-    _RETIRED_TONES,
     TONE_CURVES_DESCRIPTION,
     TONE_DEFAULT,
     apply_exposure,
     apply_tone_mapping,
+    retired_tone_message,
     to_uint8,
 )
 
 if TYPE_CHECKING:
     from griptape_nodes.retained_mode.engine import Engine
+
+logger = logging.getLogger("griptape_nodes")
 
 
 class EXRPreviewParameters(BaseGeneratorParameters):
@@ -49,18 +52,18 @@ class EXRPreviewParameters(BaseGeneratorParameters):
 
     @field_validator("tone_mapping")
     @classmethod
-    def _reject_retired_tone_mapping(cls, value: str) -> str:
-        """Fail config validation for a retired name instead of silently rendering it.
+    def _replace_retired_tone_mapping(cls, value: str) -> str:
+        """Swap a retired name for the default, so the engine keeps the other settings.
 
-        A stored default from before a tone was retired (e.g. "filmic") still
-        validates as a plain string. Rejecting it here makes the engine reset
-        the stored config to defaults instead of reaching apply_tone_mapping,
-        which would raise at preview-render time for every file.
+        Failing validation here would make the engine reset every generator
+        parameter, and a stored "filmic"/"linear" is the old default rather
+        than something the user chose.
         """
-        retired = _RETIRED_TONES.get(value.lower())
-        if retired is not None:
-            raise ValueError(retired)
-        return value
+        retired = retired_tone_message(value)
+        if retired is None:
+            return value
+        logger.warning("EXR preview: %s Using %r for previews.", retired, TONE_DEFAULT)
+        return TONE_DEFAULT
 
     exposure: float = Field(
         default=0.0,

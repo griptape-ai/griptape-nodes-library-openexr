@@ -63,20 +63,28 @@ class TestEXRPreviewParameters:
         assert params.tone_mapping == "rec709"
         assert params.exposure == -1.0
 
-    def test_retired_tone_mapping_raises(self) -> None:
-        # A stored "filmic" default from before the tone was retired must fail
-        # validation, not pass through to apply_tone_mapping at render time.
-        with pytest.raises(ValidationError):
-            EXRPreviewParameters(tone_mapping="filmic")
+    def test_retired_tone_mapping_replaced_with_default(self) -> None:
+        # A stored "filmic" default from before the tone was retired must be
+        # swapped for the current default rather than reaching
+        # apply_tone_mapping at render time, and must not reset the other
+        # stored settings (that's what raising in the validator would do).
+        params = EXRPreviewParameters(tone_mapping="filmic")
+        assert params.tone_mapping == "sRGB"
 
-    def test_retired_tone_mapping_raises_via_model_validate(self) -> None:
+    def test_retired_tone_mapping_replaced_via_model_validate(self) -> None:
         # Mirrors the registration path, which loads a stored config dict.
-        with pytest.raises(ValidationError):
-            EXRPreviewParameters.model_validate({"tone_mapping": "filmic", "exposure": 0.0})
+        params = EXRPreviewParameters.model_validate({"tone_mapping": "filmic", "max_width": 2048})
+        assert params.tone_mapping == "sRGB"
+        assert params.max_width == 2048
 
     def test_retired_tone_mapping_case_insensitive(self) -> None:
-        with pytest.raises(ValidationError):
-            EXRPreviewParameters(tone_mapping="Filmic")
+        params = EXRPreviewParameters(tone_mapping="Filmic")
+        assert params.tone_mapping == "sRGB"
+
+    def test_retired_tone_mapping_logs_a_warning(self, caplog: pytest.LogCaptureFixture) -> None:
+        with caplog.at_level("WARNING", logger="griptape_nodes"):
+            EXRPreviewParameters(tone_mapping="filmic")
+        assert "filmic" in caplog.text.lower()
 
     def test_extra_fields_ignored(self) -> None:
         params = EXRPreviewParameters.model_validate({"unknown_field": "ignored"})

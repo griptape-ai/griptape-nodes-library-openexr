@@ -44,7 +44,7 @@ _EV_MAX = 10.0
 
 
 class DisplayEXRChannel(SuccessFailureNode):
-    """Combine 1–4 EXR channel artifacts into an 8-bit sRGB (or RGBA) PNG.
+    """Combine 1–4 EXR channel artifacts into an 8-bit PNG (RGB or RGBA).
 
     Each of the R, G, B, A input slots accepts an optional EXRChannelArtifact.
     Channels may originate from different EXR files or different parts.
@@ -133,7 +133,7 @@ class DisplayEXRChannel(SuccessFailureNode):
             name="image",
             type="ImageUrlArtifact",
             output_type="ImageUrlArtifact",
-            tooltip="8-bit sRGB (or RGBA) PNG for in-canvas display",
+            tooltip="8-bit PNG (RGB or RGBA) for in-canvas display, encoded with the selected display transform",
             allowed_modes={ParameterMode.OUTPUT},
             ui_options={"expander": True, "pulse_on_run": True},
         )
@@ -278,10 +278,8 @@ class DisplayEXRChannel(SuccessFailureNode):
         # to a config colorspace we cannot describe. A composited background
         # also rules a profile out: its pixels keep their original sRGB-ish
         # encoding, so one embedded profile can't describe both regions.
-        profile = (
-            profile_for_tone_mapping(tone_mapping)
-            if embed_color_profile and color_params is None and bg_rgb_f32 is None
-            else None
+        profile = _output_profile(
+            tone_mapping, embed=embed_color_profile, ocio=color_params is not None, composited=bg_rgb_f32 is not None
         )
 
         try:
@@ -302,6 +300,13 @@ class DisplayEXRChannel(SuccessFailureNode):
         details = f"Rendered {width}×{height}, channels: [{slot_info}{alpha_info}]{bg_info}, EV={ev:+.1f}, {tone_mode}"
         self._set_status_results(was_successful=True, result_details=details)
         logger.info("DisplayEXRChannel '%s': %s", self.name, details)
+
+
+def _output_profile(tone_mapping: str, *, embed: bool, ocio: bool, composited: bool) -> bytes | None:
+    """No profile under OCIO, or over a composited background whose encoding we don't know."""
+    if not embed or ocio or composited:
+        return None
+    return profile_for_tone_mapping(tone_mapping)
 
 
 def _build_rgb(pixels: dict[str, np.ndarray], height: int, width: int) -> np.ndarray:
