@@ -29,32 +29,32 @@ def ffmpeg_tools() -> tuple[str, str]:
     return ffmpeg, ffprobe
 
 
-def _encode(ffmpeg: str, out: Path, tone: str) -> None:
+def _encode(ffmpeg: str, out: Path, tone: str, *, convert_matrix: bool = True) -> None:
     """Encode a throwaway clip with the same colour flags the node uses."""
-    subprocess.run(  # noqa: S603
-        [
-            ffmpeg,
-            "-loglevel",
-            "error",
-            "-f",
-            "lavfi",
-            "-i",
-            "testsrc=duration=0.1:size=64x64:rate=10",
-            "-c:v",
-            "libx264",
-            "-pix_fmt",
-            _PIX_FMT,
-            "-x264-params",
-            f"colorprim=bt709:transfer={color_trc_for(tone)}:colormatrix=bt709",
-            "-color_range",
-            "tv",
-            "-y",
-            str(out),
-        ],
-        check=True,
-        capture_output=True,
-        timeout=120,
-    )
+    cmd = [
+        ffmpeg,
+        "-loglevel",
+        "error",
+        "-f",
+        "lavfi",
+        "-i",
+        "testsrc=duration=0.1:size=64x64:rate=10",
+        "-c:v",
+        "libx264",
+    ]
+    if convert_matrix:
+        cmd += ["-vf", "scale=out_color_matrix=bt709"]
+    cmd += [
+        "-pix_fmt",
+        _PIX_FMT,
+        "-x264-params",
+        f"colorprim=bt709:transfer={color_trc_for(tone)}:colormatrix=bt709",
+        "-color_range",
+        "tv",
+        "-y",
+        str(out),
+    ]
+    subprocess.run(cmd, check=True, capture_output=True, timeout=120)  # noqa: S603
 
 
 def _stream_tags(ffprobe: str, path: Path) -> dict:
@@ -91,3 +91,53 @@ def test_transforms_with_different_curves_get_different_tags(tmp_path: Path, ffm
         tags[tone] = _stream_tags(ffprobe, out)["color_transfer"]
 
     assert len({tags["sRGB"], tags["rec709"], tags["raw"]}) == 3
+
+
+def _red_frame_yuv(ffmpeg: str, out: Path, *, convert_matrix: bool) -> tuple[int, int, int]:
+    """Encode one pure-red frame and read back its YUV sample via ffprobe."""
+    subprocess.run(  # noqa: S603
+        [
+            ffmpeg,
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=red:size=2x2:rate=1:duration=0.1",
+            "-c:v",
+            "rawvideo",
+            *(["-vf", "scale=out_color_matrix=bt709"] if convert_matrix else []),
+            "-pix_fmt",
+            _PIX_FMT,
+            "-frames:v",
+            "1",
+            "-y",
+            str(out),
+        ],
+        check=True,
+        capture_output=True,
+        timeout=60,
+    )
+    raw = out.read_bytes()
+    # yuv420p, 2x2: Y plane is 4 bytes, then one U byte and one V byte.
+    y, u, v = raw[0], raw[4], raw[5]
+    return y, u, v
+
+
+def test_matrix_conversion_matches_the_asserted_tag(tmp_path: Path, ffmpeg_tools: tuple[str, str]) -> None:
+    # colormatrix=bt709 only tags the stream; ffmpeg's default RGB->YUV
+    # conversion uses BT.601 regardless, so an untagged encode and a BT.709
+    # encode of the same red frame must land on different YUV samples, and
+    # the explicit conversion must match the known BT.709 coefficients.
+    ffmpeg, _ = ffmpeg_tools
+    untagged = tmp_path / "untagged.yuv"
+    converted = tmp_path / "converted.yuv"
+
+    untagged_yuv = _red_frame_yuv(ffmpeg, untagged, convert_matrix=False)
+    converted_yuv = _red_frame_yuv(ffmpeg, converted, convert_matrix=True)
+
+    assert untagged_yuv != converted_yuv
+    # BT.709 full-range red (255,0,0) -> Y=63, U=102, V=240 (tv range); allow
+    # a small margin for encoder rounding.
+    expected = (63, 102, 240)
+    assert all(abs(a - b) <= 2 for a, b in zip(converted_yuv, expected, strict=True))

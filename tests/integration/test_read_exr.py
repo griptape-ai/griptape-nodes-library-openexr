@@ -293,9 +293,28 @@ class TestEmbedColorProfile:
         assert Image.open(BytesIO(self._render_with(engine, embed=True))).info.get("icc_profile") is not None
 
     def test_toggling_busts_the_render_cache(self, engine: _Engine) -> None:
-        # The flag changes the bytes written, so a cached render from the
-        # other setting must not be served.
-        assert self._render_with(engine, embed=True) != self._render_with(engine, embed=False)
+        # Toggle the flag on one node instance, so a stale RenderKey would
+        # actually be served from self._render rather than starting from an
+        # empty cache every time, as two fresh nodes would.
+        import asyncio
+
+        node = _make_node()
+        node.set_parameter_value("path", str(SINGLE_PART_RGBA))
+        node.set_parameter_value("tone_mapping", TONE_REC1886)
+
+        node.set_parameter_value("embed_color_profile", True)
+        asyncio.run(_run(node))
+        tagged_path = node.parameter_output_values["image"].value
+        tagged_bytes = Path(tagged_path).read_bytes()
+
+        node.set_parameter_value("embed_color_profile", False)
+        asyncio.run(_run(node))
+        untagged_path = node.parameter_output_values["image"].value
+        untagged_bytes = Path(untagged_path).read_bytes()
+
+        assert tagged_bytes != untagged_bytes
+        assert Image.open(BytesIO(tagged_bytes)).info.get("icc_profile") is not None
+        assert Image.open(BytesIO(untagged_bytes)).info.get("icc_profile") is None
 
 
 class TestColorManagement:

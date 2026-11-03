@@ -477,6 +477,11 @@ class TestAProcessPipeline:
         assert "colorprim=bt709" in params
         assert "transfer=bt709" in params
         assert "colormatrix=bt709" in params
+        # The tag alone only labels the stream; ffmpeg's default RGB->YUV
+        # conversion uses BT.601 coefficients regardless, so the actual
+        # pixels must be converted with the matching matrix too.
+        assert "-vf" in captured_cmd
+        assert captured_cmd[captured_cmd.index("-vf") + 1] == "scale=out_color_matrix=bt709"
 
     @pytest.mark.parametrize(
         ("speed", "expected_preset", "expected_crf"),
@@ -698,9 +703,11 @@ class TestAProcessOCIOMode:
         call_args = mock_cm.call_args
         assert call_args[0][1] is fake_color_params
 
-    def test_ocio_render_is_tagged_bt709_not_from_tone_mapping(self, tmp_path: Path) -> None:
-        # End to end through aprocess: the stale basic-mode value is rec1886,
-        # whose basic-mode tag is bt709 too, so pick raw, whose tag differs.
+    def test_ocio_render_has_no_colour_tags(self, tmp_path: Path) -> None:
+        # OCIO output can be sRGB, P3, Rec.2020, or anything else the config
+        # produces, so we must not assert Rec.709 (or any other) colour
+        # characteristics for it. Pick raw for tone_mapping (hidden/stale in
+        # OCIO mode) so a leaked basic-mode tag would be easy to spot.
         from griptape_nodes.retained_mode.events.os_events import DeleteFileRequest
         from griptape_nodes.retained_mode.griptape_nodes import GriptapeNodes
 
@@ -766,9 +773,8 @@ class TestAProcessOCIOMode:
 
             asyncio.run(node.aprocess())
 
-        params = captured_cmd[captured_cmd.index("-x264-params") + 1]
-        assert "transfer=bt709" in params
-        assert "transfer=linear" not in params
+        assert "-x264-params" not in captured_cmd
+        assert "-vf" not in captured_cmd
 
 
 # ---------------------------------------------------------------------------
@@ -912,23 +918,6 @@ class TestVideoColourTags:
         from griptape_nodes_openexr.nodes.exr_sequence_to_preview import color_trc_for
 
         assert color_trc_for("something-else") == "bt709"
-
-    @pytest.mark.parametrize("tone", TONE_CHOICES)
-    def test_ocio_tags_bt709_whatever_the_hidden_tone_mapping_says(self, tone: str) -> None:
-        # tone_mapping is hidden in OCIO mode, so letting it pick the tag
-        # means two renders from one OCIO config carry different transfer
-        # characteristics depending on what basic mode was last set to.
-        from griptape_nodes_openexr.nodes.exr_sequence_to_preview import color_trc_for
-
-        assert color_trc_for(tone, ocio_active=True) == "bt709"
-
-    def test_basic_mode_still_follows_the_selected_transform(self) -> None:
-        # Control for the test above: the OCIO guard must not flatten the
-        # basic-mode mapping it sits next to.
-        from griptape_nodes_openexr.nodes.exr_sequence_to_preview import color_trc_for
-
-        assert color_trc_for("raw", ocio_active=False) == "linear"
-        assert color_trc_for("sRGB", ocio_active=False) == "iec61966-2-1"
 
     def test_every_choice_maps_to_an_accepted_value(self) -> None:
         from griptape_nodes_openexr.exr.tone_mapping import TONE_CHOICES

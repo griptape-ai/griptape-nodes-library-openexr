@@ -59,7 +59,7 @@ _LINEAR_GAMMA = 1.0  # 'raw' has no transfer function
 
 _ICC_HEADER_SIZE = 128
 _TAG_ENTRY_SIZE = 12
-_PARAMETRIC_TYPE_3 = 3  # Y = (aX + b)^g for X >= d, else cX
+_CURVE_SAMPLE_COUNT = 1024  # resolution of the sampled 'curv' TRC tags
 
 PROFILE_DESCRIPTIONS = {
     TONE_SRGB.lower(): "sRGB IEC61966-2.1",
@@ -78,8 +78,8 @@ def _xyz_type(xyz: tuple[float, float, float]) -> bytes:
     return b"XYZ " + bytes(4) + b"".join(_s15fixed16(c) for c in xyz)
 
 
-def _text_type(text: str) -> bytes:
-    """Encode an ICC v2 'desc' tag.
+def _desc_type(text: str) -> bytes:
+    """Encode an ICC v2 'desc' tag (textDescriptionType).
 
     The type carries an ASCII string followed by fixed-size Unicode and
     ScriptCode fields. Those are unused here but must still be present, or
@@ -90,43 +90,56 @@ def _text_type(text: str) -> bytes:
     return b"desc" + bytes(4) + struct.pack(">I", len(ascii_bytes)) + ascii_bytes + unicode_and_scriptcode
 
 
+def _text_type(text: str) -> bytes:
+    """Encode an ICC v2 'text' tag (textType), required for 'cprt'.
+
+    Unlike 'desc', this type is just the signature, four reserved bytes, and
+    a null-terminated ASCII string: no Unicode/ScriptCode fields.
+    """
+    return b"text" + bytes(4) + text.encode("ascii") + b"\0"
+
+
 def _gamma_curve(gamma: float) -> bytes:
     """Encode a pure power curve as a 'curv' tag with a single u8Fixed8 value."""
     return b"curv" + bytes(4) + struct.pack(">I", 1) + struct.pack(">H", round(gamma * 256))
 
 
-def _parametric_curve(
-    decode_exponent: float, gain: float, offset: float, toe_slope: float, linear_cutoff: float
-) -> bytes:
-    """Encode a piecewise curve as a 'para' tag of function type 3.
+def _sampled_curve(decode_exponent: float, gain: float, offset: float, toe_slope: float, linear_cutoff: float) -> bytes:
+    """Encode a piecewise curve as an ICC v2 'curv' tag of sampled u16 values.
 
-    Type 3 is Y = (aX + b)^g for X >= d, else Y = cX, which is the shape both
-    the sRGB and BT.709 encodes take.
+    ICC v2 has no parametric curve type (that is 'para', a v4-only addition),
+    so a v2.1 profile must describe a non-power curve as a sampled lookup
+    table instead. The curve is Y = (aX + b)^g for X >= d, else Y = cX, which
+    is the shape both the sRGB and BT.709 encodes take.
 
-    The ICC curve runs device-to-linear, the inverse of the forward encode in
-    `tone_mapping`, so every parameter is derived from the encode constants:
-    `g` is the reciprocal of the forward exponent, `a` and `b` undo the gain
-    and offset, and `c` undoes the toe slope. `d` is the breakpoint, which ICC
-    wants in the encoded domain while `tone_mapping` states it as a linear
-    value, so it is the linear cutoff carried through the toe.
+    The curve runs device-to-linear, the inverse of the forward encode in
+    `tone_mapping`, so every coefficient is derived from the encode
+    constants: `g` is the reciprocal of the forward exponent, `a` and `b`
+    undo the gain and offset, and `c` undoes the toe slope. `d` is the
+    breakpoint, which this formula wants in the encoded domain while
+    `tone_mapping` states it as a linear value, so it is the linear cutoff
+    carried through the toe.
     """
-    parameters = (
-        decode_exponent,
-        1.0 / gain,
-        offset / gain,
-        1.0 / toe_slope,
-        linear_cutoff * toe_slope,
-    )
-    return b"para" + bytes(4) + struct.pack(">HH", _PARAMETRIC_TYPE_3, 0) + b"".join(_s15fixed16(p) for p in parameters)
+    decode_gain = 1.0 / gain
+    decode_offset = offset / gain
+    decode_toe_slope = 1.0 / toe_slope
+    breakpoint_x = linear_cutoff * toe_slope
+
+    samples = []
+    for i in range(_CURVE_SAMPLE_COUNT):
+        x = i / (_CURVE_SAMPLE_COUNT - 1)
+        y = decode_toe_slope * x if x < breakpoint_x else (decode_gain * x + decode_offset) ** decode_exponent
+        samples.append(round(min(max(y, 0.0), 1.0) * 65535))
+    return b"curv" + bytes(4) + struct.pack(">I", len(samples)) + b"".join(struct.pack(">H", s) for s in samples)
 
 
 def _curve_tag(trc: TransferCurve, gamma: float) -> bytes:
     if trc == "srgb":
         # SRGB_GAMMA is the forward exponent 1/2.4, so its reciprocal is the
         # 2.4 the ICC decode curve needs.
-        return _parametric_curve(1.0 / SRGB_GAMMA, SRGB_GAIN, SRGB_OFFSET, SRGB_TOE_SLOPE, SRGB_LINEAR_CUTOFF)
+        return _sampled_curve(1.0 / SRGB_GAMMA, SRGB_GAIN, SRGB_OFFSET, SRGB_TOE_SLOPE, SRGB_LINEAR_CUTOFF)
     if trc == "rec709":
-        return _parametric_curve(1.0 / REC709_GAMMA, REC709_GAIN, REC709_OFFSET, REC709_TOE_SLOPE, REC709_CUTOFF)
+        return _sampled_curve(1.0 / REC709_GAMMA, REC709_GAIN, REC709_OFFSET, REC709_TOE_SLOPE, REC709_CUTOFF)
     if trc == "gamma":
         return _gamma_curve(gamma)
     msg = f"Unknown transfer curve: {trc!r}"
@@ -165,7 +178,7 @@ def build_icc_profile(description: str, trc: TransferCurve, gamma: float = 1.0) 
     """
     curve = _curve_tag(trc, gamma)
     tags = {
-        b"desc": _text_type(description),
+        b"desc": _desc_type(description),
         b"wtpt": _xyz_type(_D50_XYZ),
         b"rXYZ": _xyz_type(_RED_XYZ),
         b"gXYZ": _xyz_type(_GREEN_XYZ),

@@ -73,25 +73,16 @@ _FFMPEG_TRC_VALUES = {
 _DEFAULT_TRC = "bt709"
 
 
-def color_trc_for(tone_mapping: str, *, ocio_active: bool = False) -> str:
+def color_trc_for(tone_mapping: str) -> str:
     """x264 transfer= value for a display transform.
-
-    Under OCIO the display/view transform resolves to a config colorspace we
-    cannot describe, and tone_mapping is a hidden basic-mode control whose
-    stale value would otherwise pick the tag. The PNG paths write no profile
-    at all in that case; a video has nowhere to put "unknown", so it gets the
-    Rec.709 default instead of a guess that changes with a hidden widget.
 
     Args:
         tone_mapping: A display transform name (case-insensitive).
-        ocio_active: Whether an OCIO transform produced the frames.
 
     Returns:
         An x264 transfer characteristic value (passed via -x264-params),
         falling back to bt709 for an unrecognised name.
     """
-    if ocio_active:
-        return _DEFAULT_TRC
     return _FFMPEG_TRC_VALUES.get(tone_mapping.lower(), _DEFAULT_TRC)
 
 
@@ -344,13 +335,26 @@ class EXRSequenceToPreview(SuccessFailureNode):
                 preset,
                 "-crf",
                 str(crf),
+            ]
+            if color_params is None:
+                # Basic mode: our transforms share Rec.709 primaries, so only
+                # the transfer curve varies. scale=out_color_matrix=bt709
+                # makes swscale's RGB->YUV conversion actually use Rec.709
+                # coefficients; colormatrix=bt709 alone only tags the stream,
+                # leaving ffmpeg's default BT.601 math underneath it.
+                cmd += ["-vf", "scale=out_color_matrix=bt709"]
+                cmd += [
+                    "-x264-params",
+                    f"colorprim=bt709:transfer={color_trc_for(tone_mapping)}:colormatrix=bt709",
+                ]
+            # Under OCIO the display/view transform resolves to a config
+            # colorspace we cannot describe (sRGB, P3, Rec.2020, ...), so we
+            # leave colour characteristics unspecified rather than assert
+            # Rec.709 for output that may not be Rec.709, matching the PNG
+            # paths, which write no profile in that case either.
+            cmd += [
                 "-pix_fmt",
                 _PIX_FMT,
-                # All our transforms share Rec.709 primaries, so only the
-                # transfer curve varies.
-                "-x264-params",
-                f"colorprim=bt709:transfer={color_trc_for(tone_mapping, ocio_active=color_params is not None)}"
-                ":colormatrix=bt709",
                 "-movflags",
                 "+faststart",
                 "-an",
