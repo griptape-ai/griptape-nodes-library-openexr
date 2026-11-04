@@ -85,6 +85,25 @@ def linear_to_srgb(arr: np.ndarray) -> np.ndarray:
     return encoded
 
 
+def srgb_to_linear(arr: np.ndarray) -> np.ndarray:
+    """Decode sRGB-encoded values to linear light (the inverse of `linear_to_srgb`).
+
+    Args:
+        arr: Float32 pixel array, any shape. Values outside [0, 1] are clamped.
+
+    Returns:
+        Linear float32 array in [0, 1], same shape as input.
+    """
+    x = np.clip(arr, 0.0, 1.0).astype(np.float32, copy=False)
+
+    # Power segment over the whole array; the linear toe is patched in below.
+    linear = (x + np.float32(SRGB_OFFSET)) / np.float32(SRGB_GAIN)
+    np.power(linear, np.float32(1.0 / SRGB_GAMMA), out=linear, dtype=np.float32)
+
+    np.copyto(linear, x / np.float32(SRGB_TOE_SLOPE), where=x <= SRGB_LINEAR_CUTOFF * SRGB_TOE_SLOPE)
+    return linear
+
+
 def linear_to_rec709(arr: np.ndarray) -> np.ndarray:
     """Encode display-linear values with the BT.709 OETF (ITU-R BT.709).
 
