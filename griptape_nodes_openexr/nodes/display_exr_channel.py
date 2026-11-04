@@ -269,25 +269,28 @@ class DisplayEXRChannel(SuccessFailureNode):
 
         # Basic mode blends in linear light, before the display transform encodes the result.
         # OCIO mode blends after its transform: the background is sRGB, and nothing here can
-        # convert it into the config's source colorspace.
-        if alpha_f32 is not None and bg_rgb is not None and color_params is None:
-            rgb = _composite(rgb, alpha_f32, srgb_to_linear(bg_rgb))
-
+        # convert it into the config's source colorspace. OCIO output isn't clamped, so it is
+        # clamped to display range before blending.
+        is_basic_color_mode = color_params is None
         try:
-            rgb, tone_mode = apply_color_management(rgb, color_params, tone_mapping)
+            if is_basic_color_mode:
+                if alpha_f32 is not None and bg_rgb is not None:
+                    rgb = _composite(rgb, alpha_f32, srgb_to_linear(bg_rgb))
+                rgb, tone_mode = apply_color_management(rgb, color_params, tone_mapping)
+            else:
+                rgb, tone_mode = apply_color_management(rgb, color_params, tone_mapping)
+                if alpha_f32 is not None and bg_rgb is not None:
+                    rgb = _composite(np.clip(rgb, 0.0, 1.0), alpha_f32, bg_rgb)
         except ValueError as e:
             self._on_fail_handler(str(e))
             return
-
-        if alpha_f32 is not None and bg_rgb is not None and color_params is not None:
-            rgb = _composite(rgb, alpha_f32, bg_rgb)
 
         # A composited image is opaque, so alpha is only kept when there was no background.
         uint8 = _compose_alpha(to_uint8(rgb), alpha_f32 if bg_rgb is None else None)
 
         # OCIO output carries no profile: its display/view transform resolves
         # to a config colorspace we cannot describe.
-        profile = _output_profile(tone_mapping, embed=embed_color_profile, ocio=color_params is not None)
+        profile = _output_profile(tone_mapping, embed=embed_color_profile, ocio=not is_basic_color_mode)
 
         try:
             png_bytes = ndarray_to_png(uint8, icc_profile=profile)

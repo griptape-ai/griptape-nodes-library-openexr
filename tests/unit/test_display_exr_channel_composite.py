@@ -117,6 +117,16 @@ class TestCompositeUnderOcio:
         np.testing.assert_allclose(seen[0], 1.0)
         np.testing.assert_array_equal(out[0, 0], [10, 128, 240])
 
+    def test_ocio_output_is_clamped_before_blending(self) -> None:
+        # OCIO output of 2.0 at 50% alpha over black is 0.5 -> 128 once clamped, not 255.
+        def _identity(rgb: np.ndarray, _params: Any, _tone: str) -> tuple[np.ndarray, str]:
+            return rgb, "ocio:test"
+
+        with patch(f"{_NODE_MODULE}.apply_color_management", side_effect=_identity):
+            out = _render(2.0, 0.5, _background((0, 0, 0)), color_params=MagicMock())
+
+        assert np.all(out == 128)
+
 
 class TestCompositeHelper:
     def test_lerps_in_input_space(self) -> None:
