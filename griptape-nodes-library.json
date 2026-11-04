@@ -15,10 +15,10 @@
         ],
         "dependencies": {
             "pip_dependencies": [
-                "numpy>=1.26.0",
-                "OpenEXR>=3.4.12",
-                "pillow>=11.2.1",
-                "static-ffmpeg>=2.5"
+                "numpy>=2.5.0",
+                "OpenEXR>=3.5.3",
+                "pillow>=13.0.0",
+                "static-ffmpeg>=3.0"
             ]
         },
         "declarations": [
