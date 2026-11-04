@@ -92,6 +92,10 @@ class TestCompositeInLinearLight:
         out = _render(1.0, 0.0, _background((10, 128, 240)))
         np.testing.assert_array_equal(out[0, 0], [10, 128, 240])
 
+    def test_infinite_foreground_at_zero_alpha_reproduces_background(self) -> None:
+        out = _render(np.inf, 0.0, _background((10, 128, 240)))
+        np.testing.assert_array_equal(out[0, 0], [10, 128, 240])
+
     def test_background_goes_through_the_selected_display_transform(self) -> None:
         # sRGB 128 decodes to linear 0.216; 'raw' writes that linear value unencoded.
         out = _render(1.0, 0.0, _background((128, 128, 128)), tone_mapping="raw")

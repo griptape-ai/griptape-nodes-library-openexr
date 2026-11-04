@@ -372,4 +372,6 @@ def _compose_alpha(uint8_rgb: np.ndarray, alpha_plane: np.ndarray | None) -> np.
 def _composite(rgb: np.ndarray, alpha_plane: np.ndarray, bg_rgb: np.ndarray) -> np.ndarray:
     """Composite RGB over a background (A-over-B, straight alpha), both in the same encoding."""
     a = np.clip(alpha_plane, 0.0, 1.0)[..., np.newaxis]
-    return (rgb * a + bg_rgb * (1.0 - a)).astype(np.float32)
+    # Zero-coverage samples contribute nothing; selecting 0 keeps an infinite sample from turning into NaN.
+    fg = np.where(a > 0.0, rgb, 0.0)
+    return (fg * a + bg_rgb * (1.0 - a)).astype(np.float32)
