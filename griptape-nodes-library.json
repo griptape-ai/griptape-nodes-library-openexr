@@ -78,7 +78,7 @@
             "file_path": "griptape_nodes_openexr/nodes/display_exr_part.py",
             "metadata": {
                 "category": "exr",
-                "description": "Display an EXR part as an 8-bit sRGB image with exposure and filmic tone mapping",
+                "description": "Display an EXR part as an 8-bit image with exposure and a display transform",
                 "display_name": "Display EXR Part",
                 "icon": "image",
                 "group": "display"
@@ -89,7 +89,7 @@
             "file_path": "griptape_nodes_openexr/nodes/display_exr_channel.py",
             "metadata": {
                 "category": "exr",
-                "description": "Combine 1\u20133 EXR channel artifacts into an 8-bit sRGB display image with exposure and filmic tone mapping",
+                "description": "Combine 1\u20133 EXR channel artifacts into an 8-bit display image with exposure and a display transform",
                 "display_name": "Display EXR Channel",
                 "icon": "layers",
                 "group": "display"

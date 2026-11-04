@@ -109,6 +109,7 @@ class TestAfterValueSetVisibility:
             True,
             node._tone_mapping_param.name,
             node._color_params_param.name,
+            node._embed_color_profile_param.name,
         )
 
     def test_switching_to_basic_calls_visibility_with_false(self) -> None:
@@ -121,6 +122,7 @@ class TestAfterValueSetVisibility:
             False,
             node._tone_mapping_param.name,
             node._color_params_param.name,
+            node._embed_color_profile_param.name,
         )
 
     def test_other_parameter_does_not_call_visibility(self) -> None:
@@ -129,3 +131,19 @@ class TestAfterValueSetVisibility:
             node.after_value_set(node._exposure_param, 1.0)
 
         mock_vis.assert_not_called()
+
+
+class TestEmbedColorProfile:
+    def test_parameter_exists_and_defaults_off(self) -> None:
+        # Off keeps today's behaviour: the untagged PNG is read as sRGB, so
+        # rec709 and rec1886 visibly differ on screen.
+        node = _make_node()
+        assert node._embed_color_profile_param.default_value is False
+
+    def test_hidden_in_ocio_mode(self) -> None:
+        # OCIO output is already display-referred, so the parameter has no
+        # meaning there and hides alongside tone_mapping.
+        node = _make_node()
+        with patch(f"{_OCIO_MODULE}.apply_color_mode_visibility") as mock_vis:
+            node.after_value_set(node._color_mode_param, COLOR_MODE_OCIO)
+        assert node._embed_color_profile_param.name in mock_vis.call_args[0]

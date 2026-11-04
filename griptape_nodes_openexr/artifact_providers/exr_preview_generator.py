@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from io import BytesIO
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -21,29 +22,48 @@ from griptape_nodes.retained_mode.managers.artifact_providers.base_generator_par
 )
 from griptape_nodes.utils.async_utils import to_thread
 from PIL import Image
-from pydantic import PositiveInt
+from pydantic import PositiveInt, field_validator
 
 from griptape_nodes_openexr.exr.channel_selection import select_alpha_channel, select_display_channels
 from griptape_nodes_openexr.exr.exr_io import build_rgb_array, load_exr_channels, scan_exr_header
 from griptape_nodes_openexr.exr.tone_mapping import (
     TONE_CURVES_DESCRIPTION,
+    TONE_DEFAULT,
     apply_exposure,
     apply_tone_mapping,
+    retired_tone_message,
     to_uint8,
 )
 
 if TYPE_CHECKING:
     from griptape_nodes.retained_mode.engine import Engine
 
+logger = logging.getLogger("griptape_nodes")
+
 
 class EXRPreviewParameters(BaseGeneratorParameters):
     """Parameters for EXR preview generation."""
 
     tone_mapping: str = Field(
-        default="filmic",
-        description=f"Tone mapping curve. {TONE_CURVES_DESCRIPTION}",
+        default=TONE_DEFAULT,
+        description=f"Display transform. {TONE_CURVES_DESCRIPTION}",
         editor_schema_type="string",
     )
+
+    @field_validator("tone_mapping")
+    @classmethod
+    def _replace_retired_tone_mapping(cls, value: str) -> str:
+        """Swap a retired name for the default, so the engine keeps the other settings.
+
+        Failing validation here would make the engine reset every generator
+        parameter, and a stored "filmic"/"linear" is the old default rather
+        than something the user chose.
+        """
+        retired = retired_tone_message(value)
+        if retired is None:
+            return value
+        logger.warning("EXR preview: %s Using %r for previews.", retired, TONE_DEFAULT)
+        return TONE_DEFAULT
 
     exposure: float = Field(
         default=0.0,
