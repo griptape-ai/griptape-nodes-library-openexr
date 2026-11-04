@@ -75,6 +75,22 @@ class TestProfileStructure:
         assert blob[36:40] == b"acsp"
         assert len(blob) > _ICC_HEADER_SIZE
 
+    @pytest.mark.parametrize("tone", TONE_CHOICES)
+    def test_desc_tag_size_matches_spec(self, tone: str) -> None:
+        # ICC v2 textDescriptionType: signature, reserved, ASCII count and string, then
+        # 78 bytes of empty Unicode and ScriptCode fields.
+        blob = profile_for_tone_mapping(tone)
+        assert blob is not None
+        (count,) = struct.unpack(">I", blob[_ICC_HEADER_SIZE : _ICC_HEADER_SIZE + 4])
+        for i in range(count):
+            entry = _ICC_HEADER_SIZE + 4 + i * 12
+            signature, offset, size = struct.unpack(">4sII", blob[entry : entry + 12])
+            if signature == b"desc":
+                (ascii_count,) = struct.unpack(">I", blob[offset + 8 : offset + 12])
+                assert size == 12 + ascii_count + 78
+                return
+        pytest.fail("no desc tag")
+
     def test_unknown_tone_returns_none(self) -> None:
         assert profile_for_tone_mapping("reinhard") is None
 

@@ -100,6 +100,8 @@ def srgb_to_linear(arr: np.ndarray) -> np.ndarray:
     linear = (x + np.float32(SRGB_OFFSET)) / np.float32(SRGB_GAIN)
     np.power(linear, np.float32(1.0 / SRGB_GAMMA), out=linear, dtype=np.float32)
 
+    # The toe ends where linear_to_srgb's toe ends, in the encoded domain: the linear cutoff
+    # times the slope, about 0.04045 (the IEC 61966-2-1 decode threshold).
     np.copyto(linear, x / np.float32(SRGB_TOE_SLOPE), where=x <= SRGB_LINEAR_CUTOFF * SRGB_TOE_SLOPE)
     return linear
 

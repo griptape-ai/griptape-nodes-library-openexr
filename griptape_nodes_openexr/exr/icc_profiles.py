@@ -86,7 +86,9 @@ def _desc_type(text: str) -> bytes:
     a strict parser rejects the tag.
     """
     ascii_bytes = text.encode("ascii") + b"\0"
-    unicode_and_scriptcode = bytes(12 + 67 + 1 + 2 + 8 + 67)
+    # Unicode language code and count (4 + 4, no string), ScriptCode code and
+    # count (2 + 1), then the ScriptCode string's fixed 67 bytes.
+    unicode_and_scriptcode = bytes(4 + 4 + 2 + 1 + 67)
     return b"desc" + bytes(4) + struct.pack(">I", len(ascii_bytes)) + ascii_bytes + unicode_and_scriptcode
 
 

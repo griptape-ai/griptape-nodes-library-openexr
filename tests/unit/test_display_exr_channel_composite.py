@@ -87,7 +87,8 @@ class TestCompositeInLinearLight:
         assert np.all(out == expected)
 
     def test_transparent_foreground_reproduces_background(self) -> None:
-        # The background is decoded and re-encoded with the same sRGB curve, so it round-trips.
+        # sRGB only: the background is decoded and re-encoded with the same curve, so it
+        # round-trips. Other display transforms change it; see the 'raw' test below.
         out = _render(1.0, 0.0, _background((10, 128, 240)))
         np.testing.assert_array_equal(out[0, 0], [10, 128, 240])
 
