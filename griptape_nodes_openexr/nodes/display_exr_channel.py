@@ -30,6 +30,7 @@ from griptape_nodes_openexr.exr.rendering import ndarray_to_png
 from griptape_nodes_openexr.exr.tone_mapping import (
     TONE_DEFAULT,
     apply_exposure,
+    srgb_to_linear,
     to_uint8,
 )
 from griptape_nodes_openexr.exr.viewer_launcher import handle_viewer_button_click
@@ -252,35 +253,44 @@ class DisplayEXRChannel(SuccessFailureNode):
                 return
 
         rgb = apply_exposure(rgb, ev)
-        try:
-            rgb, tone_mode = apply_color_management(rgb, color_params, tone_mapping)
-        except ValueError as e:
-            self._on_fail_handler(str(e))
-            return
-        uint8_rgb = to_uint8(rgb)
 
         alpha_f32 = alpha_plane.reshape(height, width) if alpha_plane is not None else None
 
-        bg_rgb_f32: np.ndarray | None = None
+        bg_rgb: np.ndarray | None = None
         if background is not None:
             if alpha_f32 is None:
                 logger.warning("DisplayEXRChannel '%s': background ignored — no alpha channel connected", self.name)
             else:
                 try:
-                    bg_rgb_f32 = _load_background_rgb(background, width, height)
+                    bg_rgb = _load_background_rgb(background, width, height)
                 except RuntimeError as e:
                     self._on_fail_handler(str(e))
                     return
 
-        uint8 = _composite(uint8_rgb, alpha_f32, bg_rgb_f32)
+        # Basic mode blends in linear light, before the display transform encodes the result.
+        # OCIO mode blends after its transform: the background is sRGB, and nothing here can
+        # convert it into the config's source colorspace. OCIO output isn't clamped, so it is
+        # clamped to display range before blending.
+        is_basic_color_mode = color_params is None
+        try:
+            if is_basic_color_mode:
+                if alpha_f32 is not None and bg_rgb is not None:
+                    rgb = _composite(rgb, alpha_f32, srgb_to_linear(bg_rgb))
+                rgb, tone_mode = apply_color_management(rgb, color_params, tone_mapping)
+            else:
+                rgb, tone_mode = apply_color_management(rgb, color_params, tone_mapping)
+                if alpha_f32 is not None and bg_rgb is not None:
+                    rgb = _composite(np.clip(rgb, 0.0, 1.0), alpha_f32, bg_rgb)
+        except ValueError as e:
+            self._on_fail_handler(str(e))
+            return
+
+        # A composited image is opaque, so alpha is only kept when there was no background.
+        uint8 = _compose_alpha(to_uint8(rgb), alpha_f32 if bg_rgb is None else None)
 
         # OCIO output carries no profile: its display/view transform resolves
-        # to a config colorspace we cannot describe. A composited background
-        # also rules a profile out: its pixels keep their original sRGB-ish
-        # encoding, so one embedded profile can't describe both regions.
-        profile = _output_profile(
-            tone_mapping, embed=embed_color_profile, ocio=color_params is not None, composited=bg_rgb_f32 is not None
-        )
+        # to a config colorspace we cannot describe.
+        profile = _output_profile(tone_mapping, embed=embed_color_profile, ocio=not is_basic_color_mode)
 
         try:
             png_bytes = ndarray_to_png(uint8, icc_profile=profile)
@@ -296,15 +306,15 @@ class DisplayEXRChannel(SuccessFailureNode):
 
         slot_info = ", ".join(f"{slot}={rgb_slots[slot].channel.name}" for slot in sorted(rgb_slots))
         alpha_info = f", A={channel_a.channel.name}" if channel_a else ""
-        bg_info = ", bg=composite" if bg_rgb_f32 is not None else ""
+        bg_info = ", bg=composite" if bg_rgb is not None else ""
         details = f"Rendered {width}×{height}, channels: [{slot_info}{alpha_info}]{bg_info}, EV={ev:+.1f}, {tone_mode}"
         self._set_status_results(was_successful=True, result_details=details)
         logger.info("DisplayEXRChannel '%s': %s", self.name, details)
 
 
-def _output_profile(tone_mapping: str, *, embed: bool, ocio: bool, composited: bool) -> bytes | None:
-    """No profile under OCIO, or over a composited background whose encoding we don't know."""
-    if not embed or ocio or composited:
+def _output_profile(tone_mapping: str, *, embed: bool, ocio: bool) -> bytes | None:
+    """The profile for the basic-mode display transform, or None when not embedding or under OCIO."""
+    if not embed or ocio:
         return None
     return profile_for_tone_mapping(tone_mapping)
 
@@ -359,15 +369,9 @@ def _compose_alpha(uint8_rgb: np.ndarray, alpha_plane: np.ndarray | None) -> np.
     return np.concatenate([uint8_rgb, alpha_uint8], axis=-1)
 
 
-def _composite(
-    uint8_rgb: np.ndarray,
-    alpha_plane: np.ndarray | None,
-    bg_rgb_f32: np.ndarray | None,
-) -> np.ndarray:
-    if alpha_plane is None:
-        return uint8_rgb
-    if bg_rgb_f32 is None:
-        return _compose_alpha(uint8_rgb, alpha_plane)
+def _composite(rgb: np.ndarray, alpha_plane: np.ndarray, bg_rgb: np.ndarray) -> np.ndarray:
+    """Composite RGB over a background (A-over-B, straight alpha), both in the same encoding."""
     a = np.clip(alpha_plane, 0.0, 1.0)[..., np.newaxis]
-    fg = uint8_rgb.astype(np.float32) / 255.0
-    return to_uint8(fg * a + bg_rgb_f32 * (1.0 - a))
+    # Zero-coverage samples contribute nothing; selecting 0 keeps an infinite sample from turning into NaN.
+    fg = np.where(a > 0.0, rgb, 0.0)
+    return (fg * a + bg_rgb * (1.0 - a)).astype(np.float32)
