@@ -152,7 +152,7 @@ check/json: ## Validate JSON files.
 	@find . -name "*.json" -type f \
 		! -path "./.venv/*" \
 		! -path "./node_modules/*" \
-		-exec sh -c 'jq empty "{}" > /dev/null 2>&1 || (echo "Invalid JSON: {}" && exit 1)' \;
+		-exec sh -c 'status=0; for f; do jq empty "$$f" || { echo "Invalid JSON: $$f"; status=1; }; done; exit $$status' sh {} +
 
 .PHONY: check/changelog
 check/changelog: ## Check CHANGELOG.md and the changelog.d entries follow Keep a Changelog.
