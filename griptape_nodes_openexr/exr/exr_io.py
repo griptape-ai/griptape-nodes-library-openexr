@@ -4,8 +4,8 @@ Two-phase design:
 - scan_exr_header(): reads metadata for all parts; pixel loading is controlled by the
   `header_only` flag (configurable via the `openexr.header_only` engine setting).
 - When header_only=True (default): headers are read without touching pixel data — fast
-  even on large multi-part files, but channel pixel types default to HALF when the
-  OpenEXR binding cannot inspect the pixel arrays.
+  even on large multi-part files, but every channel's pixel type is reported as HALF,
+  since the OpenEXR binding only exposes pixel types through the decoded pixel arrays.
 - When header_only=False: the full file is opened, pixel types are read accurately from
   the file, at the cost of loading pixel data into memory.
 """
@@ -87,10 +87,10 @@ def scan_exr_header(file_path: str, *, header_only: bool = True) -> EXRData:
     Args:
         file_path: Path to the EXR file
         header_only: When True (default), only header data is read — pixel chunks are
-            never loaded, making this fast even for large multi-part files.  Channel
-            pixel types default to HALF when the OpenEXR binding cannot inspect the
-            pixel arrays in this mode.  When False, the full file is opened so pixel
-            types are read accurately from the file at the cost of loading pixel data.
+            never loaded, making this fast even for large multi-part files.  Every
+            channel's pixel type is reported as HALF in this mode.  When False, the
+            full file is opened so pixel types are read accurately from the file at
+            the cost of loading pixel data.
 
     Returns:
         EXRData with metadata for all parts
@@ -107,12 +107,17 @@ def scan_exr_header(file_path: str, *, header_only: bool = True) -> EXRData:
     parts: list[EXRPart] = []
     try:
         # TODO: revisit direct file I/O once artifact manager is pluggable https://github.com/griptape-ai/griptape-nodes-library-openexr/issues/9
-        with OpenEXR.File(resolved_path, header_only=header_only) as exr_file:
+        # separate_channels keeps part.channels keyed by the file's own channel names,
+        # rather than grouping R/G/B/A into one interleaved "RGBA" entry.
+        with OpenEXR.File(resolved_path, separate_channels=True, header_only=header_only) as exr_file:
             for part in exr_file.parts:
                 # In header_only mode part.width()/height() return 0 and
-                # exr_file.channels() returns {}; read both from the header.
+                # part.channels is empty; read both from the header.
                 raw_header = part.header
-                channels = _build_channel_list_from_header(raw_header.get(_ATTR_CHANNELS, []))
+                channels = _build_channel_list_from_header(
+                    raw_header.get(_ATTR_CHANNELS, []),
+                    None if header_only else part.channels,
+                )
                 header = _build_header(part, raw_header)
                 dw = header.data_window
                 width = int(dw.xmax - dw.xmin + 1)
@@ -244,21 +249,31 @@ def write_exr_channels(
         raise RuntimeError(msg) from e
 
 
-def _build_channel_list_from_header(exr_channels: list[OpenEXR.Channel]) -> list[EXRChannelInfo]:
+def _build_channel_list_from_header(
+    exr_channels: list[OpenEXR.Channel],
+    loaded_channels: dict[str, OpenEXR.Channel] | None,
+) -> list[EXRChannelInfo]:
     """Build channel metadata list from the header 'channels' attribute.
 
-    In header_only mode, exr_file.channels() returns an empty dict, so channels
-    are read from part.header['channels'] — a list of Channel objects with
-    .name, .xSampling, .ySampling. Pixel type is not accessible via .type() in
-    this mode (the binding inspects the pixels array, which is empty), so it
-    defaults to HALF, which covers the vast majority of VFX EXR channels.
+    Names and sampling come from part.header['channels'], which is populated in
+    both modes. Its Channel objects carry no pixel array, so .type() cannot be
+    called on them (the binding derives the type from the pixels' dtype).
+
+    Pixel types come from loaded_channels, the part's decoded channels, when the
+    pixels were loaded. When they were not (header_only mode), every channel
+    reports HALF. A deep channel with no samples reports HALF too: the binding
+    has no sample data to derive its type from and returns NUM_PIXELTYPES.
     """
     result: list[EXRChannelInfo] = []
     for exr_channel in exr_channels:
-        try:
-            pixel_type = _EXR_PIXEL_TYPE_MAP.get(exr_channel.type(), PixelType.HALF)
-        except Exception:
+        if loaded_channels is None:
             pixel_type = PixelType.HALF
+        else:
+            exr_pixel_type = loaded_channels[exr_channel.name].type()
+            if exr_pixel_type == OpenEXR.PixelType.NUM_PIXELTYPES:
+                pixel_type = PixelType.HALF
+            else:
+                pixel_type = _EXR_PIXEL_TYPE_MAP[exr_pixel_type]
         result.append(
             EXRChannelInfo(
                 name=exr_channel.name,
