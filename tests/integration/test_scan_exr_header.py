@@ -8,10 +8,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import numpy as np
+import OpenEXR
 import pytest
 
 from griptape_nodes_openexr.exr.exr_io import scan_exr_header
-from griptape_nodes_openexr.exr.exr_types import CompressionType, StorageType
+from griptape_nodes_openexr.exr.exr_types import CompressionType, PixelType, StorageType
 
 DATA = Path(__file__).parents[1] / "data"
 
@@ -341,3 +343,45 @@ class TestInfinityAttributes:
     def test_near_clip_is_negative_infinity(self) -> None:
         custom = scan_exr_header(str(self.FILE)).parts[0].header.custom
         assert custom["near_clip"] == "-Infinity"
+
+
+# ---------------------------------------------------------------------------
+# pixel_types.exr — one HALF, one FLOAT, and one UINT channel
+# ---------------------------------------------------------------------------
+
+
+class TestPixelTypes:
+    FILE = DATA / "pixel_types.exr"
+
+    def test_full_scan_reads_pixel_types(self) -> None:
+        part = scan_exr_header(str(self.FILE), header_only=False).parts[0]
+        assert {ch.name: ch.pixel_type for ch in part.channels} == {
+            "float_ch": PixelType.FLOAT,
+            "half_ch": PixelType.HALF,
+            "uint_ch": PixelType.UINT,
+        }
+
+    def test_header_only_scan_reports_half(self) -> None:
+        part = scan_exr_header(str(self.FILE), header_only=True).parts[0]
+        assert {ch.name: ch.pixel_type for ch in part.channels} == {
+            "float_ch": PixelType.HALF,
+            "half_ch": PixelType.HALF,
+            "uint_ch": PixelType.HALF,
+        }
+
+    def test_full_scan_keeps_rgba_channels_separate(self) -> None:
+        part = scan_exr_header(str(DATA / "single_part_rgba.exr"), header_only=False).parts[0]
+        assert [ch.name for ch in part.channels] == ["A", "B", "G", "R"]
+        assert all(ch.pixel_type == PixelType.FLOAT for ch in part.channels)
+
+    def test_full_scan_of_empty_deep_part_reports_half(self, tmp_path: Path) -> None:
+        # A deep channel with no samples anywhere has no type the binding can report.
+        z = np.empty((4, 4), dtype=object)
+        for index in np.ndindex(z.shape):
+            z[index] = np.array([], dtype=np.float32)
+        path = tmp_path / "empty_deep.exr"
+        header = {"type": OpenEXR.deepscanline, "compression": OpenEXR.NO_COMPRESSION}
+        OpenEXR.File(header, {"Z": z}).write(str(path))
+
+        part = scan_exr_header(str(path), header_only=False).parts[0]
+        assert [(ch.name, ch.pixel_type) for ch in part.channels] == [("Z", PixelType.HALF)]
