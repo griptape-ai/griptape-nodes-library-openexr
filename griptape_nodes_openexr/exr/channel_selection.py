@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections import Counter
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -11,6 +10,42 @@ if TYPE_CHECKING:
     from griptape_nodes_openexr.exr.exr_types import EXRChannelInfo
 
 _RGBA_RANK = {"R": 0, "G": 1, "B": 2, "A": 3}
+
+
+def _role(channel_name: str) -> str:
+    """Return a channel's suffix normalized for matching against R, G, B, A.
+
+    The EXR convention is uppercase, but files from some tools use lowercase or
+    pad names with whitespace, which EXR allows.
+    """
+    return channel_name.rpartition(".")[2].strip().upper()
+
+
+def _find_role(candidates: list[str], role: str, *, normalize: bool) -> str | None:
+    """Return the candidate whose suffix is `role`.
+
+    An exact match wins; with `normalize`, a case- or whitespace-variant is the fallback.
+    """
+    exact = next((name for name in candidates if name.rpartition(".")[2] == role), None)
+    if exact is not None or not normalize:
+        return exact
+    return next((name for name in candidates if _role(name) == role), None)
+
+
+def _find_rgb(candidates: list[str], *, normalize: bool) -> list[str] | None:
+    """Return the R, G, B channels among `candidates` in that order, or None if any is missing."""
+    found = [_find_role(candidates, role, normalize=normalize) for role in ("R", "G", "B")]
+    if None in found:
+        return None
+    return [name for name in found if name is not None]
+
+
+def _same_layer(channel_names: list[str], channel_name: str) -> list[str]:
+    """Return the channels in the same layer as `channel_name`, treating undotted and dotted names as distinct."""
+    if "." not in channel_name:
+        return [name for name in channel_names if "." not in name]
+    prefix = channel_name.rpartition(".")[0]
+    return [name for name in channel_names if "." in name and name.rpartition(".")[0] == prefix]
 
 
 def order_channels_for_display(channels: Sequence[EXRChannelInfo]) -> list[EXRChannelInfo]:
@@ -31,8 +66,8 @@ def order_channels_for_display(channels: Sequence[EXRChannelInfo]) -> list[EXRCh
 
     def sort_key(indexed: tuple[int, EXRChannelInfo]) -> tuple[int, int, int]:
         index, ch = indexed
-        layer, _, suffix = ch.name.rpartition(".")
-        return (layer_order[layer], _RGBA_RANK.get(suffix, len(_RGBA_RANK)), index)
+        layer = ch.name.rpartition(".")[0]
+        return (layer_order[layer], _RGBA_RANK.get(_role(ch.name), len(_RGBA_RANK)), index)
 
     return [ch for _, ch in sorted(enumerate(channels), key=sort_key)]
 
@@ -45,9 +80,13 @@ ROOT_LAYER = "(root)"
 def select_display_channels(channel_names: list[str]) -> list[str] | None:
     """Select up to 3 channels to display as RGB, in priority order.
 
+    Priorities 1 and 2 are tried with exact names first, then again matching
+    R, G, B case-insensitively and ignoring surrounding whitespace, so a
+    conforming layer always wins over a non-conforming one.
+
     Priority:
-    1. Exact names R, G, B
-    2. <prefix>.R, <prefix>.G, <prefix>.B from the most common layer prefix
+    1. Undotted names R, G, B
+    2. <prefix>.R, <prefix>.G, <prefix>.B from the layer with the most of them
     3. First 3 channels in order
     4. Single channel (grayscale)
 
@@ -60,16 +99,17 @@ def select_display_channels(channel_names: list[str]) -> list[str] | None:
     if not channel_names:
         return None
 
-    name_set = set(channel_names)
+    root_names = [name for name in channel_names if "." not in name]
+    for normalize in (False, True):
+        # Priority 1: undotted R, G, B
+        root_rgb = _find_rgb(root_names, normalize=normalize)
+        if root_rgb is not None:
+            return root_rgb
 
-    # Priority 1: exact R, G, B
-    if {"R", "G", "B"} <= name_set:
-        return ["R", "G", "B"]
-
-    # Priority 2: <prefix>.R, <prefix>.G, <prefix>.B from most common prefix
-    rgb_result = _find_layer_rgb(channel_names)
-    if rgb_result is not None:
-        return rgb_result
+        # Priority 2: <prefix>.R, <prefix>.G, <prefix>.B from the layer with the most of them
+        rgb_result = _find_layer_rgb(channel_names, normalize=normalize)
+        if rgb_result is not None:
+            return rgb_result
 
     # Priority 3: first 3 channels
     if len(channel_names) >= 3:  # noqa: PLR2004
@@ -92,20 +132,14 @@ def select_alpha_channel(channel_names: list[str], rgb_selected: list[str]) -> s
     Returns:
         Alpha channel name if found, otherwise None.
     """
-    name_set = set(channel_names)
+    if len(rgb_selected) != 3:  # noqa: PLR2004
+        return None
 
-    if rgb_selected == ["R", "G", "B"]:
-        return "A" if "A" in name_set else None
+    layer = _same_layer(channel_names, rgb_selected[0])
+    if _find_rgb(layer, normalize=True) != rgb_selected:
+        return None
 
-    if len(rgb_selected) == 3:  # noqa: PLR2004
-        first = rgb_selected[0]
-        if "." in first:
-            prefix, _, suffix = first.rpartition(".")
-            if suffix == "R" and rgb_selected[1:] == [f"{prefix}.G", f"{prefix}.B"]:
-                candidate = f"{prefix}.A"
-                return candidate if candidate in name_set else None
-
-    return None
+    return _find_role(layer, "A", normalize=True)
 
 
 def layer_prefix(channel_name: str) -> str:
@@ -169,29 +203,23 @@ def default_layer(channel_names: list[str]) -> str | None:
     return layer_prefix(selected[0])
 
 
-def _find_layer_rgb(channel_names: list[str]) -> list[str] | None:
-    """Find <prefix>.R, <prefix>.G, <prefix>.B from the most common prefix."""
-    # Collect prefixes from channels that have a dot-separated suffix of R, G, or B
-    rgb_suffixes = {"R", "G", "B"}
-    prefix_counts: Counter[str] = Counter()
+def _find_layer_rgb(channel_names: list[str], *, normalize: bool) -> list[str] | None:
+    """Find <prefix>.R, <prefix>.G, <prefix>.B from the prefix with the most of them."""
+    # Collect the distinct R/G/B roles each dot-prefixed layer has
+    rgb_roles = {"R", "G", "B"}
+    prefix_roles: dict[str, set[str]] = {}
 
     for name in channel_names:
         if "." in name:
             prefix, _, suffix = name.rpartition(".")
-            if suffix in rgb_suffixes:
-                prefix_counts[prefix] += 1
+            role = _role(name) if normalize else suffix
+            if role in rgb_roles:
+                prefix_roles.setdefault(prefix, set()).add(role)
 
-    if not prefix_counts:
+    if not prefix_roles:
         return None
 
     # Pick the prefix that has the most R/G/B channels (ties broken by first seen)
-    best_prefix = prefix_counts.most_common(1)[0][0]
-    r = f"{best_prefix}.R"
-    g = f"{best_prefix}.G"
-    b = f"{best_prefix}.B"
-
-    name_set = set(channel_names)
-    if {r, g, b} <= name_set:
-        return [r, g, b]
-
-    return None
+    best_prefix = max(prefix_roles, key=lambda prefix: len(prefix_roles[prefix]))
+    layer = [name for name in channel_names if "." in name and name.rpartition(".")[0] == best_prefix]
+    return _find_rgb(layer, normalize=normalize)
