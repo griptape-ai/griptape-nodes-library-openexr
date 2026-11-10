@@ -644,8 +644,10 @@ class TestAProcessPipeline:
         assert "Encoded 3 of 4 frames" in details
         assert "frame 1: simulated bad EXR" in details
 
-    def _run_with_failed_frame(self, tmp_path: Path, missing_frames: str) -> tuple[Any, list[str], list]:
-        """Run a 4-frame sequence whose frame 1 fails to convert.
+    def _run_with_failed_frame(
+        self, tmp_path: Path, missing_frames: str, bad_frames: tuple[int, ...] = (1,)
+    ) -> tuple[Any, list[str], list]:
+        """Run a 4-frame sequence whose ``bad_frames`` (default frame 1) fail to convert.
 
         Returns:
             The node, the PNG names ffmpeg was handed, and those PNGs' sizes.
@@ -655,7 +657,7 @@ class TestAProcessPipeline:
         from PIL import Image
 
         paths = [tmp_path / f"shot.{n:04d}.exr" for n in range(4)]
-        bad_path = str(paths[1])
+        bad_paths = {str(paths[n]) for n in bad_frames}
         node = _make_node()
         fake_saved = MagicMock()
         fake_saved.location = "/tmp/preview.mp4"
@@ -673,7 +675,7 @@ class TestAProcessPipeline:
             return MagicMock()
 
         def fail_on_bad_path(path, *args, **kwargs):
-            if path == bad_path:
+            if path in bad_paths:
                 raise ValueError("simulated bad EXR")
             return _make_1x1_rgba_pixels()
 
@@ -731,6 +733,16 @@ class TestAProcessPipeline:
         assert "1 of 4 frame(s) failed" in details
         assert "frame 1: simulated bad EXR" in details
         assert node.parameter_output_values.get("video") is None
+        assert pngs_seen_by_ffmpeg == []
+
+    def test_missing_frames_error_lists_every_frame_when_all_fail(self, tmp_path: Path) -> None:
+        node, pngs_seen_by_ffmpeg, _ = self._run_with_failed_frame(tmp_path, "error", bad_frames=(0, 1, 2, 3))
+
+        assert _was_successful(node) is False
+        details = node.parameter_output_values.get("result_details", "")
+        assert "4 of 4 frame(s) failed" in details
+        for i in range(4):
+            assert f"frame {i}: simulated bad EXR" in details
         assert pngs_seen_by_ffmpeg == []
 
     def test_missing_frames_black_keeps_the_failed_frame_slot(self, tmp_path: Path) -> None:
