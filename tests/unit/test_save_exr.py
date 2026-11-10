@@ -153,12 +153,12 @@ class TestWriteExrChannelsHelper:
 @pytest.fixture()
 def mock_project_file(tmp_path: Path):
     """Patch ProjectFileParameter and GriptapeNodes so SaveEXR runs without the engine."""
+    from griptape_nodes.files.file import File, FileLoadError
     from griptape_nodes.retained_mode.events.os_events import (
         DeleteFileRequest,
+        FileIOFailureReason,
         ReadFileRequest,
         ReadFileResultSuccess,
-        WriteFileRequest,
-        WriteFileResultSuccess,
     )
     from griptape_nodes.retained_mode.events.project_events import (
         GetPathForMacroRequest,
@@ -169,19 +169,23 @@ def mock_project_file(tmp_path: Path):
     output_path = tmp_path / "output.exr"
     scratch_path = tmp_path / "scratch" / "temp.exr"
 
+    def _write_bytes(content: bytes) -> File:
+        output_path.write_bytes(content)
+        return File(str(output_path))
+
+    # Like the engine's save_node_output destination, whose {###} index is
+    # only filled in when the write picks the next free file name.
     dest = MagicMock()
-    dest.resolve.return_value = str(output_path)
+    dest.resolve.side_effect = FileLoadError(
+        failure_reason=FileIOFailureReason.MISSING_MACRO_VARIABLES,
+        result_details="Attempted to resolve macro path. Failed because missing required variables: _index",
+    )
+    dest.write_bytes.side_effect = _write_bytes
 
     instance = MagicMock()
     instance.build_file.return_value = dest
 
     def _handle_request(request):
-        if isinstance(request, WriteFileRequest):
-            assert isinstance(request.file_path, str) and isinstance(request.content, bytes)
-            Path(request.file_path).write_bytes(request.content)
-            return WriteFileResultSuccess(
-                final_file_path=request.file_path, bytes_written=len(request.content), result_details=""
-            )
         if isinstance(request, ReadFileRequest):
             assert request.file_path is not None
             data = Path(request.file_path).read_bytes()
@@ -223,6 +227,13 @@ def _make_node(mock_project_file):  # noqa: ANN001
 
 
 class TestSaveEXRModeA:
+    def test_saves_when_output_path_index_is_assigned_at_write(self, mock_project_file: Path) -> None:
+        node = _make_node(mock_project_file)
+        node.set_parameter_value("image_in", _make_image_artifact())
+        asyncio.run(node.aprocess())
+        assert _was_successful(node) is True, _result_details(node)
+        assert mock_project_file.exists()
+
     def test_no_input_fails(self, mock_project_file: Path) -> None:
         node = _make_node(mock_project_file)
         asyncio.run(node.aprocess())

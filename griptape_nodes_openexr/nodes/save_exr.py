@@ -24,8 +24,6 @@ from griptape_nodes.retained_mode.events.os_events import (
     DeleteFileResultFailure,
     ReadFileRequest,
     ReadFileResultSuccess,
-    WriteFileRequest,
-    WriteFileResultSuccess,
 )
 from griptape_nodes.retained_mode.griptape_nodes import GriptapeNodes
 from griptape_nodes.traits.options import Options
@@ -353,14 +351,9 @@ class SaveEXR(SuccessFailureNode):
 
         try:
             dest = self._output_file.build_file()
-            dest_path = dest.resolve()
+            saved = dest.write_bytes(exr_bytes)
         except Exception as e:
-            self._on_fail_handler(f"Failed to resolve output path: {e}")
-            return
-
-        write_result = GriptapeNodes.handle_request(WriteFileRequest(file_path=dest_path, content=exr_bytes))
-        if not isinstance(write_result, WriteFileResultSuccess):
-            self._on_fail_handler("Failed to save output file")
+            self._on_fail_handler(f"Failed to save output file: {e}")
             return
 
         window = WindowCoordinates(xmin=0, ymin=0, xmax=width - 1, ymax=height - 1)
@@ -386,7 +379,7 @@ class SaveEXR(SuccessFailureNode):
             custom=meta["custom"],
         )
         output_part = EXRPartArtifact(
-            file_path=write_result.final_file_path,
+            file_path=saved.location,
             part_index=0,
             name=meta["name"],
             width=width,
