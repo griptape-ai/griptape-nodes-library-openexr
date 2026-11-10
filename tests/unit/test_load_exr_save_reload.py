@@ -7,6 +7,7 @@ Tests cover:
 - Reload from metadata recreates dynamic groups (the save/reload fix)
 - Reload with changed file hash warns in aprocess result_details
 - Reload with missing file is graceful
+- Header-only warning shows only after a header-only scan
 """
 
 from __future__ import annotations
@@ -18,6 +19,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+from griptape_nodes.retained_mode.events.config_events import GetConfigValueResultSuccess
 
 from griptape_nodes_openexr.nodes.load_exr import LoadEXR, _compute_file_hash, _sanitize_for_json
 
@@ -150,6 +152,40 @@ class TestAfterValueSet:
         node._file_content_changed = True
         node.after_value_set(node._file_path_param, str(SINGLE_PART))
         assert node._file_content_changed is False
+
+
+class TestHeaderOnlyMessage:
+    @staticmethod
+    def _hidden(node: LoadEXR) -> bool:
+        return bool(node._header_only_message.ui_options.get("hide"))
+
+    def test_hidden_on_fresh_node(self) -> None:
+        assert self._hidden(_make_node())
+
+    def test_shown_after_header_only_scan(self, mock_config) -> None:
+        node = _make_node()
+        node.after_value_set(node._file_path_param, str(SINGLE_PART))
+        assert not self._hidden(node)
+
+    def test_hidden_after_full_scan(self, mock_config) -> None:
+        mock_config.handle_request.return_value = GetConfigValueResultSuccess(value=False, result_details="")
+        node = _make_node()
+        node.after_value_set(node._file_path_param, str(SINGLE_PART))
+        assert self._hidden(node)
+
+    def test_hidden_when_path_cleared(self, mock_config) -> None:
+        node = _make_node()
+        node.after_value_set(node._file_path_param, str(SINGLE_PART))
+        node.after_value_set(node._file_path_param, "")
+        assert self._hidden(node)
+
+    def test_hidden_when_scan_fails(self, mock_config, tmp_path: Path) -> None:
+        bad = tmp_path / "not_an.exr"
+        bad.write_bytes(b"not an exr")
+        node = _make_node()
+        node.after_value_set(node._file_path_param, str(SINGLE_PART))
+        node.after_value_set(node._file_path_param, str(bad))
+        assert self._hidden(node)
 
 
 # ---------------------------------------------------------------------------

@@ -23,6 +23,7 @@ from griptape_nodes.exe_types.core_types import (
     NodeMessageResult,
     Parameter,
     ParameterGroup,
+    ParameterMessage,
     ParameterMode,
 )
 from griptape_nodes.exe_types.node_types import SuccessFailureNode
@@ -260,6 +261,21 @@ class LoadEXR(SuccessFailureNode):
         )
         self.add_parameter(self._parts_param)
 
+        # Shown only after a header-only scan, whose channel labels are all `half`.
+        self._header_only_message = ParameterMessage(
+            name="header_only_message",
+            variant="warning",
+            title="Pixel types not read",
+            value=(
+                "Only the header was read, so every channel is labelled `half` whatever its stored type. "
+                "To read the true pixel types, set the `openexr.header_only` engine setting to `false`, "
+                "then reselect the file."
+            ),
+            markdown=True,
+            hide=True,
+        )
+        self.add_node_element(self._header_only_message)
+
         # --- Dynamic groups ---
 
         # Multi-part: populated with one collapsible sub-group per part.
@@ -399,6 +415,7 @@ class LoadEXR(SuccessFailureNode):
         self._remove_dynamic_elements()
         self._cached_exr_data = None
         self._clear_static_outputs()
+        self.hide_message_by_name(self._header_only_message.name)
 
         if not file_path:
             return
@@ -417,6 +434,8 @@ class LoadEXR(SuccessFailureNode):
             return
 
         self._cached_exr_data = exr_data
+        if header_only:
+            self.show_message_by_name(self._header_only_message.name)
 
         self._populate_scalar_outputs(exr_data)
         self._populate_structured_outputs(file_path, exr_data)
