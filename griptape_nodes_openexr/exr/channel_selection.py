@@ -10,6 +10,7 @@ if TYPE_CHECKING:
     from griptape_nodes_openexr.exr.exr_types import EXRChannelInfo
 
 _RGBA_RANK = {"R": 0, "G": 1, "B": 2, "A": 3}
+_RGB_CHANNEL_COUNT = 3
 
 
 def _role(channel_name: str) -> str:
@@ -34,10 +35,13 @@ def _find_role(candidates: list[str], role: str, *, normalize: bool) -> str | No
 
 def _find_rgb(candidates: list[str], *, normalize: bool) -> list[str] | None:
     """Return the R, G, B channels among `candidates` in that order, or None if any is missing."""
-    found = [_find_role(candidates, role, normalize=normalize) for role in ("R", "G", "B")]
-    if None in found:
-        return None
-    return [name for name in found if name is not None]
+    found: list[str] = []
+    for role in ("R", "G", "B"):
+        name = _find_role(candidates, role, normalize=normalize)
+        if name is None:
+            return None
+        found.append(name)
+    return found
 
 
 def _same_layer(channel_names: list[str], channel_name: str) -> list[str]:
@@ -112,8 +116,8 @@ def select_display_channels(channel_names: list[str]) -> list[str] | None:
             return rgb_result
 
     # Priority 3: first 3 channels
-    if len(channel_names) >= 3:  # noqa: PLR2004
-        return list(channel_names[:3])
+    if len(channel_names) >= _RGB_CHANNEL_COUNT:
+        return list(channel_names[:_RGB_CHANNEL_COUNT])
 
     # Priority 4: single channel grayscale
     return [channel_names[0]]
@@ -132,7 +136,7 @@ def select_alpha_channel(channel_names: list[str], rgb_selected: list[str]) -> s
     Returns:
         Alpha channel name if found, otherwise None.
     """
-    if len(rgb_selected) != 3:  # noqa: PLR2004
+    if len(rgb_selected) != _RGB_CHANNEL_COUNT:
         return None
 
     layer = _same_layer(channel_names, rgb_selected[0])
