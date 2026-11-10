@@ -314,7 +314,11 @@ class EXRData:
 
 
 def _convert_attribute_value(value: Any) -> Any:
-    """Normalise an OpenEXR attribute value to a plain Python type."""
+    """Normalise an OpenEXR attribute value to a JSON-safe plain Python type.
+
+    Non-finite floats become "NaN", "Infinity" or "-Infinity", since json.dumps
+    writes them as bare tokens that JSON.parse rejects.
+    """
     if isinstance(value, float):
         if math.isnan(value):
             return "NaN"
@@ -328,7 +332,7 @@ def _convert_attribute_value(value: Any) -> Any:
     if isinstance(value, (tuple, list)):
         return [_convert_attribute_value(v) for v in value]
     if hasattr(value, "tolist"):
-        return value.tolist()
+        return _convert_attribute_value(value.tolist())
     return str(value)
 
 

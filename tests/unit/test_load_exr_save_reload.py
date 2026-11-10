@@ -21,7 +21,7 @@ from unittest.mock import patch
 import pytest
 from griptape_nodes.retained_mode.events.config_events import GetConfigValueResultSuccess
 
-from griptape_nodes_openexr.nodes.load_exr import LoadEXR, _compute_file_hash, _sanitize_for_json
+from griptape_nodes_openexr.nodes.load_exr import LoadEXR, _compute_file_hash
 
 DATA = Path(__file__).parents[1] / "data"
 SINGLE_PART = DATA / "single_part_rgba.exr"  # 1 part, 4 channels: A B G R
@@ -294,42 +294,6 @@ class TestReloadMissingFile:
         asyncio.run(node.aprocess())
         details = _result_details(node)
         assert "not found" in details.lower()
-
-
-# ---------------------------------------------------------------------------
-# _sanitize_for_json — pure function, no mocks, no EXR files
-# ---------------------------------------------------------------------------
-
-
-class TestSanitizeForJson:
-    def test_infinity_becomes_string(self) -> None:
-        assert _sanitize_for_json(float("inf")) == "Infinity"
-
-    def test_negative_infinity_becomes_string(self) -> None:
-        assert _sanitize_for_json(float("-inf")) == "-Infinity"
-
-    def test_nan_becomes_string(self) -> None:
-        assert _sanitize_for_json(float("nan")) == "NaN"
-
-    def test_finite_float_unchanged(self) -> None:
-        assert _sanitize_for_json(1.5) == 1.5
-
-    def test_nested_dict(self) -> None:
-        result = _sanitize_for_json({"a": float("inf"), "b": {"c": float("-inf")}})
-        assert result == {"a": "Infinity", "b": {"c": "-Infinity"}}
-
-    def test_list(self) -> None:
-        result = _sanitize_for_json([float("inf"), 1.0, float("nan")])
-        assert result == ["Infinity", 1.0, "NaN"]
-
-    def test_non_float_passthrough(self) -> None:
-        assert _sanitize_for_json("hello") == "hello"
-        assert _sanitize_for_json(42) == 42
-        assert _sanitize_for_json(None) is None
-
-    def test_output_is_valid_json(self) -> None:
-        sanitized = _sanitize_for_json({"focus": float("inf"), "normal": 1.0})
-        json.loads(json.dumps(sanitized))  # must not raise
 
 
 # ---------------------------------------------------------------------------
