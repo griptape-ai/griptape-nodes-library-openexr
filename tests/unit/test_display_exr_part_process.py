@@ -17,6 +17,7 @@ from griptape_nodes_openexr.exr.exr_header_artifact import EXRPartArtifact
 from griptape_nodes_openexr.exr.exr_io import scan_exr_header
 from griptape_nodes_openexr.exr.ocio_helpers import COLOR_MODE_BASIC, COLOR_MODE_OCIO
 from griptape_nodes_openexr.exr.tone_mapping import linear_to_srgb
+from griptape_nodes_openexr.nodes.display_exr_part import DisplayEXRPart
 
 DATA = Path(__file__).parents[1] / "data"
 SINGLE_PART_RGBA = DATA / "single_part_rgba.exr"  # 64x64, R ramp, G ramp*0.5, B 0.2, A 1.0
@@ -50,8 +51,6 @@ class _Destination:
 
 
 def _make_node(tmp_path: Path, part: EXRPartArtifact | None, **values: Any):
-    from griptape_nodes_openexr.nodes.display_exr_part import DisplayEXRPart
-
     with patch(f"{_OCIO_MODULE}.find_colorspace_transform_request_type", return_value=None):
         node = DisplayEXRPart("test_display_part")
 
