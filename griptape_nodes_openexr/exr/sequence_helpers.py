@@ -66,9 +66,10 @@ async def run_over_sequence[T](
         work: Synchronous callable invoked with each entry's (0-based list
             index, entry) on a worker thread. Raises to report a per-frame
             failure. The index is the entry's position in `entries`, not its
-            sequence frame number (`entry.number`) — useful for callers that
-            need a contiguous output ordering (e.g. an image sequence fed to
-            ffmpeg) distinct from frame identity.
+            sequence frame number (`entry.number`), so it orders output
+            independently of frame identity. It has a hole wherever `work`
+            raises: a caller that needs gap-free numbering (e.g. an image
+            sequence fed to ffmpeg) must re-number from the non-`None` results.
         on_completed: Optional callback invoked after each entry finishes
             (success or failure), with the running count of completed entries.
             Useful for progress reporting; errors from `work` are still
@@ -77,10 +78,11 @@ async def run_over_sequence[T](
     Returns:
         A `(results, errors)` pair. `results` has one slot per entry, in the
         same order as `entries`, `None` where `work` raised. `errors` holds
-        one message per failed entry, formatted as `"frame {entry.number}: {exc}"`.
+        one message per failed entry, in sequence order, formatted as
+        `"frame {entry.number}: {exc}"`.
     """
     results: list[T | None] = [None] * len(entries)
-    errors: list[str] = []
+    failures: dict[int, Exception] = {}
 
     loop = asyncio.get_running_loop()
 
@@ -99,11 +101,12 @@ async def run_over_sequence[T](
         for coro in asyncio.as_completed(tasks):
             idx, result, err = await coro
             if err is not None:
-                errors.append(f"frame {entries[idx].number}: {err}")
+                failures[idx] = err
             else:
                 results[idx] = result
             completed += 1
             if on_completed is not None:
                 on_completed(completed)
 
+    errors = [f"frame {entries[idx].number}: {failures[idx]}" for idx in sorted(failures)]
     return results, errors

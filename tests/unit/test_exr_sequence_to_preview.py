@@ -570,7 +570,78 @@ class TestAProcessPipeline:
 
         assert _was_successful(node) is True
         details = node.parameter_output_values.get("result_details", "")
-        assert "1 frame error" in details
+        assert "1 frame(s) failed" in details
+
+    def test_failed_frame_mid_sequence_leaves_no_gap_for_ffmpeg(self, tmp_path: Path) -> None:
+        # ffmpeg's image2 demuxer stops at the first gap in frame_%04d.png,
+        # so a hole left by a failed frame would drop every frame after it
+        # while ffmpeg still exits 0.
+        from griptape_nodes.retained_mode.events.os_events import DeleteFileRequest
+        from griptape_nodes.retained_mode.griptape_nodes import GriptapeNodes
+
+        paths = [tmp_path / f"shot.{n:04d}.exr" for n in range(4)]
+        bad_path = str(paths[1])
+        node = _make_node()
+        fake_saved = MagicMock()
+        fake_saved.location = "/tmp/preview.mp4"
+        node._output_file = MagicMock()
+        node._output_file.build_file.return_value.write_bytes.return_value = fake_saved
+
+        fake_temp_path = tmp_path / "exr-preview"
+        mock_situation_dest = MagicMock()
+        mock_situation_dest.resolve.return_value = fake_temp_path / "frame_0000.png"
+
+        def _handle_request(request):
+            if isinstance(request, DeleteFileRequest) and request.path:
+                p = Path(request.path)
+                shutil.rmtree(p, ignore_errors=True) if p.is_dir() else p.unlink(missing_ok=True)
+            return MagicMock()
+
+        def fail_on_bad_path(path, *args, **kwargs):
+            if path == bad_path:
+                raise ValueError("simulated bad EXR")
+            return _make_1x1_rgba_pixels()
+
+        pngs_seen_by_ffmpeg: list[str] = []
+
+        def fake_ffmpeg_run(cmd, **kwargs):
+            pngs_seen_by_ffmpeg.extend(sorted(p.name for p in fake_temp_path.glob("*.png")))
+            Path(cmd[-1]).write_bytes(b"FAKE_MP4")
+            return MagicMock(returncode=0)
+
+        node.set_parameter_value("sequence", _make_sequence(paths))
+        node.set_parameter_value("threads", 2)
+        node.set_parameter_value("color_mode", COLOR_MODE_BASIC)
+        node.set_parameter_value("tone_mapping", TONE_REC709)
+
+        with (
+            patch(f"{_NODE_MODULE}.ProjectFileDestination") as mock_pfd,
+            patch.object(GriptapeNodes, "handle_request", side_effect=_handle_request),
+            patch(f"{_NODE_MODULE}.load_exr_channels", side_effect=fail_on_bad_path),
+            patch(f"{_NODE_MODULE}.select_display_channels", return_value=["R", "G", "B"]),
+            patch(
+                f"{_NODE_MODULE}.apply_color_management",
+                return_value=(np.ones((1, 1, 3), dtype=np.float32), TONE_REC709),
+            ),
+            patch(f"{_NODE_MODULE}.subprocess") as mock_subproc,
+            patch(f"{_NODE_MODULE}.run") as mock_ffmpeg_run,
+        ):
+            mock_pfd.from_situation.return_value = mock_situation_dest
+            mock_ffmpeg_run.get_or_fetch_platform_executables_else_raise.return_value = (
+                "/usr/bin/ffmpeg",
+                "/usr/bin/ffprobe",
+            )
+            mock_subproc.run.side_effect = fake_ffmpeg_run
+            mock_subproc.TimeoutExpired = __import__("subprocess").TimeoutExpired
+            mock_subproc.CalledProcessError = __import__("subprocess").CalledProcessError
+
+            asyncio.run(node.aprocess())
+
+        assert pngs_seen_by_ffmpeg == ["frame_0000.png", "frame_0001.png", "frame_0002.png"]
+        assert _was_successful(node) is True
+        details = node.parameter_output_values.get("result_details", "")
+        assert "Encoded 3 of 4 frames" in details
+        assert "frame 1: simulated bad EXR" in details
 
     def test_every_frame_failing_reports_the_frame_error(self, tmp_path: Path) -> None:
         # An empty temp dir makes ffmpeg report "Error opening input files",

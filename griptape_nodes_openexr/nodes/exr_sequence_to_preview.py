@@ -53,6 +53,7 @@ _DEFAULT_FRAME_RATE = 24.0
 _DEFAULT_THREADS = 4
 _LOG_INTERVAL_PCT = 10
 _PIX_FMT = "yuv420p"
+_FRAME_PATTERN = "frame_%04d.png"
 
 # Transfer characteristics per display transform. A video carries no ICC
 # profile, so these tags are its only colour signalling.
@@ -286,8 +287,8 @@ class EXRSequenceToPreview(SuccessFailureNode):
         try:
             log_step = max(1, total * _LOG_INTERVAL_PCT // 100)
 
-            def _convert(i: int, entry: SequenceEntry) -> None:
-                _convert_frame(entry.path, i, temp_path, part_index, ev, color_params, tone_mapping)
+            def _convert(i: int, entry: SequenceEntry) -> Path:
+                return _convert_frame(entry.path, i, temp_path, part_index, ev, color_params, tone_mapping)
 
             def _on_frame_done(frames_done: int) -> None:
                 self.parameter_output_values[self._frames_processed_param.name] = frames_done
@@ -296,7 +297,7 @@ class EXRSequenceToPreview(SuccessFailureNode):
                     pct = frames_done * 100 // total
                     logger.info("%s: converted %d/%d frames (%d%%)", self.name, frames_done, total, pct)
 
-            _results, errors = await run_over_sequence(
+            results, errors = await run_over_sequence(
                 entries, threads=threads, work=_convert, on_completed=_on_frame_done
             )
 
@@ -310,6 +311,15 @@ class EXRSequenceToPreview(SuccessFailureNode):
                 self._on_fail(f"All {total} frame(s) failed conversion. First error: {errors[0]}")
                 return
 
+            # ffmpeg's image2 demuxer stops at the first gap in the numbering,
+            # so a failed frame mid-sequence would silently drop every frame
+            # after it. Number the frames that converted contiguously.
+            try:
+                encoded = _number_contiguously([path for path in results if path is not None], temp_path)
+            except OSError as e:
+                self._on_fail(f"Failed to stage frames for ffmpeg: {e}")
+                return
+
             # --- ffmpeg encode ---
             try:
                 ffmpeg_path, _ = run.get_or_fetch_platform_executables_else_raise()
@@ -317,7 +327,7 @@ class EXRSequenceToPreview(SuccessFailureNode):
                 self._on_fail(f"ffmpeg not found: {e}")
                 return
 
-            input_pattern = str(temp_path / "frame_%04d.png")
+            input_pattern = str(temp_path / _FRAME_PATTERN)
             output_path = temp_path / f"output.{fmt}"
             preset, crf = self._get_processing_speed_settings()
 
@@ -392,8 +402,13 @@ class EXRSequenceToPreview(SuccessFailureNode):
         self.parameter_output_values[self._video_param.name] = artifact
         self.publish_update_to_parameter(self._video_param.name, artifact)
 
-        error_note = f", {len(errors)} frame error(s)" if errors else ""
-        details = f"Encoded {total} frames at {frame_rate} fps → {fmt}{error_note}"
+        if errors:
+            details = (
+                f"Encoded {encoded} of {total} frames at {frame_rate} fps → {fmt}; "
+                f"{len(errors)} frame(s) failed and were skipped. First error: {errors[0]}"
+            )
+        else:
+            details = f"Encoded {total} frames at {frame_rate} fps → {fmt}"
         self._set_status_results(was_successful=True, result_details=details)
         logger.info("%s: %s", self.name, details)
 
@@ -406,11 +421,15 @@ def _convert_frame(
     ev: float,
     color_params: ColorParamsProtocol | None,
     tone_mapping: str,
-) -> None:
+) -> Path:
     """Load one EXR frame, apply colour management, and write a PNG to temp_dir.
 
     Runs on a thread-pool worker. Raises on any failure so the caller can
     collect errors without aborting the whole run.
+
+    Returns:
+        The written PNG, named for frame_index. Pass the successful frames
+        through `_number_contiguously` before handing the directory to ffmpeg.
     """
     pixels = load_exr_channels(exr_path, part_index)
 
@@ -425,5 +444,17 @@ def _convert_frame(
     rgb, _ = apply_color_management(rgb, color_params, tone_mapping)
     uint8_rgb = to_uint8(rgb)
 
-    out_path = temp_dir / f"frame_{frame_index:04d}.png"
+    out_path = temp_dir / f"converted_{frame_index:04d}.png"
     Image.fromarray(uint8_rgb, "RGB").save(out_path)
+    return out_path
+
+
+def _number_contiguously(frames: list[Path], temp_dir: Path) -> int:
+    """Rename frames, in order, to the gap-free `_FRAME_PATTERN` ffmpeg reads.
+
+    Returns:
+        The number of frames renamed, which is the number ffmpeg will encode.
+    """
+    for i, frame in enumerate(frames):
+        frame.rename(temp_dir / (_FRAME_PATTERN % i))
+    return len(frames)
