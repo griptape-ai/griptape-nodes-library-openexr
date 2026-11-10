@@ -42,6 +42,7 @@ from griptape_nodes_openexr.exr.exr_types import (
     _ATTR_PIXEL_ASPECT_RATIO,
     _ATTR_SOFTWARE,
     _ATTR_TIME_CODE,
+    _EXR_COMPRESSION_MAP,
     _TYPED_FIELD_ATTRS,
     _WRITER_RESERVED_ATTRS,
     CompressionType,
@@ -55,23 +56,17 @@ from griptape_nodes_openexr.exr.exr_types import (
 
 logger = logging.getLogger("griptape_nodes")
 
-_COMPRESSION_OPTIONS = ["ZIP", "ZIPS", "PIZ", "DWAA", "NONE"]
 _PIXEL_TYPE_OPTIONS = ["HALF", "FLOAT"]
 
-_COMPRESSION_TO_OXR: dict[str, OpenEXR.Compression] = {
-    "ZIP": OpenEXR.ZIP_COMPRESSION,
-    "ZIPS": OpenEXR.ZIPS_COMPRESSION,
-    "PIZ": OpenEXR.PIZ_COMPRESSION,
-    "DWAA": OpenEXR.DWAA_COMPRESSION,
-    "NONE": OpenEXR.NO_COMPRESSION,
+# Compression dropdown label -> codec, covering every codec the library reads. ZIP
+# comes first because the Options trait replaces a value outside the choices with the
+# first choice, and ZIP is the lossless default.
+_COMPRESSION_BY_LABEL: dict[str, CompressionType] = {"ZIP": CompressionType.ZIP_COMPRESSION} | {
+    "NONE" if member is CompressionType.NO_COMPRESSION else member.name.removesuffix("_COMPRESSION"): member
+    for member in CompressionType
 }
-
-_COMPRESSION_TO_ENUM: dict[str, CompressionType] = {
-    "ZIP": CompressionType.ZIP_COMPRESSION,
-    "ZIPS": CompressionType.ZIPS_COMPRESSION,
-    "PIZ": CompressionType.PIZ_COMPRESSION,
-    "DWAA": CompressionType.DWAA_COMPRESSION,
-    "NONE": CompressionType.NO_COMPRESSION,
+_OXR_COMPRESSION: dict[CompressionType, OpenEXR.Compression] = {
+    member: binding for binding, member in _EXR_COMPRESSION_MAP.items()
 }
 
 _PIXEL_TYPE_TO_STR: dict[str, str] = {
@@ -148,10 +143,14 @@ class SaveEXR(SuccessFailureNode):
         self._compression_param = ParameterString(
             name="compression",
             default_value="ZIP",
-            tooltip="EXR compression codec applied to the output file.",
+            tooltip=(
+                "EXR compression codec applied to the output file. NONE, RLE, ZIPS, ZIP, PIZ, HTJ2K32, "
+                "HTJ2K256 and ZSTD are lossless. PXR24 is lossy for FLOAT pixels, B44 and B44A for HALF "
+                "pixels, and DWAA, DWAB and LJ2K for both."
+            ),
             allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
         )
-        self._compression_param.add_trait(Options(choices=_COMPRESSION_OPTIONS))
+        self._compression_param.add_trait(Options(choices=list(_COMPRESSION_BY_LABEL)))
         self.add_parameter(self._compression_param)
 
         self._pixel_type_param = ParameterString(
@@ -301,8 +300,13 @@ class SaveEXR(SuccessFailureNode):
         compression_key = str(self.get_parameter_value(self._compression_param.name) or "ZIP")
         pixel_type_key = str(self.get_parameter_value(self._pixel_type_param.name) or "HALF")
 
-        oxr_compression = _COMPRESSION_TO_OXR.get(compression_key, OpenEXR.ZIP_COMPRESSION)
-        compression_enum = _COMPRESSION_TO_ENUM.get(compression_key, CompressionType.ZIP_COMPRESSION)
+        compression_enum = _COMPRESSION_BY_LABEL.get(compression_key)
+        if compression_enum is None:
+            self._on_fail_handler(
+                f"Unknown compression {compression_key!r}. Choose one of: {', '.join(_COMPRESSION_BY_LABEL)}"
+            )
+            return
+        oxr_compression = _OXR_COMPRESSION[compression_enum]
         pixel_type_str = _PIXEL_TYPE_TO_STR.get(pixel_type_key, "half")
         pixel_type_enum = _PIXEL_TYPE_TO_ENUM.get(pixel_type_key, PixelType.HALF)
 

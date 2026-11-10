@@ -276,15 +276,15 @@ Saves a single-part EXR file from either an 8-bit image or EXR channel artifacts
 
 **Inputs**
 
-| Parameter     | Type                                | Description                                                                                              |
-| ------------- | ----------------------------------- | -------------------------------------------------------------------------------------------------------- |
-| `image_in`    | `ImageArtifact \| ImageUrlArtifact` | 8-bit image source (Mode A). Ignored when any channel slot is connected.                                 |
-| `channel_r`   | `EXRChannelArtifact`                | Channel to write as R (Mode B). Optional.                                                                |
-| `channel_g`   | `EXRChannelArtifact`                | Channel to write as G (Mode B). Optional.                                                                |
-| `channel_b`   | `EXRChannelArtifact`                | Channel to write as B (Mode B). Optional.                                                                |
-| `channel_a`   | `EXRChannelArtifact`                | Channel to write as A (Mode B). Optional.                                                                |
-| `compression` | `str`                               | Codec applied to the output file. Choices: `ZIP`, `ZIPS`, `PIZ`, `DWAA`, `NONE`. Default `ZIP`.          |
-| `pixel_type`  | `str`                               | Pixel storage type. `HALF` (16-bit float, standard) or `FLOAT` (32-bit, full precision). Default `HALF`. |
+| Parameter     | Type                                | Description                                                                                                                                                                                                                                                                                                           |
+| ------------- | ----------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `image_in`    | `ImageArtifact \| ImageUrlArtifact` | 8-bit image source (Mode A). Ignored when any channel slot is connected.                                                                                                                                                                                                                                              |
+| `channel_r`   | `EXRChannelArtifact`                | Channel to write as R (Mode B). Optional.                                                                                                                                                                                                                                                                             |
+| `channel_g`   | `EXRChannelArtifact`                | Channel to write as G (Mode B). Optional.                                                                                                                                                                                                                                                                             |
+| `channel_b`   | `EXRChannelArtifact`                | Channel to write as B (Mode B). Optional.                                                                                                                                                                                                                                                                             |
+| `channel_a`   | `EXRChannelArtifact`                | Channel to write as A (Mode B). Optional.                                                                                                                                                                                                                                                                             |
+| `compression` | `str`                               | Codec applied to the output file. Choices: `ZIP`, `NONE`, `RLE`, `ZIPS`, `PIZ`, `PXR24`, `B44`, `B44A`, `DWAA`, `DWAB`, `HTJ2K32`, `HTJ2K256`, `LJ2K`, `ZSTD`. `PXR24` is lossy for `FLOAT` pixels, `B44` and `B44A` for `HALF` pixels, and `DWAA`, `DWAB` and `LJ2K` for both; the rest are lossless. Default `ZIP`. |
+| `pixel_type`  | `str`                               | Pixel storage type. `HALF` (16-bit float, standard) or `FLOAT` (32-bit, full precision). Default `HALF`.                                                                                                                                                                                                              |
 
 The collapsed **Metadata** group exposes optional header fields:
 

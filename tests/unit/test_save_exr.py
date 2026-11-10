@@ -10,11 +10,13 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import OpenEXR
 import pytest
+from griptape_nodes.traits.options import Options
 from PIL import Image
 
 from griptape_nodes_openexr.exr.exr_header_artifact import EXRChannelArtifact
 from griptape_nodes_openexr.exr.exr_io import load_exr_channels, write_exr_channels
-from griptape_nodes_openexr.exr.exr_types import EXRChannelInfo, PixelType
+from griptape_nodes_openexr.exr.exr_types import CompressionType, EXRChannelInfo, PixelType
+from griptape_nodes_openexr.nodes.save_exr import _COMPRESSION_BY_LABEL
 
 DATA = Path(__file__).parents[1] / "data"
 SINGLE_PART_RGBA = DATA / "single_part_rgba.exr"
@@ -124,30 +126,12 @@ class TestWriteExrChannelsHelper:
         loaded = load_exr_channels(out, 0, ["R"])
         np.testing.assert_allclose(loaded["R"], 1.0, atol=1e-6)
 
-    def test_zip_compression(self, tmp_path: Path) -> None:
+    @pytest.mark.parametrize("compression", [m.name for m in CompressionType])
+    def test_compression_written_to_header(self, tmp_path: Path, compression: str) -> None:
         out = str(tmp_path / "out.exr")
-        write_exr_channels(out, {"R": _ramp()}, compression=OpenEXR.ZIP_COMPRESSION)
-        assert Path(out).exists()
-
-    def test_zips_compression(self, tmp_path: Path) -> None:
-        out = str(tmp_path / "out.exr")
-        write_exr_channels(out, {"R": _ramp()}, compression=OpenEXR.ZIPS_COMPRESSION)
-        assert Path(out).exists()
-
-    def test_piz_compression(self, tmp_path: Path) -> None:
-        out = str(tmp_path / "out.exr")
-        write_exr_channels(out, {"R": _ramp()}, compression=OpenEXR.PIZ_COMPRESSION)
-        assert Path(out).exists()
-
-    def test_dwaa_compression(self, tmp_path: Path) -> None:
-        out = str(tmp_path / "out.exr")
-        write_exr_channels(out, {"R": _ramp()}, compression=OpenEXR.DWAA_COMPRESSION)
-        assert Path(out).exists()
-
-    def test_no_compression(self, tmp_path: Path) -> None:
-        out = str(tmp_path / "out.exr")
-        write_exr_channels(out, {"R": _ramp()}, compression=OpenEXR.NO_COMPRESSION)
-        assert Path(out).exists()
+        oxr_compression = OpenEXR.Compression.__members__[compression]
+        write_exr_channels(out, {"R": _ramp()}, compression=oxr_compression)
+        assert OpenEXR.File(out).parts[0].header["compression"] == oxr_compression
 
     def test_single_channel_values_preserved(self, tmp_path: Path) -> None:
         out = str(tmp_path / "out.exr")
@@ -416,13 +400,37 @@ class TestSaveEXRShapeMismatch:
 
 
 class TestSaveEXRParameters:
-    @pytest.mark.parametrize("compression", ["ZIP", "ZIPS", "PIZ", "DWAA", "NONE"])
-    def test_compression_options_all_succeed(self, mock_project_file: Path, compression: str) -> None:
+    @pytest.mark.parametrize(("label", "compression"), list(_COMPRESSION_BY_LABEL.items()))
+    def test_every_readable_codec_is_written(
+        self, mock_project_file: Path, label: str, compression: CompressionType
+    ) -> None:
         node = _make_node(mock_project_file)
         node.set_parameter_value("image_in", _make_image_artifact())
-        node.set_parameter_value("compression", compression)
+        node.set_parameter_value("compression", label)
         asyncio.run(node.aprocess())
         assert _was_successful(node) is True, _result_details(node)
+        header = OpenEXR.File(str(mock_project_file)).parts[0].header
+        assert header["compression"] == OpenEXR.Compression.__members__[compression.name]
+        assert node.parameter_output_values["output_part"].header.compression == compression
+
+    def test_compression_dropdown_lists_every_readable_codec(self, mock_project_file: Path) -> None:
+        node = _make_node(mock_project_file)
+        param = node.get_parameter_by_name("compression")
+        assert param is not None
+        trait = param.find_elements_by_type(Options)[0]
+        assert set(_COMPRESSION_BY_LABEL.values()) == set(CompressionType)
+        assert trait.choices == list(_COMPRESSION_BY_LABEL)
+        assert trait.choices[0] == "ZIP"
+
+    def test_unknown_compression_fails(self, mock_project_file: Path) -> None:
+        node = _make_node(mock_project_file)
+        node.set_parameter_value("image_in", _make_image_artifact())
+        # Bypasses the Options trait, which would replace an unknown value with ZIP.
+        node.parameter_values["compression"] = "LZW"
+        asyncio.run(node.aprocess())
+        assert _was_successful(node) is False
+        assert "LZW" in _result_details(node)
+        assert not mock_project_file.exists()
 
     def test_pixel_type_half(self, mock_project_file: Path) -> None:
         node = _make_node(mock_project_file)
