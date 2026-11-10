@@ -82,18 +82,18 @@ async def run_over_sequence[T](
         `"frame {entry.number}: {exc}"`.
     """
     results: list[T | None] = [None] * len(entries)
-    failures: dict[int, Exception] = {}
+    failures: dict[int, str] = {}
 
     loop = asyncio.get_running_loop()
 
-    async def _run_one(
-        i: int, entry: SequenceEntry, executor: ThreadPoolExecutor
-    ) -> tuple[int, T | None, Exception | None]:
+    async def _run_one(i: int, entry: SequenceEntry, executor: ThreadPoolExecutor) -> tuple[int, T | None, str | None]:
         try:
             result = await loop.run_in_executor(executor, work, i, entry)
             return i, result, None
         except Exception as e:  # noqa: BLE001 - reported as a per-frame error, not raised
-            return i, None, e
+            # Keep only the message: the exception's traceback pins the frame's
+            # pixel buffers until the whole sequence finishes.
+            return i, None, f"frame {entry.number}: {e}"
 
     with ThreadPoolExecutor(max_workers=threads) as executor:
         tasks = [_run_one(i, entry, executor) for i, entry in enumerate(entries)]
@@ -108,5 +108,5 @@ async def run_over_sequence[T](
             if on_completed is not None:
                 on_completed(completed)
 
-    errors = [f"frame {entries[idx].number}: {failures[idx]}" for idx in sorted(failures)]
+    errors = [failures[idx] for idx in sorted(failures)]
     return results, errors
