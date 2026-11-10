@@ -53,6 +53,7 @@ _DEFAULT_FRAME_RATE = 24.0
 _DEFAULT_THREADS = 4
 _LOG_INTERVAL_PCT = 10
 _PIX_FMT = "yuv420p"
+_FRAME_PATTERN = "frame_%04d.png"
 
 # Transfer characteristics per display transform. A video carries no ICC
 # profile, so these tags are its only colour signalling.
@@ -89,6 +90,10 @@ def color_trc_for(tone_mapping: str) -> str:
 _SPEED_FAST = "fast"
 _SPEED_BALANCED = "balanced"
 _SPEED_QUALITY = "quality"
+
+MISSING_FRAMES_SKIP = "skip"
+MISSING_FRAMES_ERROR = "error"
+MISSING_FRAMES_BLACK = "black"
 
 
 class EXRSequenceToPreview(SuccessFailureNode):
@@ -168,6 +173,21 @@ class EXRSequenceToPreview(SuccessFailureNode):
         # TODO: consider exposing a CUSTOM option to allow direct CRF value input (e.g. CRF 0 for lossless)
         self._processing_speed_param.add_trait(Options(choices=[_SPEED_FAST, _SPEED_BALANCED, _SPEED_QUALITY]))
         self.add_parameter(self._processing_speed_param)
+
+        self._missing_frames_param = ParameterString(
+            name="missing_frames",
+            default_value=MISSING_FRAMES_SKIP,
+            tooltip=(
+                "What to do when a frame fails to convert. 'skip' leaves it out, so the video is "
+                "shorter than the sequence; 'error' fails the node and lists the failed frames; "
+                "'black' puts a black frame in its place, keeping the video's timing."
+            ),
+            allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
+        )
+        self._missing_frames_param.add_trait(
+            Options(choices=[MISSING_FRAMES_SKIP, MISSING_FRAMES_ERROR, MISSING_FRAMES_BLACK])
+        )
+        self.add_parameter(self._missing_frames_param)
 
         # --- Advanced group ---
         advanced_group = ParameterGroup(name="Advanced", ui_options={"collapsed": True})
@@ -269,6 +289,7 @@ class EXRSequenceToPreview(SuccessFailureNode):
         tone_mapping = str(self.get_parameter_value(self._tone_mapping_param.name))
         threads = int(self.get_parameter_value(self._threads_param.name))
         fmt = str(self.get_parameter_value(self._format_param.name))
+        missing_frames = str(self.get_parameter_value(self._missing_frames_param.name))
 
         color_params: ColorParamsProtocol | None = None
         if color_mode == COLOR_MODE_OCIO:
@@ -286,8 +307,8 @@ class EXRSequenceToPreview(SuccessFailureNode):
         try:
             log_step = max(1, total * _LOG_INTERVAL_PCT // 100)
 
-            def _convert(i: int, entry: SequenceEntry) -> None:
-                _convert_frame(entry.path, i, temp_path, part_index, ev, color_params, tone_mapping)
+            def _convert(i: int, entry: SequenceEntry) -> Path:
+                return _convert_frame(entry.path, i, temp_path, part_index, ev, color_params, tone_mapping)
 
             def _on_frame_done(frames_done: int) -> None:
                 self.parameter_output_values[self._frames_processed_param.name] = frames_done
@@ -296,18 +317,35 @@ class EXRSequenceToPreview(SuccessFailureNode):
                     pct = frames_done * 100 // total
                     logger.info("%s: converted %d/%d frames (%d%%)", self.name, frames_done, total, pct)
 
-            _results, errors = await run_over_sequence(
+            results, errors = await run_over_sequence(
                 entries, threads=threads, work=_convert, on_completed=_on_frame_done
             )
 
             if errors:
                 logger.warning("%s: %d frame(s) failed conversion: %s", self.name, len(errors), "; ".join(errors))
 
+            if errors and missing_frames == MISSING_FRAMES_ERROR:
+                self._on_fail(f"{len(errors)} of {total} frame(s) failed conversion: {'; '.join(errors)}")
+                return
+
             # Every frame failing leaves an empty temp dir, and ffmpeg then
             # reports only "Error opening input files", burying the real
             # cause in the log. Report the first frame error instead.
             if len(errors) == total:
                 self._on_fail(f"All {total} frame(s) failed conversion. First error: {errors[0]}")
+                return
+
+            # ffmpeg's image2 demuxer stops at the first gap in the numbering,
+            # so a failed frame mid-sequence would silently drop every frame
+            # after it. Number the frames handed to ffmpeg without gaps.
+            try:
+                if missing_frames == MISSING_FRAMES_BLACK:
+                    frames = _fill_with_black(results, temp_path)
+                else:
+                    frames = [path for path in results if path is not None]
+                encoded = _number_contiguously(frames, temp_path)
+            except OSError as e:
+                self._on_fail(f"Failed to stage frames for ffmpeg: {e}")
                 return
 
             # --- ffmpeg encode ---
@@ -317,7 +355,7 @@ class EXRSequenceToPreview(SuccessFailureNode):
                 self._on_fail(f"ffmpeg not found: {e}")
                 return
 
-            input_pattern = str(temp_path / "frame_%04d.png")
+            input_pattern = str(temp_path / _FRAME_PATTERN)
             output_path = temp_path / f"output.{fmt}"
             preset, crf = self._get_processing_speed_settings()
 
@@ -392,8 +430,18 @@ class EXRSequenceToPreview(SuccessFailureNode):
         self.parameter_output_values[self._video_param.name] = artifact
         self.publish_update_to_parameter(self._video_param.name, artifact)
 
-        error_note = f", {len(errors)} frame error(s)" if errors else ""
-        details = f"Encoded {total} frames at {frame_rate} fps → {fmt}{error_note}"
+        if errors and missing_frames == MISSING_FRAMES_BLACK:
+            details = (
+                f"Encoded {total} frames at {frame_rate} fps → {fmt}; "
+                f"{len(errors)} frame(s) failed and were replaced with black. First error: {errors[0]}"
+            )
+        elif errors:
+            details = (
+                f"Encoded {encoded} of {total} frames at {frame_rate} fps → {fmt}; "
+                f"{len(errors)} frame(s) failed and were skipped. First error: {errors[0]}"
+            )
+        else:
+            details = f"Encoded {total} frames at {frame_rate} fps → {fmt}"
         self._set_status_results(was_successful=True, result_details=details)
         logger.info("%s: %s", self.name, details)
 
@@ -406,11 +454,15 @@ def _convert_frame(
     ev: float,
     color_params: ColorParamsProtocol | None,
     tone_mapping: str,
-) -> None:
+) -> Path:
     """Load one EXR frame, apply colour management, and write a PNG to temp_dir.
 
     Runs on a thread-pool worker. Raises on any failure so the caller can
     collect errors without aborting the whole run.
+
+    Returns:
+        The written PNG, named for frame_index. Pass the frames for ffmpeg
+        through `_number_contiguously` before handing it the directory.
     """
     pixels = load_exr_channels(exr_path, part_index)
 
@@ -425,5 +477,42 @@ def _convert_frame(
     rgb, _ = apply_color_management(rgb, color_params, tone_mapping)
     uint8_rgb = to_uint8(rgb)
 
-    out_path = temp_dir / f"frame_{frame_index:04d}.png"
+    out_path = temp_dir / f"converted_{frame_index:04d}.png"
     Image.fromarray(uint8_rgb, "RGB").save(out_path)
+    return out_path
+
+
+def _fill_with_black(results: list[Path | None], temp_dir: Path) -> list[Path]:
+    """Write a black PNG for each failed frame, sized to match the first converted frame.
+
+    Args:
+        results: One slot per sequence entry, `None` where conversion failed.
+            At least one slot must hold a path.
+        temp_dir: Directory the black frames are written to.
+
+    Returns:
+        One path per entry, in sequence order, with no `None` slots.
+    """
+    with Image.open(next(path for path in results if path is not None)) as first:
+        size = first.size
+    black = Image.new("RGB", size)
+    frames: list[Path] = []
+    for i, converted in enumerate(results):
+        if converted is None:
+            filled = temp_dir / f"black_{i:04d}.png"
+            black.save(filled)
+            frames.append(filled)
+        else:
+            frames.append(converted)
+    return frames
+
+
+def _number_contiguously(frames: list[Path], temp_dir: Path) -> int:
+    """Rename frames, in order, to the gap-free `_FRAME_PATTERN` ffmpeg reads.
+
+    Returns:
+        The number of frames renamed, which is the number ffmpeg will encode.
+    """
+    for i, frame in enumerate(frames):
+        frame.rename(temp_dir / (_FRAME_PATTERN % i))
+    return len(frames)
