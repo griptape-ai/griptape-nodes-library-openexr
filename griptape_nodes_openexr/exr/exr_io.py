@@ -420,12 +420,10 @@ def _extract_time_code(header: dict[str, Any]) -> str | None:
 
 def _require_exr_attribute(header: dict, name: str) -> Any:
     """Get a required attribute from an OpenEXR Part Header."""
-    sentinel = "__MISSING__"
-    value = header.get(name, sentinel)
-    if value == sentinel:
+    if name not in header:
         msg = f"Required EXR header attribute '{name}' is missing"
         raise ValueError(msg)
-    return value
+    return header[name]
 
 
 def _map_exr_enum[K, V](mapping: dict[K, V], exr_value: K, label: str) -> V:

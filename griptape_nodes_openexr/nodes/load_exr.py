@@ -15,7 +15,6 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import math
 import os
 from typing import TYPE_CHECKING, Any
 
@@ -42,7 +41,7 @@ from griptape_nodes_openexr.exr.exr_header_artifact import (
     EXRPartArtifact,
 )
 from griptape_nodes_openexr.exr.exr_io import scan_exr_header
-from griptape_nodes_openexr.exr.exr_types import EXRData, EXRPart
+from griptape_nodes_openexr.exr.exr_types import EXRData, EXRPart, _convert_attribute_value
 from griptape_nodes_openexr.exr.viewer_launcher import handle_viewer_button_click
 
 if TYPE_CHECKING:
@@ -78,25 +77,6 @@ def _compute_file_hash(path: str) -> str | None:
         return h.hexdigest()
     except OSError:
         return None
-
-
-def _sanitize_for_json(value: Any) -> Any:
-    """Recursively replace non-finite floats with their string equivalents.
-
-    json.dumps emits bare 'Infinity'/'NaN' tokens for non-finite floats,
-    which are valid Python but not valid JSON (JSON.parse rejects them).
-    """
-    if isinstance(value, float):
-        if math.isnan(value):
-            return "NaN"
-        if math.isinf(value):
-            return "Infinity" if value > 0 else "-Infinity"
-        return value
-    if isinstance(value, dict):
-        return {k: _sanitize_for_json(v) for k, v in value.items()}
-    if isinstance(value, list):
-        return [_sanitize_for_json(v) for v in value]
-    return value
 
 
 class LoadEXR(SuccessFailureNode):
@@ -478,12 +458,14 @@ class LoadEXR(SuccessFailureNode):
                 _CHROMA_WHITE_X: c.white_x,
                 _CHROMA_WHITE_Y: c.white_y,
             }
-            self.parameter_output_values[self._chromaticities_param.name] = json.dumps(_sanitize_for_json(chroma_dict))
+            self.parameter_output_values[self._chromaticities_param.name] = json.dumps(
+                {k: _convert_attribute_value(v) for k, v in chroma_dict.items()}
+            )
         else:
             self.parameter_output_values[self._chromaticities_param.name] = ""
 
         self.parameter_output_values[self._custom_attributes_param.name] = (
-            json.dumps(_sanitize_for_json(header.custom), indent=2, default=str) if header.custom else "{}"
+            json.dumps(header.custom, indent=2, default=str) if header.custom else "{}"
         )
 
     def _populate_structured_outputs(self, file_path: str, exr_data: EXRData) -> None:
