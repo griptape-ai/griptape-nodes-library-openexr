@@ -55,6 +55,12 @@ class TestLayerPrefix:
         result = select_display_channels(["X", "Y", "diffuse.R", "diffuse.G", "diffuse.B"])
         assert result == ["diffuse.R", "diffuse.G", "diffuse.B"]
 
+    def test_tie_between_complete_layers_follows_layer_dropdown_order(self) -> None:
+        # Both layers are complete; "a" is seen first via a.Z, so it leads list_layers and wins
+        channels = ["a.Z", "b.R", "b.G", "b.B", "a.R", "a.G", "a.B"]
+        assert select_display_channels(channels) == ["a.R", "a.G", "a.B"]
+        assert default_layer(channels) == list_layers(channels)[0] == "a"
+
 
 class TestFirstThree:
     def test_first_three_channels(self) -> None:
@@ -221,3 +227,58 @@ class TestDefaultLayer:
 
     def test_empty_channel_list_has_no_default(self) -> None:
         assert default_layer([]) is None
+
+
+class TestChannelNameNormalization:
+    def test_lowercase_reversed_root_returns_rgb_order(self) -> None:
+        assert select_display_channels(["b", "g", "r"]) == ["r", "g", "b"]
+
+    def test_lowercase_reversed_layer_returns_rgb_order(self) -> None:
+        assert select_display_channels(["beauty.b", "beauty.g", "beauty.r"]) == ["beauty.r", "beauty.g", "beauty.b"]
+
+    def test_whitespace_padded_root_recognised(self) -> None:
+        assert select_display_channels(["B", "G", "R "]) == ["R ", "G", "B"]
+
+    def test_whitespace_padded_layer_suffix_recognised(self) -> None:
+        assert select_display_channels(["X", "beauty.B ", "beauty.G", "beauty.R"]) == [
+            "beauty.R",
+            "beauty.G",
+            "beauty.B ",
+        ]
+
+    def test_exact_name_preferred_over_case_variant(self) -> None:
+        assert select_display_channels(["r", "R", "G", "B"]) == ["R", "G", "B"]
+
+    def test_empty_names_fall_through(self) -> None:
+        assert select_display_channels(["", "", ""]) == ["", "", ""]
+
+    def test_lowercase_root_alpha(self) -> None:
+        assert select_alpha_channel(["a", "b", "g", "r"], ["r", "g", "b"]) == "a"
+
+    def test_lowercase_layer_alpha(self) -> None:
+        channels = ["beauty.a", "beauty.b", "beauty.g", "beauty.r"]
+        assert select_alpha_channel(channels, ["beauty.r", "beauty.g", "beauty.b"]) == "beauty.a"
+
+    def test_padded_alpha(self) -> None:
+        assert select_alpha_channel(["A ", "B", "G", "R"], ["R", "G", "B"]) == "A "
+
+    def test_display_order_case_and_whitespace_insensitive(self) -> None:
+        assert _ordered_names(["a", "b", "g", "r "]) == ["r ", "g", "b", "a"]
+        assert _ordered_names(["beauty.a", "beauty.b", "beauty.g", "beauty.r"]) == [
+            "beauty.r",
+            "beauty.g",
+            "beauty.b",
+            "beauty.a",
+        ]
+
+    def test_conforming_layer_preferred_over_lowercase_layer(self) -> None:
+        channels = ["albedo.b", "albedo.g", "albedo.r", "beauty.B", "beauty.G", "beauty.R"]
+        assert select_display_channels(channels) == ["beauty.R", "beauty.G", "beauty.B"]
+
+    def test_conforming_layer_preferred_over_lowercase_root(self) -> None:
+        channels = ["b", "beauty.B", "beauty.G", "beauty.R", "g", "r"]
+        assert select_display_channels(channels) == ["beauty.R", "beauty.G", "beauty.B"]
+
+    def test_case_duplicates_do_not_outrank_complete_layer(self) -> None:
+        channels = ["spec.R", "spec.r", "spec.G", "beauty.R", "beauty.G", "beauty.B"]
+        assert select_display_channels(channels) == ["beauty.R", "beauty.G", "beauty.B"]
