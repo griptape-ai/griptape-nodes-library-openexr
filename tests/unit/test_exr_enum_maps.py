@@ -13,6 +13,7 @@ from griptape_nodes_openexr.exr.exr_types import (
     _EXR_LEVEL_MODE_MAP,
     _EXR_LEVEL_ROUNDING_MODE_MAP,
     _EXR_LINE_ORDER_MAP,
+    _EXR_PIXEL_TYPE_MAP,
     _EXR_STORAGE_TYPE_MAP,
     CompressionType,
 )
@@ -22,6 +23,7 @@ from griptape_nodes_openexr.exr.exr_types import (
     ("binding_enum", "mapping"),
     [
         (OpenEXR.Compression, _EXR_COMPRESSION_MAP),
+        (OpenEXR.PixelType, _EXR_PIXEL_TYPE_MAP),
         (OpenEXR.LineOrder, _EXR_LINE_ORDER_MAP),
         (OpenEXR.Storage, _EXR_STORAGE_TYPE_MAP),
         (OpenEXR.LevelMode, _EXR_LEVEL_MODE_MAP),
