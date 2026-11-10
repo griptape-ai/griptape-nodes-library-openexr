@@ -16,7 +16,7 @@ from griptape_nodes.exe_types.param_types.parameter_float import ParameterFloat
 from PIL import Image
 
 from griptape_nodes_openexr.exr.exr_header_artifact import EXRChannelArtifact
-from griptape_nodes_openexr.exr.exr_io import load_exr_channels
+from griptape_nodes_openexr.exr.exr_io import load_slot_channels
 from griptape_nodes_openexr.exr.icc_profiles import profile_for_tone_mapping
 from griptape_nodes_openexr.exr.ocio_helpers import (
     COLOR_MODE_BASIC,
@@ -205,23 +205,13 @@ class DisplayEXRChannel(SuccessFailureNode):
         first_artifact = next(iter(rgb_slots.values()))
         self._current_exr_path = first_artifact.file_path
 
-        pixels: dict[str, np.ndarray] = {}
-        for slot, artifact in rgb_slots.items():
-            try:
-                loaded = load_exr_channels(artifact.file_path, artifact.part_index, [artifact.channel.name])
-            except (ValueError, RuntimeError) as e:
-                self._on_fail_handler(f"Failed to load {slot} channel: {e}")
-                return
-            pixels[slot] = loaded[artifact.channel.name]
-
-        alpha_plane: np.ndarray | None = None
-        if channel_a is not None:
-            try:
-                loaded_a = load_exr_channels(channel_a.file_path, channel_a.part_index, [channel_a.channel.name])
-            except (ValueError, RuntimeError) as e:
-                self._on_fail_handler(f"Failed to load A channel: {e}")
-                return
-            alpha_plane = loaded_a[channel_a.channel.name]
+        all_slots = rgb_slots if channel_a is None else {**rgb_slots, "A": channel_a}
+        try:
+            pixels = load_slot_channels(all_slots)
+        except (ValueError, RuntimeError) as e:
+            self._on_fail_handler(str(e))
+            return
+        alpha_plane: np.ndarray | None = pixels.pop("A", None)
 
         all_arrays = list(pixels.values()) + ([alpha_plane] if alpha_plane is not None else [])
         shapes = [arr.shape for arr in all_arrays]

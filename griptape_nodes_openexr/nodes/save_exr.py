@@ -32,7 +32,7 @@ from griptape_nodes.traits.options import Options
 from PIL import Image
 
 from griptape_nodes_openexr.exr.exr_header_artifact import EXRChannelArtifact, EXRPartArtifact
-from griptape_nodes_openexr.exr.exr_io import load_exr_channels, write_exr_channels
+from griptape_nodes_openexr.exr.exr_io import load_slot_channels, write_exr_channels
 from griptape_nodes_openexr.exr.exr_types import (
     _ATTR_CAP_DATE,
     _ATTR_COMMENTS,
@@ -427,13 +427,10 @@ class SaveEXR(SuccessFailureNode):
         channel_slots: dict[str, EXRChannelArtifact],
     ) -> tuple[dict[str, np.ndarray], int, int, str] | str:
         """Load pixel arrays from EXRChannelArtifact slots, validate shapes."""
-        channels: dict[str, np.ndarray] = {}
-        for slot, artifact in channel_slots.items():
-            try:
-                loaded = load_exr_channels(artifact.file_path, artifact.part_index, [artifact.channel.name])
-            except (ValueError, RuntimeError) as e:
-                return f"Failed to load {slot} channel: {e}"
-            channels[slot] = loaded[artifact.channel.name]
+        try:
+            channels = load_slot_channels(channel_slots)
+        except (ValueError, RuntimeError) as e:
+            return str(e)
 
         shapes = {slot: arr.shape for slot, arr in channels.items()}
         unique_shapes = set(shapes.values())

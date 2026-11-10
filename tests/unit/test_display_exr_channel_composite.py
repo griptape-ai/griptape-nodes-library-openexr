@@ -64,7 +64,12 @@ def _render(
         return b""
 
     with (
-        patch(f"{_NODE_MODULE}.load_exr_channels", side_effect=lambda _p, _i, names: {names[0]: planes[names[0]]}),
+        patch(
+            "griptape_nodes_openexr.exr.exr_io._load_parts_channels",
+            side_effect=lambda _p, requests: {
+                i: {name: planes[name] for name in names} for i, names in requests.items()
+            },
+        ),
         patch(f"{_NODE_MODULE}.ndarray_to_png", side_effect=_capture),
         patch(f"{_NODE_MODULE}.ImageUrlArtifact"),
     ):

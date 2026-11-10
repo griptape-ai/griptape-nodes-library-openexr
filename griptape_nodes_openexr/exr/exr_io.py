@@ -13,7 +13,7 @@ Two-phase design:
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import OpenEXR
@@ -58,6 +58,11 @@ from griptape_nodes_openexr.exr.exr_types import (
     _convert_attribute_value,
     _format_time_code,
 )
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping
+
+    from griptape_nodes_openexr.exr.exr_header_artifact import EXRChannelArtifact
 
 logger = logging.getLogger("griptape_nodes")
 
@@ -151,7 +156,10 @@ def load_exr_channels(
         file_path: Engine path string (may contain macros like ``{{workspace}}/shot.exr``).
             Resolved via ``File(...).resolve()`` before opening.
         part_index: Zero-based index of the part to read.
-        channel_names: Channels to load. ``None`` loads all channels in the part.
+        channel_names: Channels to return. ``None`` returns all channels in the part.
+            Every call decodes the whole file, so this limits what is returned, not
+            what is read. Use :func:`load_slot_channels` to read several channels of
+            one file in a single decode.
 
     Returns:
         Mapping of channel name to float32 array of shape ``(height, width)``.
@@ -161,6 +169,58 @@ def load_exr_channels(
             unknown ``channel_names``.
         RuntimeError: If the file cannot be opened or read.
     """
+    return _load_parts_channels(file_path, {part_index: channel_names})[part_index]
+
+
+def load_slot_channels(slots: Mapping[str, EXRChannelArtifact]) -> dict[str, np.ndarray]:
+    """Read the pixel array for each slot's channel, decoding each source file once.
+
+    Slots may come from different files or parts; slots that share a file are read
+    with one decode, whichever parts they come from.
+
+    Args:
+        slots: Mapping of slot name (e.g. ``"R"``) to the channel connected to it.
+
+    Returns:
+        Mapping of slot name to float32 array of shape ``(height, width)``, in ``slots`` order.
+
+    Raises:
+        ValueError: As :func:`load_exr_channels`, with the message naming the affected slots.
+        RuntimeError: As :func:`load_exr_channels`, with the message naming the affected slots.
+    """
+    groups: dict[str, list[str]] = {}
+    for slot, artifact in slots.items():
+        groups.setdefault(artifact.file_path, []).append(slot)
+
+    pixels: dict[str, np.ndarray] = {}
+    for file_path, group in groups.items():
+        requests: dict[int, list[str]] = {}
+        for slot in group:
+            names = requests.setdefault(slots[slot].part_index, [])
+            if slots[slot].channel.name not in names:
+                names.append(slots[slot].channel.name)
+        try:
+            loaded = _load_parts_channels(file_path, requests)
+        except (ValueError, RuntimeError) as e:
+            label = f"{group[0]} channel" if len(group) == 1 else f"{', '.join(group)} channels"
+            msg = f"Failed to load {label}: {e}"
+            raise type(e)(msg) from e
+        for slot in group:
+            pixels[slot] = loaded[slots[slot].part_index][slots[slot].channel.name]
+
+    return {slot: pixels[slot] for slot in slots}
+
+
+def _load_parts_channels(
+    file_path: str,
+    requests: Mapping[int, list[str] | None],
+) -> dict[int, dict[str, np.ndarray]]:
+    """Read channels from several parts of one EXR file with a single decode.
+
+    ``requests`` maps part index to the channel names to return, ``None`` meaning
+    all channels in that part. Returns the same keys, each mapped to channel name
+    and float32 array. Raises as :func:`load_exr_channels`.
+    """
     if not file_path:
         msg = "file_path must not be empty"
         raise ValueError(msg)
@@ -168,6 +228,7 @@ def load_exr_channels(
     resolved_path = File(str(file_path)).resolve()
     try:
         # TODO: revisit direct file I/O once artifact manager is pluggable https://github.com/griptape-ai/griptape-nodes-library-openexr/issues/9
+        # The binding decodes every channel of every part here; it has no partial-read API.
         exr = OpenEXR.File(resolved_path, separate_channels=True)
     except Exception as e:
         msg = f"Failed to read EXR file '{resolved_path}': {e}"
@@ -176,23 +237,29 @@ def load_exr_channels(
     with exr as exr_file:
         # Validate the parts and channels before doing any pixel conversion.
         parts = exr_file.parts
-        if part_index < 0 or part_index >= len(parts):
-            msg = f"part_index {part_index} is out of range (file has {len(parts)} part(s))"
-            raise ValueError(msg)
-
-        part = parts[part_index]
-        if channel_names is not None:
-            unknown = set(channel_names) - part.channels.keys()
-            if unknown:
-                msg = f"Unknown channel(s) {sorted(unknown)!r} in part {part_index}"
+        for part_index, channel_names in requests.items():
+            if part_index < 0 or part_index >= len(parts):
+                msg = f"part_index {part_index} is out of range (file has {len(parts)} part(s))"
                 raise ValueError(msg)
+            if channel_names is not None:
+                unknown = set(channel_names) - parts[part_index].channels.keys()
+                if unknown:
+                    msg = f"Unknown channel(s) {sorted(unknown)!r} in part {part_index}"
+                    raise ValueError(msg)
 
-        names_to_load = channel_names if channel_names is not None else list(part.channels)
+        # Pixels are already decoded; selecting channel names only skips the float32 conversion.
+        result: dict[int, dict[str, np.ndarray]] = {}
         try:
-            return {name: part.channels[name].pixels.astype(np.float32, copy=False) for name in names_to_load}
+            for part_index, channel_names in requests.items():
+                part = parts[part_index]
+                names_to_load = channel_names if channel_names is not None else list(part.channels)
+                result[part_index] = {
+                    name: part.channels[name].pixels.astype(np.float32, copy=False) for name in names_to_load
+                }
         except Exception as e:
             msg = f"Failed to read EXR file '{resolved_path}': {e}"
             raise RuntimeError(msg) from e
+        return result
 
 
 def write_exr_channels(
