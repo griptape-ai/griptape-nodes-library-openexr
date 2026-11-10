@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import numpy as np
+import OpenEXR
 import pytest
 
-from griptape_nodes_openexr.exr.exr_io import load_exr_channels
+from griptape_nodes_openexr.exr.exr_io import load_exr_channels, load_slot_channels
 
 DATA = Path(__file__).parents[1] / "data"
 
@@ -156,3 +158,38 @@ def test_negative_part_index_raises() -> None:
     f = str(DATA / "single_part_rgba.exr")
     with pytest.raises(ValueError, match="out of range"):
         load_exr_channels(f, part_index=-1)
+
+
+# ---------------------------------------------------------------------------
+# load_slot_channels — slots from one file decode it once
+# ---------------------------------------------------------------------------
+
+
+class TestLoadSlotChannels:
+    FILE = DATA / "single_part_rgba.exr"
+
+    MULTI_PART_FILE = DATA / "multi_part.exr"
+
+    def _slot(self, name: str, file: Path = FILE, part_index: int = 0) -> MagicMock:
+        artifact = MagicMock()
+        artifact.file_path = str(file)
+        artifact.part_index = part_index
+        artifact.channel.name = name
+        return artifact
+
+    def test_matches_per_channel_loads_with_one_file_open(self) -> None:
+        slots = {slot: self._slot(slot) for slot in "RGBA"}
+        with patch("griptape_nodes_openexr.exr.exr_io.OpenEXR.File", side_effect=OpenEXR.File) as exr_file:
+            pixels = load_slot_channels(slots)
+        assert exr_file.call_count == 1
+        for slot in "RGBA":
+            np.testing.assert_array_equal(pixels[slot], load_exr_channels(str(self.FILE), 0, [slot])[slot])
+
+    def test_slots_across_parts_of_one_file_share_one_file_open(self) -> None:
+        file = self.MULTI_PART_FILE
+        slots = {"R": self._slot("R", file, 0), "A": self._slot("Z", file, 1)}
+        with patch("griptape_nodes_openexr.exr.exr_io.OpenEXR.File", side_effect=OpenEXR.File) as exr_file:
+            pixels = load_slot_channels(slots)
+        assert exr_file.call_count == 1
+        np.testing.assert_array_equal(pixels["R"], load_exr_channels(str(file), 0, ["R"])["R"])
+        np.testing.assert_array_equal(pixels["A"], load_exr_channels(str(file), 1, ["Z"])["Z"])
