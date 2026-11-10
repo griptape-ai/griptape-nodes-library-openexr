@@ -22,34 +22,36 @@ def _role(channel_name: str) -> str:
     return channel_name.rpartition(".")[2].strip().upper()
 
 
-def _find_role(candidates: list[str], role: str, *, normalize: bool) -> str | None:
-    """Return the candidate whose suffix is `role`.
+def _layer_key(channel_name: str) -> str | None:
+    """Return the layer a channel belongs to, None for undotted names so "R" and ".R" stay distinct."""
+    return channel_name.rpartition(".")[0] if "." in channel_name else None
 
-    An exact match wins; with `normalize`, a case- or whitespace-variant is the fallback.
+
+_RoleTable = dict[str, str]
+
+
+def _index_layers(channel_names: list[str]) -> dict[str | None, tuple[_RoleTable, _RoleTable]]:
+    """Map each layer, in first-seen order, to (exact, normalized) tables of role -> original name.
+
+    The first channel to claim a role wins, except that in the normalized table
+    an exact name always beats a case- or whitespace-variant.
     """
-    exact = next((name for name in candidates if name.rpartition(".")[2] == role), None)
-    if exact is not None or not normalize:
-        return exact
-    return next((name for name in candidates if _role(name) == role), None)
+    layers: dict[str | None, tuple[_RoleTable, _RoleTable]] = {}
+    for name in channel_names:
+        exact, normalized = layers.setdefault(_layer_key(name), ({}, {}))
+        exact.setdefault(name.rpartition(".")[2], name)
+        normalized.setdefault(_role(name), name)
+    for exact, normalized in layers.values():
+        normalized.update({role: exact[role] for role in _RGBA_RANK if role in exact})
+    return layers
 
 
-def _find_rgb(candidates: list[str], *, normalize: bool) -> list[str] | None:
-    """Return the R, G, B channels among `candidates` in that order, or None if any is missing."""
-    found: list[str] = []
-    for role in ("R", "G", "B"):
-        name = _find_role(candidates, role, normalize=normalize)
-        if name is None:
-            return None
-        found.append(name)
-    return found
-
-
-def _same_layer(channel_names: list[str], channel_name: str) -> list[str]:
-    """Return the channels in the same layer as `channel_name`, treating undotted and dotted names as distinct."""
-    if "." not in channel_name:
-        return [name for name in channel_names if "." not in name]
-    prefix = channel_name.rpartition(".")[0]
-    return [name for name in channel_names if "." in name and name.rpartition(".")[0] == prefix]
+def _rgb(roles: _RoleTable) -> list[str] | None:
+    """Return the R, G, B names from a role table in that order, or None if any is missing."""
+    r, g, b = roles.get("R"), roles.get("G"), roles.get("B")
+    if r is None or g is None or b is None:
+        return None
+    return [r, g, b]
 
 
 def order_channels_for_display(channels: Sequence[EXRChannelInfo]) -> list[EXRChannelInfo]:
@@ -90,7 +92,7 @@ def select_display_channels(channel_names: list[str]) -> list[str] | None:
 
     Priority:
     1. Undotted names R, G, B
-    2. <prefix>.R, <prefix>.G, <prefix>.B from the layer with the most of them
+    2. <prefix>.R, <prefix>.G, <prefix>.B from the first layer that has all three
     3. First 3 channels in order
     4. Single channel (grayscale)
 
@@ -103,17 +105,15 @@ def select_display_channels(channel_names: list[str]) -> list[str] | None:
     if not channel_names:
         return None
 
-    root_names = [name for name in channel_names if "." not in name]
-    for normalize in (False, True):
-        # Priority 1: undotted R, G, B
-        root_rgb = _find_rgb(root_names, normalize=normalize)
-        if root_rgb is not None:
-            return root_rgb
-
-        # Priority 2: <prefix>.R, <prefix>.G, <prefix>.B from the layer with the most of them
-        rgb_result = _find_layer_rgb(channel_names, normalize=normalize)
-        if rgb_result is not None:
-            return rgb_result
+    layers = _index_layers(channel_names)
+    root = layers.pop(None, None)
+    for table in (0, 1):  # exact, then normalized
+        candidates = [root[table]] if root else []
+        candidates += [tables[table] for tables in layers.values()]
+        for roles in candidates:
+            rgb = _rgb(roles)
+            if rgb is not None:
+                return rgb
 
     # Priority 3: first 3 channels
     if len(channel_names) >= _RGB_CHANNEL_COUNT:
@@ -139,11 +139,10 @@ def select_alpha_channel(channel_names: list[str], rgb_selected: list[str]) -> s
     if len(rgb_selected) != _RGB_CHANNEL_COUNT:
         return None
 
-    layer = _same_layer(channel_names, rgb_selected[0])
-    if _find_rgb(layer, normalize=True) != rgb_selected:
+    tables = _index_layers(channel_names).get(_layer_key(rgb_selected[0]))
+    if tables is None or _rgb(tables[1]) != rgb_selected:
         return None
-
-    return _find_role(layer, "A", normalize=True)
+    return tables[1].get("A")
 
 
 def layer_prefix(channel_name: str) -> str:
@@ -205,25 +204,3 @@ def default_layer(channel_names: list[str]) -> str | None:
     if not selected:
         return None
     return layer_prefix(selected[0])
-
-
-def _find_layer_rgb(channel_names: list[str], *, normalize: bool) -> list[str] | None:
-    """Find <prefix>.R, <prefix>.G, <prefix>.B from the prefix with the most of them."""
-    # Collect the distinct R/G/B roles each dot-prefixed layer has
-    rgb_roles = {"R", "G", "B"}
-    prefix_roles: dict[str, set[str]] = {}
-
-    for name in channel_names:
-        if "." in name:
-            prefix, _, suffix = name.rpartition(".")
-            role = _role(name) if normalize else suffix
-            if role in rgb_roles:
-                prefix_roles.setdefault(prefix, set()).add(role)
-
-    if not prefix_roles:
-        return None
-
-    # Pick the prefix that has the most R/G/B channels (ties broken by first seen)
-    best_prefix = max(prefix_roles, key=lambda prefix: len(prefix_roles[prefix]))
-    layer = [name for name in channel_names if "." in name and name.rpartition(".")[0] == best_prefix]
-    return _find_rgb(layer, normalize=normalize)

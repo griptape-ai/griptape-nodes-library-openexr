@@ -55,6 +55,12 @@ class TestLayerPrefix:
         result = select_display_channels(["X", "Y", "diffuse.R", "diffuse.G", "diffuse.B"])
         assert result == ["diffuse.R", "diffuse.G", "diffuse.B"]
 
+    def test_tie_between_complete_layers_follows_layer_dropdown_order(self) -> None:
+        # Both layers are complete; "a" is seen first via a.Z, so it leads list_layers and wins
+        channels = ["a.Z", "b.R", "b.G", "b.B", "a.R", "a.G", "a.B"]
+        assert select_display_channels(channels) == ["a.R", "a.G", "a.B"]
+        assert default_layer(channels) == list_layers(channels)[0] == "a"
+
 
 class TestFirstThree:
     def test_first_three_channels(self) -> None:
