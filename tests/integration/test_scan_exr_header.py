@@ -385,3 +385,14 @@ class TestPixelTypes:
 
         part = scan_exr_header(str(path), header_only=False).parts[0]
         assert [(ch.name, ch.pixel_type) for ch in part.channels] == [("Z", PixelType.HALF)]
+
+
+class TestCompression:
+    @pytest.mark.parametrize("compression", list(CompressionType))
+    def test_reports_the_file_compression(self, tmp_path: Path, compression: CompressionType) -> None:
+        path = tmp_path / "compressed.exr"
+        header = {"type": OpenEXR.scanlineimage, "compression": getattr(OpenEXR, compression.value)}
+        OpenEXR.File(header, {"RGB": np.zeros((8, 8, 3), dtype=np.float32)}).write(str(path))
+
+        part = scan_exr_header(str(path)).parts[0]
+        assert part.header.compression == compression
