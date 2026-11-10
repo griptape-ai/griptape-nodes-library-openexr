@@ -53,6 +53,10 @@ make deps/sync
 
 This is also run automatically as part of `make install/core` and `make install/all`.
 
+## Updating OpenEXR
+
+The StrEnums in `griptape_nodes_openexr/exr/exr_types.py` list the `OpenEXR` binding values this library supports. After bumping `OpenEXR`, check its enums (`OpenEXR.Compression`, `OpenEXR.PixelType`, `OpenEXR.LineOrder`, `OpenEXR.Storage`, `OpenEXR.LevelMode`, `OpenEXR.LevelRoundingMode`) for added or removed values and update the StrEnums to match. Storage is mapped by hand in `_EXR_STORAGE_TYPE_MAP`, so a storage change also goes there. `tests/unit/test_exr_enum_maps.py` fails on a binding value the library doesn't map.
+
 ## Changelog
 
 [`CHANGELOG.md`](CHANGELOG.md) follows [Keep a Changelog 2.0.0](https://keepachangelog.com/en/2.0.0/), with one section per `library_version`.

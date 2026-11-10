@@ -1,3 +1,7 @@
+## OpenEXR binding enums
+
+`griptape_nodes_openexr/exr/exr_types.py` mirrors the `OpenEXR` binding's enums (compression, pixel type, line order, storage, tile level and rounding mode) as StrEnums, which are the values this library supports. When the `OpenEXR` dependency is bumped, compare each binding enum's `__members__` with its StrEnum and add or remove members to match. Storage is mapped by hand in `_EXR_STORAGE_TYPE_MAP`, so a storage change also goes there. A member the binding drops fails at import; a binding value with no member fails `tests/unit/test_exr_enum_maps.py`. A new compression codec also gets a case in `TestCompression` in `tests/integration/test_scan_exr_header.py` and a `changelog.d/` entry.
+
 ## Changelog
 
 `CHANGELOG.md` follows [Keep a Changelog 2.0.0](https://keepachangelog.com/en/2.0.0/). Each version is the `library_version` in `griptape-nodes-library.json`. Its readers are artists using these nodes and the agents that build workflows with them.

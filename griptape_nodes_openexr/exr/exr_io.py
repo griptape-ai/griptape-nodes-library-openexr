@@ -50,8 +50,6 @@ from griptape_nodes_openexr.exr.exr_types import (
     EXRData,
     EXRHeader,
     EXRPart,
-    LevelModeType,
-    LevelRoundingModeType,
     LineOrderType,
     PixelType,
     StorageType,
@@ -301,15 +299,15 @@ def _build_header(part: OpenEXR.Part, header: dict) -> EXRHeader:
 
     # Compression
     exr_compression = _require_exr_attribute(header, _ATTR_COMPRESSION)
-    compression: CompressionType = _EXR_COMPRESSION_MAP.get(exr_compression, CompressionType.NO_COMPRESSION)
+    compression: CompressionType = _map_exr_enum(_EXR_COMPRESSION_MAP, exr_compression, _ATTR_COMPRESSION)
 
     # Line Order
     exr_line_order = _require_exr_attribute(header, _ATTR_LINE_ORDER)
-    line_order: LineOrderType = _EXR_LINE_ORDER_MAP.get(exr_line_order, LineOrderType.INCREASING_Y)
+    line_order: LineOrderType = _map_exr_enum(_EXR_LINE_ORDER_MAP, exr_line_order, _ATTR_LINE_ORDER)
 
     # Storage Type (scanline/tiled)
     exr_storage_type = _require_exr_attribute(header, _ATTR_STORAGE_TYPE)
-    storage_type = _EXR_STORAGE_TYPE_MAP.get(exr_storage_type, StorageType.SCANLINE_IMAGE)
+    storage_type = _map_exr_enum(_EXR_STORAGE_TYPE_MAP, exr_storage_type, _ATTR_STORAGE_TYPE)
     tile_description = (
         _extract_tile_description(header) if storage_type in (StorageType.TILED_IMAGE, StorageType.DEEP_TILED) else None
     )
@@ -375,9 +373,9 @@ def _extract_tile_description(header: dict) -> TileDescription:
     return TileDescription(
         tile_width=exr_tile_description.xSize,
         tile_height=exr_tile_description.ySize,
-        level_mode=_EXR_LEVEL_MODE_MAP.get(exr_tile_description.mode, LevelModeType.ONE_LEVEL),
-        rounding_mode=_EXR_LEVEL_ROUNDING_MODE_MAP.get(
-            exr_tile_description.roundingMode, LevelRoundingModeType.ROUND_UP
+        level_mode=_map_exr_enum(_EXR_LEVEL_MODE_MAP, exr_tile_description.mode, "tile level mode"),
+        rounding_mode=_map_exr_enum(
+            _EXR_LEVEL_ROUNDING_MODE_MAP, exr_tile_description.roundingMode, "tile rounding mode"
         ),
     )
 
@@ -428,6 +426,18 @@ def _require_exr_attribute(header: dict, name: str) -> Any:
         msg = f"Required EXR header attribute '{name}' is missing"
         raise ValueError(msg)
     return value
+
+
+def _map_exr_enum[K, V](mapping: dict[K, V], exr_value: K, label: str) -> V:
+    """Map an OpenEXR binding enum value to its StrEnum, raising on a value with no mapping.
+
+    A miss means the binding knows a value this library does not. Raising keeps that
+    from being reported as a confident, wrong value such as "uncompressed".
+    """
+    if exr_value in mapping:
+        return mapping[exr_value]
+    msg = f"Unsupported EXR {label}: '{exr_value}'"
+    raise ValueError(msg)
 
 
 def _optional_exr_attribute(header: dict[str, Any], name: str, default: Any) -> Any:

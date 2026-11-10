@@ -30,6 +30,8 @@ class CompressionType(StrEnum):
     DWAB_COMPRESSION = "DWAB_COMPRESSION"
     HTJ2K32_COMPRESSION = "HTJ2K32_COMPRESSION"
     HTJ2K256_COMPRESSION = "HTJ2K256_COMPRESSION"
+    LJ2K_COMPRESSION = "LJ2K_COMPRESSION"
+    ZSTD_COMPRESSION = "ZSTD_COMPRESSION"
 
 
 class LineOrderType(StrEnum):
@@ -63,47 +65,31 @@ class LevelRoundingModeType(StrEnum):
 
 
 # --- OpenEXR types -> StrEnum mappings ---
-_EXR_COMPRESSION_MAP: dict[OpenEXR.Compression, CompressionType] = {
-    OpenEXR.NO_COMPRESSION: CompressionType.NO_COMPRESSION,
-    OpenEXR.RLE_COMPRESSION: CompressionType.RLE_COMPRESSION,
-    OpenEXR.ZIPS_COMPRESSION: CompressionType.ZIPS_COMPRESSION,
-    OpenEXR.ZIP_COMPRESSION: CompressionType.ZIP_COMPRESSION,
-    OpenEXR.PIZ_COMPRESSION: CompressionType.PIZ_COMPRESSION,
-    OpenEXR.PXR24_COMPRESSION: CompressionType.PXR24_COMPRESSION,
-    OpenEXR.B44_COMPRESSION: CompressionType.B44_COMPRESSION,
-    OpenEXR.B44A_COMPRESSION: CompressionType.B44A_COMPRESSION,
-    OpenEXR.DWAA_COMPRESSION: CompressionType.DWAA_COMPRESSION,
-    OpenEXR.DWAB_COMPRESSION: CompressionType.DWAB_COMPRESSION,
-}
+# Each StrEnum above is the explicit list of values this library supports. The maps
+# pair each member with the binding value of the same name, so a member the binding
+# drops fails at import, and tests/unit/test_exr_enum_maps.py fails on a binding value
+# no member covers.
 
-_EXR_PIXEL_TYPE_MAP: dict[OpenEXR.PixelType, PixelType] = {
-    OpenEXR.PixelType.HALF: PixelType.HALF,
-    OpenEXR.PixelType.FLOAT: PixelType.FLOAT,
-    OpenEXR.PixelType.UINT: PixelType.UINT,
-}
 
-_EXR_LINE_ORDER_MAP: dict[OpenEXR.LineOrder, LineOrderType] = {
-    OpenEXR.LineOrder.INCREASING_Y: LineOrderType.INCREASING_Y,
-    OpenEXR.LineOrder.DECREASING_Y: LineOrderType.DECREASING_Y,
-    OpenEXR.LineOrder.RANDOM_Y: LineOrderType.RANDOM_Y,
-}
+def _map_by_name[E: StrEnum](binding_enum: Any, supported: type[E]) -> dict[Any, E]:
+    return {binding_enum.__members__[member.name]: member for member in supported}
 
+
+_EXR_COMPRESSION_MAP: dict[OpenEXR.Compression, CompressionType] = _map_by_name(OpenEXR.Compression, CompressionType)
+_EXR_PIXEL_TYPE_MAP: dict[OpenEXR.PixelType, PixelType] = _map_by_name(OpenEXR.PixelType, PixelType)
+_EXR_LINE_ORDER_MAP: dict[OpenEXR.LineOrder, LineOrderType] = _map_by_name(OpenEXR.LineOrder, LineOrderType)
+_EXR_LEVEL_MODE_MAP: dict[OpenEXR.LevelMode, LevelModeType] = _map_by_name(OpenEXR.LevelMode, LevelModeType)
+_EXR_LEVEL_ROUNDING_MODE_MAP: dict[OpenEXR.LevelRoundingMode, LevelRoundingModeType] = _map_by_name(
+    OpenEXR.LevelRoundingMode, LevelRoundingModeType
+)
+
+# The binding names storage members in lowercase, and "deeptile" differs from the
+# "deeptiled" header string, so this one is spelled out.
 _EXR_STORAGE_TYPE_MAP: dict[OpenEXR.Storage, StorageType] = {
     OpenEXR.Storage.scanlineimage: StorageType.SCANLINE_IMAGE,
     OpenEXR.Storage.tiledimage: StorageType.TILED_IMAGE,
     OpenEXR.Storage.deepscanline: StorageType.DEEP_SCANLINE,
     OpenEXR.Storage.deeptile: StorageType.DEEP_TILED,
-}
-
-_EXR_LEVEL_MODE_MAP: dict[OpenEXR.LevelMode, LevelModeType] = {
-    OpenEXR.LevelMode.ONE_LEVEL: LevelModeType.ONE_LEVEL,
-    OpenEXR.LevelMode.MIPMAP_LEVELS: LevelModeType.MIPMAP_LEVELS,
-    OpenEXR.LevelMode.RIPMAP_LEVELS: LevelModeType.RIPMAP_LEVELS,
-}
-
-_EXR_LEVEL_ROUNDING_MODE_MAP: dict[OpenEXR.LevelRoundingMode, LevelRoundingModeType] = {
-    OpenEXR.LevelRoundingMode.ROUND_UP: LevelRoundingModeType.ROUND_UP,
-    OpenEXR.LevelRoundingMode.ROUND_DOWN: LevelRoundingModeType.ROUND_DOWN,
 }
 
 # OpenEXR attribute names
