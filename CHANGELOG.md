@@ -10,6 +10,55 @@ the `library_version` in `griptape-nodes-library.json`.
 
 <!-- Entries go in changelog.d/, one file each. See changelog.d/README.md. -->
 
+## [0.4.0] - 2026-11-11
+
+### Added
+
+- Load EXR shows a warning after a header-only scan, since every channel is then labelled `half`, and
+  says to set `openexr.header_only` to `false` and reselect the file to read the true pixel types.
+  [#65](https://github.com/griptape-ai/griptape-nodes-library-openexr/issues/65)
+- Save EXR's Compression dropdown offers every codec Load EXR reads: RLE, PXR24, B44, B44A, DWAB,
+  HTJ2K32, HTJ2K256, LJ2K, and ZSTD join ZIP, ZIPS, PIZ, DWAA, and NONE. The tooltip says which
+  codecs are lossy.
+  [#81](https://github.com/griptape-ai/griptape-nodes-library-openexr/issues/81)
+- EXR Sequence to Preview has a `missing_frames` option for frames that fail to convert: `skip`
+  leaves them out, `error` fails the node and lists them, and `black` puts a black frame in their
+  place so the video keeps the sequence's length.
+  [#66](https://github.com/griptape-ai/griptape-nodes-library-openexr/issues/66)
+
+### Fixed
+
+- **Breaking:** Display EXR Part, Read EXR, EXR Sequence to Preview, and EXR previews recognise
+  lowercase or whitespace-padded channel names such as `r`, `g`, `b`, `a` as RGBA, so files storing
+  them as `b`, `g`, `r` no longer render with red and blue swapped, and a lowercase `a` is now
+  applied as alpha. Load EXR lists such channels in R, G, B, A order. Saved workflows reading these
+  files render with corrected colours and transparency; remove any channel swap added to work
+  around the old order.
+  [#68](https://github.com/griptape-ai/griptape-nodes-library-openexr/issues/68)
+- Display EXR Channel and Save EXR read each source file once when several channel slots come
+  from the same file, instead of once per slot. With R, G, B, and A connected from one file,
+  loading the channels is about four times faster.
+  [#74](https://github.com/griptape-ai/griptape-nodes-library-openexr/issues/74)
+- Load EXR reports ZSTD, HTJ2K, and LJ2K compressed files by their codec instead of
+  `NO_COMPRESSION`. A file whose compression, line order, or storage type the library does not
+  recognise fails to load with an error naming the value, instead of reporting a wrong one.
+  [#69](https://github.com/griptape-ai/griptape-nodes-library-openexr/issues/69)
+- Load EXR labels each channel with its real pixel type (`half`, `float`, or `uint`) when the
+  `openexr.header_only` setting is `false`, instead of labelling every channel `half`.
+  [#65](https://github.com/griptape-ai/griptape-nodes-library-openexr/issues/65)
+- The part outputs of Load EXR and Load EXR Sequence carry custom header attributes holding `NaN`
+  or infinite 32-bit floats, vectors, or matrices as `"NaN"`, `"Infinity"`, or `"-Infinity"`,
+  matching the Custom Attributes output, instead of values that are not valid JSON.
+  [#70](https://github.com/griptape-ai/griptape-nodes-library-openexr/issues/70)
+- Save EXR saves with its default `output_file` instead of failing with "missing required
+  variables: _index"; each run writes the next free numbered name, such as `output_v001.exr`.
+  A connected File Output Settings node's existing-file setting is now respected.
+  [#91](https://github.com/griptape-ai/griptape-nodes-library-openexr/issues/91)
+- EXR Sequence to Preview keeps every frame that converts when one frame in the middle fails,
+  instead of ending the video at the failed frame, and its result details report how many frames
+  were encoded and which failed.
+  [#66](https://github.com/griptape-ai/griptape-nodes-library-openexr/issues/66)
+
 ## [0.3.0] - 2026-11-04
 
 ### Added
@@ -91,5 +140,6 @@ the `library_version` in `griptape-nodes-library.json`.
   blocked.
   [#46](https://github.com/griptape-ai/griptape-nodes-library-openexr/issues/46)
 
-[Unreleased]: https://github.com/griptape-ai/griptape-nodes-library-openexr/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/griptape-ai/griptape-nodes-library-openexr/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/griptape-ai/griptape-nodes-library-openexr/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/griptape-ai/griptape-nodes-library-openexr/compare/v0.2.0...v0.3.0
