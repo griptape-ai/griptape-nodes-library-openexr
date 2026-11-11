@@ -362,25 +362,32 @@ The viewer is launched fire-and-forget — clicking the button never blocks the 
 ### Setup
 
 ```bash
-uv sync
+make install/dev
 ```
+
+Use the `make` target rather than `uv sync` directly. Dev tooling belongs in `.venv-dev`, and plain `uv` would install it into the `.venv` the engine builds beside the manifest, which makes the library load as FLAWED. See [CONTRIBUTING.md](CONTRIBUTING.md#two-virtual-environments) for why.
 
 ### Running Tests
 
 ```bash
 # Unit tests only (no EXR files required)
-uv run pytest tests/unit/
+make test/unit
 
-# Full suite including integration tests (fixtures auto-generated on first run)
-uv run pytest tests/
+# Integration tests (fixtures auto-generated on first run)
+make test/integration
+
+# Full suite
+make test
 ```
 
 ### Lint and Type Check
 
 ```bash
-uv run ruff check .
-uv run pyright
+make check/lint
+make check/types
 ```
+
+A direct `uv run` needs `UV_PROJECT_ENVIRONMENT=.venv-dev`, for the reason above.
 
 ### Test Fixtures
 
@@ -393,7 +400,7 @@ make test/fixtures
 The fixtures are also generated automatically the first time you run `pytest`. The `openexr` Python package (included in dev dependencies) is required:
 
 ```bash
-uv sync --group dev
+make install/dev
 ```
 
 The fixture set covers:
