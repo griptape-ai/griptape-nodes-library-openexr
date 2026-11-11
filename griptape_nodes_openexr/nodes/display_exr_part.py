@@ -42,8 +42,7 @@ class DisplayEXRPart(SuccessFailureNode):
     In 'ocio' mode, a connected OCIOColorParamsArtifact drives an OCIO
     display-view transform. OCIO failures are always surfaced loudly.
 
-    The default color_mode is set to 'ocio' when the OpenColorIO library is
-    detected at node instantiation time, otherwise 'basic'.
+    color_mode defaults to 'basic', whether or not the OpenColorIO library is loaded.
     """
 
     def __init__(self, name: str, metadata: dict[Any, Any] | None = None) -> None:

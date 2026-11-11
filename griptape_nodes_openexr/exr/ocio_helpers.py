@@ -167,30 +167,41 @@ def add_color_mode_parameters(
     video passes False: an MP4 cannot carry an ICC profile, so it signals
     colour through stream tags and the switch would do nothing there.
 
-    Sets default mode based on OCIO availability, restores the saved mode from
-    node.metadata, and applies initial visibility. Returns the parameter
-    objects so the caller can store them as instance attributes, with None in
-    place of embed_color_profile when it was not registered.
+    The mode defaults to 'basic' whether or not OpenColorIO is loaded. Initial
+    visibility follows the saved mode in node.metadata, and then any color_mode
+    value restored from a saved workflow. Returns the parameter objects so the
+    caller can store them as instance attributes, with None in place of
+    embed_color_profile when it was not registered.
     """
-    default_mode = COLOR_MODE_OCIO if find_colorspace_transform_request_type() is not None else COLOR_MODE_BASIC
+    tone_mapping_name = "tone_mapping"
+    color_params_name = "color_params"
+    embed_profile_name = "embed_color_profile" if include_embed_profile else None
+
+    def apply_visibility_for_value(value: Any) -> Any:
+        # Converters run on every set, including the initial_setup replay of a saved
+        # workflow, which skips after_value_set. A workflow saved while 'ocio' was the
+        # default stores color_mode but no "_color_mode" metadata, so this is what
+        # gives it OCIO visibility.
+        apply_color_mode_visibility(
+            node, value == COLOR_MODE_OCIO, tone_mapping_name, color_params_name, embed_profile_name
+        )
+        return value
 
     color_mode_param = ParameterString(
         name="color_mode",
-        default_value=default_mode,
+        default_value=COLOR_MODE_BASIC,
         tooltip=color_mode_tooltip,
         allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
+        converters=[apply_visibility_for_value],
     )
     color_mode_param.add_trait(Options(choices=[COLOR_MODE_BASIC, COLOR_MODE_OCIO]))
     node.add_parameter(color_mode_param)
 
-    ocio_active = default_mode == COLOR_MODE_OCIO
-
     tone_mapping_param = ParameterString(
-        name="tone_mapping",
+        name=tone_mapping_name,
         default_value=TONE_DEFAULT,
         tooltip=tone_mapping_tooltip,
         allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
-        ui_options={"hide": ocio_active},
     )
     # allow_custom keeps the dropdown but disables the Options converter, which
     # rewrites any off-list value to choices[0]. A workflow saved with a retired
@@ -202,35 +213,30 @@ def add_color_mode_parameters(
     node.add_parameter(tone_mapping_param)
 
     color_params_param = Parameter(
-        name="color_params",
+        name=color_params_name,
         input_types=["OCIOColorParamsArtifact"],
         type="OCIOColorParamsArtifact",
         tooltip=color_params_tooltip,
         allowed_modes={ParameterMode.INPUT},
-        ui_options={"hide": not ocio_active},
+        ui_options={"hide": True},
     )
     node.add_parameter(color_params_param)
 
     embed_profile_param = None
-    if include_embed_profile:
+    if embed_profile_name is not None:
         embed_profile_param = ParameterBool(
-            name="embed_color_profile",
+            name=embed_profile_name,
             default_value=False,
             tooltip=embed_profile_tooltip,
             allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
-            ui_options={"hide": ocio_active},
         )
         node.add_parameter(embed_profile_param)
 
     # after_value_set is not called by the framework when restoring saved values,
     # so read the persisted mode from metadata to apply the correct initial visibility.
-    restored_mode = node.metadata.get("_color_mode", default_mode)
+    restored_mode = node.metadata.get("_color_mode", COLOR_MODE_BASIC)
     apply_color_mode_visibility(
-        node,
-        restored_mode == COLOR_MODE_OCIO,
-        tone_mapping_param.name,
-        color_params_param.name,
-        embed_profile_param.name if embed_profile_param is not None else None,
+        node, restored_mode == COLOR_MODE_OCIO, tone_mapping_name, color_params_name, embed_profile_name
     )
 
     return color_mode_param, tone_mapping_param, color_params_param, embed_profile_param
