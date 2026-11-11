@@ -13,19 +13,17 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from static_ffmpeg import run  # type: ignore[import-untyped]
 
 from griptape_nodes_openexr.exr.tone_mapping import TONE_CHOICES
 from griptape_nodes_openexr.nodes.exr_sequence_to_preview import _PIX_FMT, color_trc_for
 
-run = pytest.importorskip("static_ffmpeg.run", reason="static_ffmpeg not installed")
-
 
 @pytest.fixture(scope="module")
 def ffmpeg_tools() -> tuple[str, str]:
-    try:
-        ffmpeg, ffprobe = run.get_or_fetch_platform_executables_else_raise()
-    except Exception as exc:  # noqa: BLE001
-        pytest.skip(f"ffmpeg unavailable: {exc}")
+    # static_ffmpeg is a runtime dependency, so a failed fetch fails the test
+    # rather than skipping it: a skip here would pass CI with nothing checked.
+    ffmpeg, ffprobe = run.get_or_fetch_platform_executables_else_raise()
     return ffmpeg, ffprobe
 
 
