@@ -214,11 +214,11 @@ class TestInitialVisibility:
         mock_vis.assert_called_once()
         assert mock_vis.call_args[0][1] is False
 
-    def test_with_ocio_starts_in_ocio_mode(self) -> None:
+    def test_with_ocio_starts_in_basic_mode(self) -> None:
         with patch(f"{_OCIO_MODULE}.apply_color_mode_visibility") as mock_vis:
             _make_node(ocio_available=True)
         mock_vis.assert_called_once()
-        assert mock_vis.call_args[0][1] is True
+        assert mock_vis.call_args[0][1] is False
 
     def test_reload_with_saved_basic_uses_basic_even_when_ocio_available(self) -> None:
         with patch(f"{_OCIO_MODULE}.apply_color_mode_visibility") as mock_vis:
