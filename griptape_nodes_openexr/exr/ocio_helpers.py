@@ -167,11 +167,11 @@ def add_color_mode_parameters(
     video passes False: an MP4 cannot carry an ICC profile, so it signals
     colour through stream tags and the switch would do nothing there.
 
-    The mode defaults to 'basic' whether or not OpenColorIO is loaded. Initial
-    visibility follows the saved mode in node.metadata, and then any color_mode
-    value restored from a saved workflow. Returns the parameter objects so the
-    caller can store them as instance attributes, with None in place of
-    embed_color_profile when it was not registered.
+    The mode defaults to 'basic'. Initial visibility follows the saved mode in
+    node.metadata, and then any color_mode value restored from a saved workflow.
+    Returns the parameter objects so the caller can store them as instance
+    attributes, with None in place of embed_color_profile when it was not
+    registered.
     """
     tone_mapping_name = "tone_mapping"
     color_params_name = "color_params"
