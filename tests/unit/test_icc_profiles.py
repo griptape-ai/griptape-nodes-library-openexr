@@ -105,6 +105,15 @@ class TestProfileStructure:
     def test_distinct_curves_give_distinct_profiles(self) -> None:
         assert profile_for_tone_mapping("rec709") != profile_for_tone_mapping("rec1886")
 
+    @pytest.mark.parametrize(
+        ("tone", "base"),
+        [("ACEScg to sRGB", "sRGB"), ("ACEScg to rec709", "rec709"), ("ACES2065-1 to sRGB", "sRGB")],
+    )
+    def test_aces_choice_shares_its_base_profile(self, tone: str, base: str) -> None:
+        # The output is Rec.709 primaries with the base curve, which is what that profile says.
+        assert profile_for_tone_mapping(tone) is profile_for_tone_mapping(base)
+        assert PROFILE_DESCRIPTIONS[tone.lower()] == PROFILE_DESCRIPTIONS[base.lower()]
+
 
 class TestProfileParsing:
     @pytest.mark.parametrize("tone", TONE_CHOICES)

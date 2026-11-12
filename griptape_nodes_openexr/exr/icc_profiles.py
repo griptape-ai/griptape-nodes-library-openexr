@@ -17,8 +17,9 @@ library of its own, and deliberately imports neither PIL nor OpenColorIO: a
 profile is a bytes blob, and Pillow writes it with `save(icc_profile=...)`
 without parsing it.
 
-All our transforms share Rec.709 primaries, so the profiles differ only in
-their tone reproduction curve.
+Every transform writes Rec.709 primaries, so the profiles differ only in
+their tone reproduction curve. The ACES transforms convert to Rec.709 before
+encoding, so each shares the profile of the base transform it encodes with.
 """
 
 from __future__ import annotations
@@ -38,10 +39,12 @@ from griptape_nodes_openexr.exr.tone_mapping import (
     SRGB_LINEAR_CUTOFF,
     SRGB_OFFSET,
     SRGB_TOE_SLOPE,
+    TONE_CHOICES,
     TONE_RAW,
     TONE_REC709,
     TONE_REC1886,
     TONE_SRGB,
+    display_encoding,
 )
 
 TransferCurve = Literal["srgb", "rec709", "gamma"]
@@ -61,12 +64,25 @@ _ICC_HEADER_SIZE = 128
 _TAG_ENTRY_SIZE = 12
 _CURVE_SAMPLE_COUNT = 1024  # resolution of the sampled 'curv' TRC tags
 
-PROFILE_DESCRIPTIONS = {
+_ENCODING_DESCRIPTIONS = {
     TONE_SRGB.lower(): "sRGB IEC61966-2.1",
     TONE_REC709.lower(): "Rec.709",
     TONE_REC1886.lower(): "Rec.709 (BT.1886)",
     TONE_RAW.lower(): "Linear Rec.709",
 }
+
+
+def _encoding_of(tone: str) -> str:
+    encoding = display_encoding(tone)
+    if encoding is None:
+        msg = f"No display encoding for {tone!r}"
+        raise ValueError(msg)
+    return encoding
+
+
+# Keyed by every choice. An ACES choice shares its base choice's description,
+# because its output is that encoding with Rec.709 primaries.
+PROFILE_DESCRIPTIONS = {tone.lower(): _ENCODING_DESCRIPTIONS[_encoding_of(tone)] for tone in TONE_CHOICES}
 
 
 def _s15fixed16(value: float) -> bytes:
@@ -213,12 +229,14 @@ def build_icc_profile(description: str, trc: TransferCurve, gamma: float = 1.0) 
     return _header(total) + struct.pack(">I", len(order)) + entries + body
 
 
-_PROFILES = {
-    TONE_SRGB.lower(): build_icc_profile(PROFILE_DESCRIPTIONS[TONE_SRGB.lower()], "srgb"),
-    TONE_REC709.lower(): build_icc_profile(PROFILE_DESCRIPTIONS[TONE_REC709.lower()], "rec709"),
-    TONE_REC1886.lower(): build_icc_profile(PROFILE_DESCRIPTIONS[TONE_REC1886.lower()], "gamma", _REC1886_GAMMA),
-    TONE_RAW.lower(): build_icc_profile(PROFILE_DESCRIPTIONS[TONE_RAW.lower()], "gamma", _LINEAR_GAMMA),
+_ENCODING_PROFILES = {
+    TONE_SRGB.lower(): build_icc_profile(_ENCODING_DESCRIPTIONS[TONE_SRGB.lower()], "srgb"),
+    TONE_REC709.lower(): build_icc_profile(_ENCODING_DESCRIPTIONS[TONE_REC709.lower()], "rec709"),
+    TONE_REC1886.lower(): build_icc_profile(_ENCODING_DESCRIPTIONS[TONE_REC1886.lower()], "gamma", _REC1886_GAMMA),
+    TONE_RAW.lower(): build_icc_profile(_ENCODING_DESCRIPTIONS[TONE_RAW.lower()], "gamma", _LINEAR_GAMMA),
 }
+
+_PROFILES = {tone.lower(): _ENCODING_PROFILES[_encoding_of(tone)] for tone in TONE_CHOICES}
 
 
 def profile_for_tone_mapping(tone_mapping: str) -> bytes | None:

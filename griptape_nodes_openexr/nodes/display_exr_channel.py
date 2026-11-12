@@ -40,6 +40,8 @@ from griptape_nodes_openexr.exr.rendering import ndarray_to_png
 from griptape_nodes_openexr.exr.tone_mapping import (
     TONE_DEFAULT,
     apply_exposure,
+    convert_gamut,
+    gamut_matrix,
     srgb_to_linear,
     to_uint8,
 )
@@ -64,7 +66,8 @@ class DisplayEXRChannel(SuccessFailureNode):
     Single RGB channel → placed in its colour plane (R-only → red, etc.). Missing RGB slots → zero-filled plane.
     Connected alpha slot → RGBA output PNG.
 
-    In 'basic' mode, a local display transform (sRGB, rec709, rec1886 or raw) is applied.
+    In 'basic' mode, a local display transform (sRGB, rec709, rec1886, raw, or an ACES
+    transform such as 'ACEScg to sRGB') is applied.
     In 'ocio' mode, a connected OCIOColorParamsArtifact drives an OCIO
     display-view transform. OCIO failures are always surfaced loudly.
     """
@@ -373,11 +376,13 @@ def _render_channels(  # noqa: PLR0913
     height, width = rgb.shape[:2]
     bg_rgb = _load_background_rgb(background, width, height) if background is not None and alpha is not None else None
 
-    # Basic mode composites in linear light; OCIO composites its display output
-    # against the sRGB background because its source colourspace is unknown here.
+    # Basic mode composites in linear light. The sRGB background is first moved into
+    # the primaries the display transform expects, so an ACES transform's gamut
+    # conversion brings it back unchanged. OCIO composites its display output against
+    # the sRGB background because its source colourspace is unknown here.
     if color_params is None:
         if alpha is not None and bg_rgb is not None:
-            rgb = _composite(rgb, alpha, srgb_to_linear(bg_rgb))
+            rgb = _composite(rgb, alpha, _background_in_source_primaries(bg_rgb, tone_mapping))
         rgb, tone_mode = apply_color_management(rgb, color_params, tone_mapping)
         if alpha is not None and bg_rgb is not None:
             rgb[~coverage & (alpha >= 1.0)] = 0.0
@@ -413,6 +418,15 @@ def _build_rgb(pixels: dict[str, np.ndarray], height: int, width: int) -> np.nda
     g = pixels.get("G", zero).reshape(height, width)
     b = pixels.get("B", zero).reshape(height, width)
     return np.stack([r, g, b], axis=-1)
+
+
+def _background_in_source_primaries(bg_rgb: np.ndarray, tone_mapping: str) -> np.ndarray:
+    """Decode an sRGB background to linear light in the primaries `tone_mapping` expects."""
+    linear = srgb_to_linear(bg_rgb)
+    matrix = gamut_matrix(tone_mapping)
+    if matrix is None:
+        return linear
+    return convert_gamut(linear, np.linalg.inv(matrix))
 
 
 def _load_background_rgb(artifact: Any, width: int, height: int) -> np.ndarray:

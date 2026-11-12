@@ -35,9 +35,26 @@ because sRGB's effective gamma of roughly 2.2 sits between the two. `raw`
 applies no transfer function, which is useful for reading actual pixel values
 but looks dark on screen.
 
-Every choice is a pure transfer function, so scene values above 1.0 clip to
-white. Nuke's default viewer behaves the same way. Lower the `exposure` to
-bring highlights into range, or use `ocio` mode with a config that provides a
+These four assume linear Rec.709/sRGB primaries, so `sRGB` is also the view
+for a linear sRGB plate. For an ACES plate, pick a transform that converts its
+primaries to Rec.709 first and then applies one of the curves above:
+
+| Choice               | Source primaries | Then encodes as |
+| -------------------- | ---------------- | --------------- |
+| `ACEScg to sRGB`     | ACEScg (AP1)     | `sRGB`          |
+| `ACEScg to rec709`   | ACEScg (AP1)     | `rec709`        |
+| `ACES2065-1 to sRGB` | ACES2065-1 (AP0) | `sRGB`          |
+
+The conversion is a 3x3 matrix with a Bradford adaptation from the ACES white
+point to D65, so neutral greys stay neutral and render as they do with the
+matching base curve. Colours outside Rec.709 clip. This is a gamut conversion
+and display encode, not the ACES output transform (RRT and ODT): there is no
+tone curve or highlight roll-off, so it will not match an ACES view in Nuke or
+an OCIO ACES config. Use `ocio` mode for that.
+
+No choice applies a tone curve, so scene values above 1.0 clip to white.
+Nuke's default viewer behaves the same way. Lower the `exposure` to bring
+highlights into range, or use `ocio` mode with a config that provides a
 tone-mapped view transform such as ACES.
 
 Without an embedded profile, viewers decode the PNG as sRGB, so picking
