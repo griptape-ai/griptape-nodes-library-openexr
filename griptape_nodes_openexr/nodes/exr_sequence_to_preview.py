@@ -33,6 +33,7 @@ from griptape_nodes_openexr.exr.display_window import (
     add_window_mode_parameter,
     apply_window_mode,
     read_framing,
+    select_window_channels,
 )
 from griptape_nodes_openexr.exr.exr_io import build_rgb_array, load_exr_channels
 from griptape_nodes_openexr.exr.ocio_helpers import (
@@ -484,14 +485,20 @@ def _convert_frame(  # noqa: PLR0913, PLR0917
         msg = f"no displayable channels in '{exr_path}'"
         raise ValueError(msg)
 
+    # The data window is what was decoded, so only the other modes need the header.
+    framing = None
+    if window_mode != WINDOW_MODE_DATA:
+        framing = read_framing(window_mode, exr_path, part_index)
+        # Restrict validation and processing to the channels actually being rendered.
+        pixels, framing = select_window_channels({name: pixels[name] for name in selected}, framing)
+
     rgb = build_rgb_array(pixels, selected)
     rgb = apply_exposure(rgb, ev)
     rgb, _ = apply_color_management(rgb, color_params, tone_mapping)
     uint8_rgb = to_uint8(rgb)
 
-    # The data window is what was decoded, so only the other modes need the header.
-    if window_mode != WINDOW_MODE_DATA:
-        uint8_rgb = apply_window_mode(uint8_rgb, read_framing(window_mode, exr_path, part_index))
+    if framing is not None:
+        uint8_rgb = apply_window_mode(uint8_rgb, framing)
 
     out_path = temp_dir / f"converted_{frame_index:04d}.png"
     Image.fromarray(uint8_rgb, "RGB").save(out_path)

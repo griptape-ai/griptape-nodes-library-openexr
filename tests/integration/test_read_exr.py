@@ -528,7 +528,13 @@ class TestSequenceOverRealFiles:
 
 
 def _write_windowed(
-    path: Path, data: tuple[int, int, int, int], display: tuple[int, int, int, int], *, alpha: float | None = None
+    path: Path,
+    data: tuple[int, int, int, int],
+    display: tuple[int, int, int, int],
+    *,
+    alpha: float | None = None,
+    half: bool = False,
+    tiled: bool = False,
 ) -> Path:
     """Write an EXR with the given data and display windows, every pixel distinct."""
     import OpenEXR
@@ -545,6 +551,13 @@ def _write_windowed(
         "dataWindow": (np.array([x0, y0], dtype=np.int32), np.array([x1, y1], dtype=np.int32)),
         "displayWindow": (np.array(display[:2], dtype=np.int32), np.array(display[2:], dtype=np.int32)),
     }
+    if half:
+        channels = {name: plane.astype(np.float16) for name, plane in channels.items()}
+    if tiled:
+        header["type"] = OpenEXR.tiledimage
+        tiles = OpenEXR.TileDescription()
+        tiles.xSize = tiles.ySize = 8
+        header["tiles"] = tiles
     OpenEXR.File(header, channels).write(str(path))
     return path
 
@@ -597,7 +610,32 @@ _WINDOW_CASES = {
     "data-smaller-than-display": ((4, 2, 11, 7), (0, 0, 15, 11)),
     "partial-overlap": ((8, -4, 27, 7), (0, 0, 15, 11)),
     "negative-origins": ((-30, -20, -5, -3), (-24, -16, -9, -7)),
+    "disjoint": ((-8, -4, -1, 3), (0, 4, 15, 15)),
+    "shifted-equal-size": ((-8, -4, 7, 7), (0, 0, 15, 11)),
+    "matching-negative-origin": ((-16, -12, -1, -1), (-16, -12, -1, -1)),
 }
+
+
+@pytest.mark.parametrize("alpha", [None, 0.75])
+def test_channel_processing_uses_intersection(engine: _Engine, tmp_path: Path, alpha: float | None) -> None:
+    from griptape_nodes_openexr.nodes import display_exr_channel as channel_node
+
+    # Given real half-float tiled EXR channels with overscan.
+    path = _write_windowed(tmp_path / "crop.exr", *_WINDOW_CASES["overscan"], alpha=alpha, half=True, tiled=True)
+    part = _part_artifact(path)
+    values = {f"channel_{channel.name.lower()}": EXRChannelArtifact(str(path), 0, channel) for channel in part.channels}
+    with (
+        patch.object(channel_node, "apply_exposure", wraps=channel_node.apply_exposure) as exposure,
+        patch.object(channel_node, "apply_color_management", wraps=channel_node.apply_color_management) as colour,
+    ):
+        # When the channel node renders the display window without a background.
+        pixels = _render_with_display_node(
+            channel_node.DisplayEXRChannel, tmp_path, window_mode=WINDOW_MODE_DISPLAY, **values
+        )
+    # Then full-data planes never reach exposure or colour processing.
+    assert exposure.call_args.args[0].shape == (12, 16, 3)
+    assert colour.call_args.args[0].shape == (12, 16, 3)
+    assert pixels.shape == (12, 16, 3 if alpha is None else 4)
 
 
 class TestWindowModesAcrossNodes:
@@ -605,8 +643,10 @@ class TestWindowModesAcrossNodes:
 
     @pytest.mark.parametrize("mode", [WINDOW_MODE_DATA, WINDOW_MODE_DISPLAY, WINDOW_MODE_OVERLAY])
     @pytest.mark.parametrize("case", list(_WINDOW_CASES))
+    @pytest.mark.parametrize(("half", "tiled"), [(False, False), (True, False), (True, True)])
+    @pytest.mark.parametrize("alpha", [None, 0.75])
     def test_every_node_renders_the_same_framed_image(
-        self, engine: _Engine, tmp_path: Path, case: str, mode: str
+        self, engine: _Engine, tmp_path: Path, case: str, mode: str, half: bool, tiled: bool, alpha: float | None
     ) -> None:
         import asyncio
 
@@ -615,7 +655,7 @@ class TestWindowModesAcrossNodes:
         from griptape_nodes_openexr.nodes.exr_sequence_to_preview import _convert_frame
 
         data, display = _WINDOW_CASES[case]
-        path = _write_windowed(tmp_path / "windowed.exr", data, display)
+        path = _write_windowed(tmp_path / "windowed.exr", data, display, half=half, tiled=tiled, alpha=alpha)
         part = _part_artifact(path)
 
         read = _make_node()
@@ -633,6 +673,7 @@ class TestWindowModesAcrossNodes:
             channel_r=channels["R"],
             channel_g=channels["G"],
             channel_b=channels["B"],
+            channel_a=channels.get("A"),
             window_mode=mode,
         )
         frame_png = _convert_frame(str(path), 0, tmp_path, 0, 0.0, None, TONE_SRGB, mode)
@@ -640,10 +681,22 @@ class TestWindowModesAcrossNodes:
             frame_pixels = np.array(image)
 
         expected_size = window_size(WindowFraming.for_header(mode, part.header))
-        assert read_pixels.shape == (expected_size[1], expected_size[0], 3)
+        assert read_pixels.shape == (expected_size[1], expected_size[0], 3 if alpha is None else 4)
         np.testing.assert_array_equal(part_pixels, read_pixels)
         np.testing.assert_array_equal(channel_pixels, read_pixels)
-        np.testing.assert_array_equal(frame_pixels, read_pixels)
+        # Sequence previews deliberately omit alpha.
+        np.testing.assert_array_equal(frame_pixels, read_pixels[..., :3])
+        if mode == WINDOW_MODE_DISPLAY:
+            # Build the oracle from full-data pixels and coordinates independently of framing helpers.
+            reference = _render_with_display_node(DisplayEXRPart, tmp_path, part=part, window_mode=WINDOW_MODE_DATA)
+            expected = np.zeros_like(read_pixels)
+            xmin, xmax = max(data[0], display[0]), min(data[2], display[2])
+            ymin, ymax = max(data[1], display[1]), min(data[3], display[3])
+            if xmin <= xmax and ymin <= ymax:
+                expected[ymin - display[1] : ymax - display[1] + 1, xmin - display[0] : xmax - display[0] + 1] = (
+                    reference[ymin - data[1] : ymax - data[1] + 1, xmin - data[0] : xmax - data[0] + 1]
+                )
+            np.testing.assert_array_equal(read_pixels, expected)
         assert (read.parameter_output_values["image_width"], read.parameter_output_values["image_height"]) == (
             expected_size
         )

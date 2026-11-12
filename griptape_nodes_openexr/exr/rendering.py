@@ -13,7 +13,7 @@ import io
 import numpy as np
 from PIL import Image
 
-from griptape_nodes_openexr.exr.display_window import WindowFraming, apply_window_mode
+from griptape_nodes_openexr.exr.display_window import WindowFraming, apply_window_mode, select_window_channels
 from griptape_nodes_openexr.exr.exr_io import build_rgb_array, load_exr_channels
 from griptape_nodes_openexr.exr.icc_profiles import profile_for_tone_mapping
 from griptape_nodes_openexr.exr.ocio_helpers import ColorParamsProtocol, apply_color_management
@@ -67,6 +67,9 @@ def render_part_png(  # noqa: PLR0913
     except (ValueError, RuntimeError) as e:
         msg = f"Failed to load channels: {e}"
         raise RuntimeError(msg) from e
+
+    if framing is not None:
+        pixels, framing = select_window_channels(pixels, framing)
 
     try:
         rgb = build_rgb_array(pixels, selected)

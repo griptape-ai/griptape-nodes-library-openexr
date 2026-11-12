@@ -2,8 +2,9 @@
 
 An EXR part stores pixels for its data window, which can extend past the
 display window (overscan) or cover only part of it. The nodes that render a
-part decode the data window, then hand the display-encoded result to
-`apply_window_mode`, which crops it to the display window or outlines the
+part decode the data window, select its intersection with the display window
+before colour processing, then hand the display-encoded result to
+`apply_window_mode`, which places it in the display window or outlines the
 display window on top of it. Only the rendered image changes: the float
 channels and header metadata the nodes pass on keep the data window.
 """
@@ -19,11 +20,12 @@ from griptape_nodes.exe_types.param_types.parameter_string import ParameterStrin
 from griptape_nodes.traits.options import Options
 
 from griptape_nodes_openexr.exr.exr_io import scan_exr_header
+from griptape_nodes_openexr.exr.exr_types import WindowCoordinates
 
 if TYPE_CHECKING:
     from griptape_nodes.exe_types.node_types import BaseNode
 
-    from griptape_nodes_openexr.exr.exr_types import EXRHeader, WindowCoordinates
+    from griptape_nodes_openexr.exr.exr_types import EXRHeader
 
 WINDOW_MODE_DATA = "data window"
 WINDOW_MODE_DISPLAY = "display window"
@@ -97,6 +99,68 @@ def window_size(framing: WindowFraming) -> tuple[int, int]:
     return _width(window), _height(window)
 
 
+@dataclass(frozen=True)
+class WindowIntersection:
+    """Source and destination slices for the overlapping EXR coordinates."""
+
+    window: WindowCoordinates
+    source: tuple[slice, slice]
+    destination: tuple[slice, slice]
+
+    @classmethod
+    def for_framing(cls, framing: WindowFraming) -> WindowIntersection | None:
+        data, display = framing.data_window, framing.display_window
+        xmin, xmax = max(data.xmin, display.xmin), min(data.xmax, display.xmax)
+        ymin, ymax = max(data.ymin, display.ymin), min(data.ymax, display.ymax)
+        if xmin > xmax or ymin > ymax:
+            return None
+        return cls(
+            window=WindowCoordinates(xmin, ymin, xmax, ymax),
+            source=(slice(ymin - data.ymin, ymax - data.ymin + 1), slice(xmin - data.xmin, xmax - data.xmin + 1)),
+            destination=(
+                slice(ymin - display.ymin, ymax - display.ymin + 1),
+                slice(xmin - display.xmin, xmax - display.xmin + 1),
+            ),
+        )
+
+
+def select_window_channels(
+    pixels: dict[str, np.ndarray], framing: WindowFraming
+) -> tuple[dict[str, np.ndarray], WindowFraming]:
+    """Select retained channel planes before RGB assembly and colour processing.
+
+    The loader still decodes and converts the full planes. Returned views keep
+    those arrays alive, while subsequent RGB allocations cover only the overlap.
+    The returned framing describes the selected region for final placement.
+    Disjoint windows retain full processing to preserve colour validation errors
+    and avoid passing empty arrays to colour processors.
+    """
+    for plane in pixels.values():
+        _validate_window_shape(plane, framing)
+    if framing.mode != WINDOW_MODE_DISPLAY:
+        return pixels, framing
+    intersection = WindowIntersection.for_framing(framing)
+    if intersection is None:
+        return pixels, framing
+    selected = {name: plane[intersection.source] for name, plane in pixels.items()}
+    return selected, WindowFraming(framing.mode, intersection.window, framing.display_window)
+
+
+def _validate_window_shape(image: np.ndarray, framing: WindowFraming) -> None:
+    if framing.mode not in WINDOW_MODE_CHOICES:
+        msg = f"Unknown window_mode '{framing.mode}'. Choose one of: {', '.join(WINDOW_MODE_CHOICES)}"
+        raise ValueError(msg)
+    if framing.mode == WINDOW_MODE_DATA:
+        return
+    expected = (_height(framing.data_window), _width(framing.data_window))
+    if image.shape[:2] != expected:
+        msg = (
+            f"window_mode '{framing.mode}' needs an image the size of the data window "
+            f"({expected[1]}x{expected[0]}), got {image.shape[1]}x{image.shape[0]}"
+        )
+        raise ValueError(msg)
+
+
 def apply_window_mode(image: np.ndarray, framing: WindowFraming) -> np.ndarray:
     """Frame a display-encoded `(H, W, C)` image of the data window.
 
@@ -113,36 +177,24 @@ def apply_window_mode(image: np.ndarray, framing: WindowFraming) -> np.ndarray:
         ValueError: If the mode is unknown, or the image does not match the data
             window (subsampled channels, for instance).
     """
-    if framing.mode not in WINDOW_MODE_CHOICES:
-        msg = f"Unknown window_mode '{framing.mode}'. Choose one of: {', '.join(WINDOW_MODE_CHOICES)}"
-        raise ValueError(msg)
+    _validate_window_shape(image, framing)
     if framing.mode == WINDOW_MODE_DATA:
         return image
 
     data = framing.data_window
-    expected = (_height(data), _width(data))
-    if image.shape[:2] != expected:
-        msg = (
-            f"window_mode '{framing.mode}' needs an image the size of the data window "
-            f"({expected[1]}x{expected[0]}), got {image.shape[1]}x{image.shape[0]}"
-        )
-        raise ValueError(msg)
-
     if framing.mode == WINDOW_MODE_DISPLAY:
         return _crop_to_display_window(image, data, framing.display_window)
     return _outline_display_window(image, data, framing.display_window)
 
 
 def _crop_to_display_window(image: np.ndarray, data: WindowCoordinates, display: WindowCoordinates) -> np.ndarray:
+    if data == display:
+        return image
     # Zeros are black, and transparent when the image has alpha.
     out = np.zeros((_height(display), _width(display), image.shape[2]), dtype=image.dtype)
-    xmin, xmax = max(data.xmin, display.xmin), min(data.xmax, display.xmax)
-    ymin, ymax = max(data.ymin, display.ymin), min(data.ymax, display.ymax)
-    if xmin > xmax or ymin > ymax:
-        return out
-    out[ymin - display.ymin : ymax - display.ymin + 1, xmin - display.xmin : xmax - display.xmin + 1] = image[
-        ymin - data.ymin : ymax - data.ymin + 1, xmin - data.xmin : xmax - data.xmin + 1
-    ]
+    intersection = WindowIntersection.for_framing(WindowFraming(WINDOW_MODE_DISPLAY, data, display))
+    if intersection is not None:
+        out[intersection.destination] = image[intersection.source]
     return out
 
 
