@@ -444,6 +444,32 @@ class TestChannelOrder:
         emitted = [channel.channel.name for channel in node.parameter_output_values["channels"]]
         assert emitted == ["R", "G", "B", "A", "depth.Z"]
 
+    def test_layer_channels_holds_the_selected_layer(self, harness: _Harness, tmp_path: Path) -> None:
+        names = ("A", "B", "G", "R", "diffuse.B", "diffuse.G", "diffuse.R", "depth.Z")
+        harness.exr_data = _make_exr_data(_make_part("", names))
+        harness.pixels = _make_pixels(names)
+        node = _make_node()
+        node.set_parameter_value("path", str(_single_file(tmp_path)))
+        node.set_parameter_value("layer", "diffuse")
+        asyncio.run(node.aprocess())
+
+        assert _was_successful(node) is True, _result_details(node)
+        emitted = [channel.channel.name for channel in node.parameter_output_values["layer_channels"]]
+        assert emitted == ["diffuse.R", "diffuse.G", "diffuse.B"]
+        # The full listing is unchanged by the layer choice.
+        assert len(node.parameter_output_values["channels"]) == len(names)
+
+    def test_layer_channels_defaults_to_the_rendered_layer(self, harness: _Harness, tmp_path: Path) -> None:
+        names = ("A", "B", "G", "R", "depth.Z")
+        harness.exr_data = _make_exr_data(_make_part("", names))
+        harness.pixels = _make_pixels(names)
+        node = _make_node()
+        node.set_parameter_value("path", str(_single_file(tmp_path)))
+        asyncio.run(node.aprocess())
+
+        emitted = [channel.channel.name for channel in node.parameter_output_values["layer_channels"]]
+        assert emitted == ["R", "G", "B", "A"]
+
 
 class TestDropdowns:
     def test_multi_part_populates_part_choices(self, harness: _Harness, tmp_path: Path) -> None:

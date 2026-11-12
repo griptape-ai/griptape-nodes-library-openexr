@@ -35,12 +35,13 @@ An **Open in external viewer** button opens the source EXR in a configured HDR v
 | `image`                        | `ImageUrlArtifact`         | 8-bit PNG (RGB or RGBA) of the current frame                      |
 | `part`                         | `EXRPartArtifact`          | Descriptor for the part that was read, carrying the float data on |
 | `channels`                     | `list[EXRChannelArtifact]` | One descriptor per channel in that part                           |
+| `layer_channels`               | `list[EXRChannelArtifact]` | The channels of the selected layer, R, G, B, A first              |
 | `image_width` / `image_height` | `int`                      | Dimensions from the data window                                   |
 | `part_count` / `channel_count` | `int`                      | Parts in the file, channels in the part that was read             |
 | `first_frame` / `last_frame`   | `int`                      | Sequence bounds; `0` for a single file                            |
 | `frame_count`                  | `int`                      | Frames in the sequence; `1` for a single file                     |
 
-The `image` output is a rendered 8-bit PNG rather than the `.exr` itself, because the standard library's image nodes cannot open an EXR and have no float or greater-than-8-bit path. The float data travels on `part` and `channels` instead, so a downstream **Display EXR Channel** still gets the real pixels.
+The `image` output is a rendered 8-bit PNG rather than the `.exr` itself, because the standard library's image nodes cannot open an EXR and have no float or greater-than-8-bit path. The float data travels on `part` and `channels` instead, so a downstream **Display EXR Channel** still gets the real pixels. Connect `layer_channels` straight to `channels` on **Display EXR Channel** or **Save EXR**; no Get From List is needed. It holds the layer chosen in `layer`, so the downstream node gets the channels this node renders. `channels` connects too, and fills the slots from the file's first RGB layer whatever `layer` says.
 
 #### Iterating a sequence
 
@@ -244,10 +245,13 @@ ______________________________________________________________________
 
 Combines 1–4 individual `EXRChannelArtifact` inputs into an 8-bit PNG (RGB or RGBA). An **Open in external viewer** button opens the source EXR after the node has been run. See [Library Settings](#library-settings). Each slot (R, G, B, A) is optional and can come from different EXR files or different parts. Missing RGB slots are zero-filled; connecting the A slot produces RGBA output with optional background compositing.
 
+A channel list, such as **Read EXR**'s `channels` or `layer_channels`, connects to `channels` and fills the slots by channel name: R, G and B from the first layer that has all three, A from that layer, and a lone channel in all three RGB slots as grayscale. Connect `layer_channels` to get the layer Read EXR renders. A channel connected to a slot replaces the one the list put there.
+
 **Inputs**
 
 | Parameter             | Type                                       | Description                                                                                                      |
 | --------------------- | ------------------------------------------ | ---------------------------------------------------------------------------------------------------------------- |
+| `channels`            | `list[EXRChannelArtifact]`                 | Channel list that fills R, G, B and A. Optional; a connected slot below replaces its channel.                    |
 | `channel_r`           | `EXRChannelArtifact`                       | Channel mapped to the red plane. Optional.                                                                       |
 | `channel_g`           | `EXRChannelArtifact`                       | Channel mapped to the green plane. Optional.                                                                     |
 | `channel_b`           | `EXRChannelArtifact`                       | Channel mapped to the blue plane. Optional.                                                                      |
@@ -265,7 +269,7 @@ Combines 1–4 individual `EXRChannelArtifact` inputs into an 8-bit PNG (RGB or 
 | `image`       | `ImageUrlArtifact` | 8-bit PNG (RGB or RGBA) for in-canvas display |
 | `output_file` | `str`              | Path to the saved PNG file                    |
 
-At least one RGB slot must be connected. All connected channels must have the same pixel dimensions.
+At least one RGB slot must be filled, by the list or a connection. All connected channels must have the same pixel dimensions.
 
 ______________________________________________________________________
 
@@ -274,13 +278,14 @@ ______________________________________________________________________
 Saves a single-part EXR file from either an 8-bit image or EXR channel artifacts. Operates in two modes:
 
 - **Mode A (image input)** — accepts an `ImageArtifact` or `ImageUrlArtifact` (8-bit PNG/JPEG), normalises pixel values from [0, 255] to [0.0, 1.0], and writes R, G, B channels.
-- **Mode B (channel input)** — accepts up to four `EXRChannelArtifact` slots (R, G, B, A), loads their pixel arrays, and writes them preserving float precision. Mode B takes priority when any channel slot is connected.
+- **Mode B (channel input)** — accepts up to four `EXRChannelArtifact` slots (R, G, B, A), or a channel list on `channels` that fills them as on **Display EXR Channel** except that a lone channel is written once, as R, loads their pixel arrays, and writes them preserving float precision. Mode B takes priority when the list or any channel slot is connected.
 
 **Inputs**
 
 | Parameter     | Type                                | Description                                                                                                                                                                                                                                                                                                           |
 | ------------- | ----------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `image_in`    | `ImageArtifact \| ImageUrlArtifact` | 8-bit image source (Mode A). Ignored when any channel slot is connected.                                                                                                                                                                                                                                              |
+| `image_in`    | `ImageArtifact \| ImageUrlArtifact` | 8-bit image source (Mode A). Ignored when `channels` or any channel slot is connected.                                                                                                                                                                                                                                |
+| `channels`    | `list[EXRChannelArtifact]`          | Channel list that fills R, G, B and A, as on Display EXR Channel (Mode B). Optional; a connected slot below replaces its channel.                                                                                                                                                                                     |
 | `channel_r`   | `EXRChannelArtifact`                | Channel to write as R (Mode B). Optional.                                                                                                                                                                                                                                                                             |
 | `channel_g`   | `EXRChannelArtifact`                | Channel to write as G (Mode B). Optional.                                                                                                                                                                                                                                                                             |
 | `channel_b`   | `EXRChannelArtifact`                | Channel to write as B (Mode B). Optional.                                                                                                                                                                                                                                                                             |

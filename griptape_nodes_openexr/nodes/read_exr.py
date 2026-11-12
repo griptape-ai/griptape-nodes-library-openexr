@@ -305,6 +305,19 @@ class ReadEXR(SuccessFailureNode):
         )
         self.add_parameter(self._channels_param)
 
+        self._layer_channels_param = Parameter(
+            name="layer_channels",
+            type="list[EXRChannelArtifact]",
+            output_type="list[EXRChannelArtifact]",
+            tooltip=(
+                "The channels of the selected layer, R, G, B, A first. Connect to channels on "
+                "Display EXR Channel or Save EXR to use the channels this node renders."
+            ),
+            allowed_modes={ParameterMode.OUTPUT},
+            settable=False,
+        )
+        self.add_parameter(self._layer_channels_param)
+
         self._output_file = ProjectFileParameter(
             node=self,
             name="output_file",
@@ -663,6 +676,7 @@ class ReadEXR(SuccessFailureNode):
         self.parameter_output_values[self._image_param.name] = None
         self.parameter_output_values[self._part_param.name] = None
         self.parameter_output_values[self._channels_param.name] = None
+        self.parameter_output_values[self._layer_channels_param.name] = None
         # The info outputs go too. Leaving them behind publishes a mixed state where the
         # dimensions describe the last good read and the bounds describe the failed one,
         # which is worse than publishing nothing.
@@ -926,11 +940,15 @@ class ReadEXR(SuccessFailureNode):
             # R, G, B, A rather than the alphabetical order EXR stores, matching LoadEXR.
             for channel in order_channels_for_display(part.channels)
         ]
+        # The same layer filter _select_channels renders from.
+        layer_names = set(channels_in_layer([c.name for c in part.channels], plan.layer)) if plan.layer else None
+        layer_artifacts = [a for a in channel_artifacts if layer_names is None or a.channel.name in layer_names]
 
         return {
             self._image_param.name: artifact,
             self._part_param.name: part_artifact,
             self._channels_param.name: channel_artifacts,
+            self._layer_channels_param.name: layer_artifacts,
             self._image_width_param.name: part.width,
             self._image_height_param.name: part.height,
             self._part_count_param.name: len(plan.exr_data.parts),
