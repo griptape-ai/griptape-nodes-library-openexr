@@ -1092,6 +1092,9 @@ class TestVideoColourTags:
             ("rec709", "bt709"),
             ("rec1886", "bt709"),
             ("raw", "linear"),
+            ("ACEScg to sRGB", "iec61966-2-1"),
+            ("ACEScg to rec709", "bt709"),
+            ("ACES2065-1 to sRGB", "iec61966-2-1"),
         ],
     )
     def test_transfer_characteristics_per_transform(self, tone: str, expected_trc: str) -> None:

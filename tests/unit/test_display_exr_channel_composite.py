@@ -101,6 +101,13 @@ class TestCompositeInLinearLight:
         out = _render(np.inf, 0.0, _background((10, 128, 240)))
         np.testing.assert_array_equal(out[0, 0], [10, 128, 240])
 
+    @pytest.mark.parametrize("tone", ["ACEScg to sRGB", "ACES2065-1 to sRGB"])
+    def test_coloured_background_keeps_its_colour_under_an_aces_transform(self, tone: str) -> None:
+        # The background is sRGB, not ACES, so the transform's gamut conversion must not
+        # recolour it: it is moved into ACES primaries first and comes back unchanged.
+        out = _render(1.0, 0.0, _background((200, 60, 40)), tone_mapping=tone)
+        np.testing.assert_allclose(out[0, 0].astype(int), [200, 60, 40], atol=1)
+
     def test_background_goes_through_the_selected_display_transform(self) -> None:
         # sRGB 128 decodes to linear 0.216; 'raw' writes that linear value unencoded.
         out = _render(1.0, 0.0, _background((128, 128, 128)), tone_mapping="raw")
