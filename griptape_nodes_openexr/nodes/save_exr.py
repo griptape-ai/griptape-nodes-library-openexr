@@ -29,6 +29,7 @@ from griptape_nodes.retained_mode.griptape_nodes import GriptapeNodes
 from griptape_nodes.traits.options import Options
 from PIL import Image
 
+from griptape_nodes_openexr.exr.channel_selection import resolve_channel_slots
 from griptape_nodes_openexr.exr.exr_header_artifact import EXRChannelArtifact, EXRPartArtifact
 from griptape_nodes_openexr.exr.exr_io import load_slot_channels, write_exr_channels
 from griptape_nodes_openexr.exr.exr_types import (
@@ -85,9 +86,12 @@ class SaveEXR(SuccessFailureNode):
     pixel values from [0, 255] to [0.0, 1.0], and writes R, G, B channels.
 
     Mode B (channel input): accepts up to four EXRChannelArtifact slots (R, G, B, A),
-    loads their pixel arrays, and writes them preserving float precision.
+    loads their pixel arrays, and writes them preserving float precision. The
+    `channels` input takes a list, such as ReadEXR's, and fills the slots by channel
+    name (see `slots_from_channel_list`), a lone channel as R only; a connected slot
+    overrides it.
 
-    Mode B takes priority when any channel slot is connected.
+    Mode B takes priority when the channel list or any channel slot is connected.
     """
 
     def __init__(self, name: str, metadata: dict[Any, Any] | None = None) -> None:
@@ -97,10 +101,23 @@ class SaveEXR(SuccessFailureNode):
             name="image_in",
             input_types=["ImageArtifact", "ImageUrlArtifact"],
             type="ImageArtifact",
-            tooltip="8-bit image to convert to EXR (Mode A). Ignored when any channel slot is connected.",
+            tooltip="8-bit image to convert to EXR (Mode A). Ignored when channels or any channel slot is connected.",
             allowed_modes={ParameterMode.INPUT},
         )
         self.add_parameter(self._image_in_param)
+
+        self._channels_param = Parameter(
+            name="channels",
+            input_types=["list[EXRChannelArtifact]"],
+            type="list[EXRChannelArtifact]",
+            tooltip=(
+                "Channel list, such as Read EXR's layer_channels (Mode B). Fills R, G, B and A by name from the "
+                "first layer with R, G and B; a lone channel is written as R. A channel connected to a slot below "
+                "replaces that slot's. Optional."
+            ),
+            allowed_modes={ParameterMode.INPUT},
+        )
+        self.add_parameter(self._channels_param)
 
         self._channel_r_param = Parameter(
             name="channel_r",
@@ -290,10 +307,6 @@ class SaveEXR(SuccessFailureNode):
         self._clear_execution_status()
 
         image_in: ImageArtifact | ImageUrlArtifact | None = self.get_parameter_value(self._image_in_param.name)
-        channel_r: EXRChannelArtifact | None = self.get_parameter_value(self._channel_r_param.name)
-        channel_g: EXRChannelArtifact | None = self.get_parameter_value(self._channel_g_param.name)
-        channel_b: EXRChannelArtifact | None = self.get_parameter_value(self._channel_b_param.name)
-        channel_a: EXRChannelArtifact | None = self.get_parameter_value(self._channel_a_param.name)
 
         compression_key = str(self.get_parameter_value(self._compression_param.name) or "ZIP")
         pixel_type_key = str(self.get_parameter_value(self._pixel_type_param.name) or "HALF")
@@ -308,18 +321,27 @@ class SaveEXR(SuccessFailureNode):
         pixel_type_str = _PIXEL_TYPE_TO_STR.get(pixel_type_key, "half")
         pixel_type_enum = _PIXEL_TYPE_TO_ENUM.get(pixel_type_key, PixelType.HALF)
 
-        channel_slots = {
-            slot: artifact
-            for slot, artifact in {"R": channel_r, "G": channel_g, "B": channel_b, "A": channel_a}.items()
-            if artifact is not None
-        }
+        channel_list: list[EXRChannelArtifact] = self.get_parameter_value(self._channels_param.name) or []
+        # A lone channel is written once, as R: copying it into G and B is a display rule.
+        channel_slots = resolve_channel_slots(
+            channel_list,
+            {
+                "R": self.get_parameter_value(self._channel_r_param.name),
+                "G": self.get_parameter_value(self._channel_g_param.name),
+                "B": self.get_parameter_value(self._channel_b_param.name),
+                "A": self.get_parameter_value(self._channel_a_param.name),
+            },
+            grayscale_fills_rgb=False,
+        )
+        written = {id(artifact) for artifact in channel_slots.values()}
+        unwritten = [artifact.channel.name for artifact in channel_list if id(artifact) not in written]
 
         if channel_slots:
             result = self._gather_mode_b_channels(channel_slots)
         elif image_in is not None:
             result = self._gather_mode_a_channels(image_in)
         else:
-            self._on_fail_handler("No input connected: connect image_in or at least one channel slot")
+            self._on_fail_handler("No input connected: connect image_in, channels, or at least one channel slot")
             return
 
         if isinstance(result, str):
@@ -393,6 +415,8 @@ class SaveEXR(SuccessFailureNode):
 
         channel_names = [ch.name for ch in channel_infos]
         details = f"Wrote {width}×{height} EXR ({mode}), channels: {channel_names}, {compression_key}, {pixel_type_key}"
+        if unwritten:
+            details += f". Not written from channels: {unwritten}"
         if shadowed:
             details += f". Ignored metadata_custom keys that duplicate dedicated parameters: {shadowed}"
         self._set_status_results(was_successful=True, result_details=details)

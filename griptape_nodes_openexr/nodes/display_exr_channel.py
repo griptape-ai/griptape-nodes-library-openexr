@@ -15,7 +15,7 @@ from griptape_nodes.exe_types.param_types.parameter_button import ParameterButto
 from griptape_nodes.exe_types.param_types.parameter_float import ParameterFloat
 from PIL import Image
 
-from griptape_nodes_openexr.exr.exr_header_artifact import EXRChannelArtifact
+from griptape_nodes_openexr.exr.channel_selection import resolve_channel_slots
 from griptape_nodes_openexr.exr.exr_io import load_slot_channels
 from griptape_nodes_openexr.exr.icc_profiles import profile_for_tone_mapping
 from griptape_nodes_openexr.exr.ocio_helpers import (
@@ -48,8 +48,10 @@ class DisplayEXRChannel(SuccessFailureNode):
     """Combine 1–4 EXR channel artifacts into an 8-bit PNG (RGB or RGBA).
 
     Each of the R, G, B, A input slots accepts an optional EXRChannelArtifact.
+    The `channels` input takes a list, such as ReadEXR's, and fills the slots by
+    channel name (see `slots_from_channel_list`); a connected slot overrides it.
     Channels may originate from different EXR files or different parts.
-    At least one RGB slot must be connected; the alpha slot is always optional.
+    At least one RGB slot must be filled, by the list or a connection; alpha is always optional.
 
     Single RGB channel → placed in its colour plane (R-only → red, etc.). Missing RGB slots → zero-filled plane.
     Connected alpha slot → RGBA output PNG.
@@ -63,6 +65,19 @@ class DisplayEXRChannel(SuccessFailureNode):
         super().__init__(name, metadata)
 
         self._current_exr_path: str | None = None
+
+        self._channels_param = Parameter(
+            name="channels",
+            input_types=["list[EXRChannelArtifact]"],
+            type="list[EXRChannelArtifact]",
+            tooltip=(
+                "Channel list, such as Read EXR's layer_channels. Fills R, G, B and A by name from the first layer "
+                "with R, G and B; a lone channel fills all three. A channel connected to a slot below replaces "
+                "that slot's. Optional."
+            ),
+            allowed_modes={ParameterMode.INPUT},
+        )
+        self.add_parameter(self._channels_param)
 
         self._channel_r_param = Parameter(
             name="channel_r",
@@ -187,19 +202,20 @@ class DisplayEXRChannel(SuccessFailureNode):
         self._clear_execution_status()
         self._current_exr_path = None
 
-        channel_r: EXRChannelArtifact | None = self.get_parameter_value(self._channel_r_param.name)
-        channel_g: EXRChannelArtifact | None = self.get_parameter_value(self._channel_g_param.name)
-        channel_b: EXRChannelArtifact | None = self.get_parameter_value(self._channel_b_param.name)
-        channel_a: EXRChannelArtifact | None = self.get_parameter_value(self._channel_a_param.name)
+        rgb_slots = resolve_channel_slots(
+            self.get_parameter_value(self._channels_param.name),
+            {
+                "R": self.get_parameter_value(self._channel_r_param.name),
+                "G": self.get_parameter_value(self._channel_g_param.name),
+                "B": self.get_parameter_value(self._channel_b_param.name),
+                "A": self.get_parameter_value(self._channel_a_param.name),
+            },
+        )
+        channel_a = rgb_slots.pop("A", None)
         background = self.get_parameter_value(self._background_param.name)
 
-        rgb_slots: dict[str, EXRChannelArtifact] = {
-            slot: artifact
-            for slot, artifact in {"R": channel_r, "G": channel_g, "B": channel_b}.items()
-            if artifact is not None
-        }
         if not rgb_slots:
-            self._on_fail_handler("At least one RGB channel slot must be connected")
+            self._on_fail_handler("Connect a channel list or at least one RGB channel slot")
             return
 
         first_artifact = next(iter(rgb_slots.values()))

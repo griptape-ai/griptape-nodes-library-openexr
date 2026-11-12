@@ -371,6 +371,44 @@ class TestSaveEXRModePriority:
         loaded = load_exr_channels(str(mock_project_file), 0)
         assert list(loaded.keys()) == ["R"]
 
+    def test_channel_list_takes_priority_over_image(self, mock_project_file: Path) -> None:
+        node = _make_node(mock_project_file)
+        node.set_parameter_value("image_in", _make_image_artifact())
+        node.set_parameter_value("channels", [_make_channel_artifact(name) for name in ("R", "G", "B", "A")])
+        asyncio.run(node.aprocess())
+        assert _was_successful(node) is True, _result_details(node)
+        loaded = load_exr_channels(str(mock_project_file), 0)
+        source = load_exr_channels(str(SINGLE_PART_RGBA), 0)
+        assert set(loaded) == {"R", "G", "B", "A"}
+        for name in loaded:
+            np.testing.assert_allclose(loaded[name], source[name], atol=1e-3)
+
+    def test_connected_slot_replaces_the_listed_channel(self, mock_project_file: Path) -> None:
+        node = _make_node(mock_project_file)
+        node.set_parameter_value("channels", [_make_channel_artifact(name) for name in ("R", "G", "B")])
+        node.set_parameter_value("channel_r", _make_channel_artifact("G"))
+        asyncio.run(node.aprocess())
+        assert _was_successful(node) is True, _result_details(node)
+        loaded = load_exr_channels(str(mock_project_file), 0)
+        source = load_exr_channels(str(SINGLE_PART_RGBA), 0)
+        np.testing.assert_allclose(loaded["R"], source["G"], atol=1e-3)
+
+    def test_lone_listed_channel_is_written_once(self, mock_project_file: Path) -> None:
+        node = _make_node(mock_project_file)
+        node.set_parameter_value("channels", [_make_channel_artifact("G")])
+        asyncio.run(node.aprocess())
+        assert _was_successful(node) is True, _result_details(node)
+        assert list(load_exr_channels(str(mock_project_file), 0)) == ["R"]
+
+    def test_listed_channels_left_out_are_reported(self, mock_project_file: Path) -> None:
+        node = _make_node(mock_project_file)
+        node.set_parameter_value("channels", [_make_channel_artifact(name) for name in ("R", "G", "B", "A")])
+        node.set_parameter_value("channel_a", _make_channel_artifact("R"))
+        asyncio.run(node.aprocess())
+        assert _was_successful(node) is True, _result_details(node)
+        assert "Not written from channels" in _result_details(node)
+        assert "['A']" in _result_details(node)
+
     def test_no_input_fails_with_message(self, mock_project_file: Path) -> None:
         node = _make_node(mock_project_file)
         asyncio.run(node.aprocess())

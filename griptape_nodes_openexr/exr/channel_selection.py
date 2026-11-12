@@ -5,11 +5,13 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Mapping, Sequence
 
+    from griptape_nodes_openexr.exr.exr_header_artifact import EXRChannelArtifact
     from griptape_nodes_openexr.exr.exr_types import EXRChannelInfo
 
 _RGBA_RANK = {"R": 0, "G": 1, "B": 2, "A": 3}
+_SLOTS = ("R", "G", "B", "A")
 _RGB_CHANNEL_COUNT = 3
 
 
@@ -204,3 +206,56 @@ def default_layer(channel_names: list[str]) -> str | None:
     if not selected:
         return None
     return layer_prefix(selected[0])
+
+
+def slots_from_channel_list(
+    channels: Sequence[EXRChannelArtifact], *, grayscale_fills_rgb: bool = True
+) -> dict[str, EXRChannelArtifact]:
+    """Assign a channel list to R, G, B and A slots by channel name.
+
+    RGB comes from `select_display_channels` and alpha from `select_alpha_channel`,
+    the rules Read EXR uses to pick its default layer. A single-channel pick goes in
+    R, and also in G and B when `grayscale_fills_rgb` is set, giving a grayscale image.
+    When two entries share a name, the first one wins.
+
+    Args:
+        channels: Channel descriptors, such as Read EXR's `channels` output.
+        grayscale_fills_rgb: Whether a single-channel pick fills G and B as well as R.
+
+    Returns:
+        Slot name to channel, in R, G, B, A order. Empty when `channels` is empty.
+    """
+    by_name: dict[str, EXRChannelArtifact] = {}
+    for artifact in channels:
+        by_name.setdefault(artifact.channel.name, artifact)
+    names = list(by_name)
+    selected = select_display_channels(names)
+    if selected is None:
+        return {}
+    alpha = select_alpha_channel(names, selected)
+    rgb = selected * _RGB_CHANNEL_COUNT if len(selected) == 1 and grayscale_fills_rgb else selected
+    slots = {slot: by_name[name] for slot, name in zip("RGB", rgb, strict=False)}
+    if alpha is not None:
+        slots["A"] = by_name[alpha]
+    return slots
+
+
+def resolve_channel_slots(
+    channels: Sequence[EXRChannelArtifact] | None,
+    connected: Mapping[str, EXRChannelArtifact | None],
+    *,
+    grayscale_fills_rgb: bool = True,
+) -> dict[str, EXRChannelArtifact]:
+    """Combine a channel list with individually connected slots; a connected slot wins.
+
+    Args:
+        channels: The node's channel-list input, or None when it is not connected.
+        connected: Slot name (R, G, B, A) to the channel connected to that slot, or None.
+        grayscale_fills_rgb: Passed to `slots_from_channel_list`.
+
+    Returns:
+        Slot name to channel for every filled slot, in R, G, B, A order.
+    """
+    listed = slots_from_channel_list(channels or [], grayscale_fills_rgb=grayscale_fills_rgb)
+    resolved = {slot: connected.get(slot) or listed.get(slot) for slot in _SLOTS}
+    return {slot: artifact for slot, artifact in resolved.items() if artifact is not None}
