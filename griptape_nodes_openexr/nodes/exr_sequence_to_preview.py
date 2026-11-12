@@ -27,6 +27,14 @@ from PIL import Image
 from static_ffmpeg import run  # type: ignore[import-untyped]
 
 from griptape_nodes_openexr.exr.channel_selection import select_display_channels
+from griptape_nodes_openexr.exr.display_window import (
+    WINDOW_MODE_DATA,
+    WINDOW_MODE_DEFAULT,
+    add_window_mode_parameter,
+    apply_window_mode,
+    read_framing,
+    select_window_channels,
+)
 from griptape_nodes_openexr.exr.exr_io import build_rgb_array, load_exr_channels
 from griptape_nodes_openexr.exr.ocio_helpers import (
     COLOR_MODE_OCIO,
@@ -132,6 +140,8 @@ class EXRSequenceToPreview(SuccessFailureNode):
             allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
         )
         self.add_parameter(self._part_index_param)
+
+        self._window_mode_param = add_window_mode_parameter(self)
 
         self._exposure_param = ParameterFloat(
             name="exposure",
@@ -290,6 +300,7 @@ class EXRSequenceToPreview(SuccessFailureNode):
         threads = int(self.get_parameter_value(self._threads_param.name))
         fmt = str(self.get_parameter_value(self._format_param.name))
         missing_frames = str(self.get_parameter_value(self._missing_frames_param.name))
+        window_mode = str(self.get_parameter_value(self._window_mode_param.name) or WINDOW_MODE_DEFAULT)
 
         color_params: ColorParamsProtocol | None = None
         if color_mode == COLOR_MODE_OCIO:
@@ -308,7 +319,7 @@ class EXRSequenceToPreview(SuccessFailureNode):
             log_step = max(1, total * _LOG_INTERVAL_PCT // 100)
 
             def _convert(i: int, entry: SequenceEntry) -> Path:
-                return _convert_frame(entry.path, i, temp_path, part_index, ev, color_params, tone_mapping)
+                return _convert_frame(entry.path, i, temp_path, part_index, ev, color_params, tone_mapping, window_mode)
 
             def _on_frame_done(frames_done: int) -> None:
                 self.parameter_output_values[self._frames_processed_param.name] = frames_done
@@ -446,7 +457,7 @@ class EXRSequenceToPreview(SuccessFailureNode):
         logger.info("%s: %s", self.name, details)
 
 
-def _convert_frame(
+def _convert_frame(  # noqa: PLR0913, PLR0917
     exr_path: str,
     frame_index: int,
     temp_dir: Path,
@@ -454,11 +465,13 @@ def _convert_frame(
     ev: float,
     color_params: ColorParamsProtocol | None,
     tone_mapping: str,
+    window_mode: str = WINDOW_MODE_DEFAULT,
 ) -> Path:
     """Load one EXR frame, apply colour management, and write a PNG to temp_dir.
 
     Runs on a thread-pool worker. Raises on any failure so the caller can
-    collect errors without aborting the whole run.
+    collect errors without aborting the whole run. Each frame is framed by its
+    own header's windows.
 
     Returns:
         The written PNG, named for frame_index. Pass the frames for ffmpeg
@@ -472,10 +485,20 @@ def _convert_frame(
         msg = f"no displayable channels in '{exr_path}'"
         raise ValueError(msg)
 
+    # The data window is what was decoded, so only the other modes need the header.
+    framing = None
+    if window_mode != WINDOW_MODE_DATA:
+        framing = read_framing(window_mode, exr_path, part_index)
+        # Restrict validation and processing to the channels actually being rendered.
+        pixels, framing = select_window_channels({name: pixels[name] for name in selected}, framing)
+
     rgb = build_rgb_array(pixels, selected)
     rgb = apply_exposure(rgb, ev)
     rgb, _ = apply_color_management(rgb, color_params, tone_mapping)
     uint8_rgb = to_uint8(rgb)
+
+    if framing is not None:
+        uint8_rgb = apply_window_mode(uint8_rgb, framing)
 
     out_path = temp_dir / f"converted_{frame_index:04d}.png"
     Image.fromarray(uint8_rgb, "RGB").save(out_path)

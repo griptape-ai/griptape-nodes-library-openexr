@@ -22,6 +22,7 @@ An **Open in external viewer** button opens the source EXR in a configured HDR v
 | `part_name`           | `str`             | Which part to read, as `"0: rgba"`, `"1: depth"`. Populated after the scan, hidden for single-part files.                                |
 | `layer`               | `str`             | Which layer of the part to render. Populated after the scan, hidden when the part has one layer.                                         |
 | `frame`               | `int`             | Absolute frame number, matching the filenames on disk. Hidden for a single file.                                                         |
+| `window_mode`         | `str`             | `data window` (default), `display window`, or `data window with display overlay`. See [Display window](#display-window).                 |
 | `exposure`            | `float`           | Exposure in EV stops applied before tone mapping. Range -10 to +10, default `0.0`. In the Color Management group.                        |
 | `color_mode`          | `str`             | `basic` (local tone mapping) or `ocio` (connected `OCIOColorParamsArtifact`). Default `basic`.                                           |
 | `tone_mapping`        | `str`             | `sRGB`, `rec709`, `rec1886`, or `raw`. Default `sRGB`. See [Display transforms](#display-transforms). Used when `color_mode` is `basic`. |
@@ -30,15 +31,15 @@ An **Open in external viewer** button opens the source EXR in a configured HDR v
 
 **Outputs**
 
-| Parameter                      | Type                       | Description                                                       |
-| ------------------------------ | -------------------------- | ----------------------------------------------------------------- |
-| `image`                        | `ImageUrlArtifact`         | 8-bit PNG (RGB or RGBA) of the current frame                      |
-| `part`                         | `EXRPartArtifact`          | Descriptor for the part that was read, carrying the float data on |
-| `channels`                     | `list[EXRChannelArtifact]` | One descriptor per channel in that part                           |
-| `image_width` / `image_height` | `int`                      | Dimensions from the data window                                   |
-| `part_count` / `channel_count` | `int`                      | Parts in the file, channels in the part that was read             |
-| `first_frame` / `last_frame`   | `int`                      | Sequence bounds; `0` for a single file                            |
-| `frame_count`                  | `int`                      | Frames in the sequence; `1` for a single file                     |
+| Parameter                      | Type                       | Description                                                                                                                                            |
+| ------------------------------ | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `image`                        | `ImageUrlArtifact`         | 8-bit PNG (RGB or RGBA) of the current frame                                                                                                           |
+| `part`                         | `EXRPartArtifact`          | Descriptor for the part that was read, carrying the float data on                                                                                      |
+| `channels`                     | `list[EXRChannelArtifact]` | One descriptor per channel in that part                                                                                                                |
+| `image_width` / `image_height` | `int`                      | Dimensions of the rendered `image`: the display window in `display window` mode, otherwise the data window. `part` keeps the data window's dimensions. |
+| `part_count` / `channel_count` | `int`                      | Parts in the file, channels in the part that was read                                                                                                  |
+| `first_frame` / `last_frame`   | `int`                      | Sequence bounds; `0` for a single file                                                                                                                 |
+| `frame_count`                  | `int`                      | Frames in the sequence; `1` for a single file                                                                                                          |
 
 The `image` output is a rendered 8-bit PNG rather than the `.exr` itself, because the standard library's image nodes cannot open an EXR and have no float or greater-than-8-bit path. The float data travels on `part` and `channels` instead, so a downstream **Display EXR Channel** still gets the real pixels.
 
@@ -147,13 +148,14 @@ An **Open in external viewer** button opens the source EXR in a configured HDR v
 
 **Inputs**
 
-| Parameter             | Type              | Description                                                                                                      |
-| --------------------- | ----------------- | ---------------------------------------------------------------------------------------------------------------- |
-| `part`                | `EXRPartArtifact` | EXR part to render. Assumes scene-linear HDR data; no gamut conversion is applied.                               |
-| `exposure`            | `float`           | Exposure in EV stops applied before tone mapping. Range −10 to +10, default `0.0`.                               |
-| `color_mode`          | `str`             | `basic` (local tone mapping) or `ocio` (connected `OCIOColorParamsArtifact`). Default `basic`.                   |
-| `tone_mapping`        | `str`             | `sRGB`, `rec709`, `rec1886`, or `raw`. Default `sRGB`. See [Display transforms](#display-transforms).            |
-| `embed_color_profile` | `bool`            | Embed an ICC profile describing the display transform. Default `false`. See [Colour profiles](#colour-profiles). |
+| Parameter             | Type              | Description                                                                                                              |
+| --------------------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `part`                | `EXRPartArtifact` | EXR part to render. Assumes scene-linear HDR data; no gamut conversion is applied.                                       |
+| `exposure`            | `float`           | Exposure in EV stops applied before tone mapping. Range −10 to +10, default `0.0`.                                       |
+| `window_mode`         | `str`             | `data window` (default), `display window`, or `data window with display overlay`. See [Display window](#display-window). |
+| `color_mode`          | `str`             | `basic` (local tone mapping) or `ocio` (connected `OCIOColorParamsArtifact`). Default `basic`.                           |
+| `tone_mapping`        | `str`             | `sRGB`, `rec709`, `rec1886`, or `raw`. Default `sRGB`. See [Display transforms](#display-transforms).                    |
+| `embed_color_profile` | `bool`            | Embed an ICC profile describing the display transform. Default `false`. See [Colour profiles](#colour-profiles).         |
 
 **Outputs**
 
@@ -201,6 +203,18 @@ output on an sRGB monitor. See [Colour profiles](#colour-profiles).
 > display encodings, matching Nuke's default viewer. Use `sRGB` for a similar
 > look, or `ocio` mode for a real tone-mapped view transform.
 
+#### Display window
+
+An EXR stores pixels for its _data window_, which can extend past the intended frame, the _display window_ (overscan), or cover only part of it. **Read EXR**, **Display EXR Part**, **Display EXR Channel** and **EXR Sequence to Preview** share a `window_mode` parameter that chooses which region the rendered image shows:
+
+| `window_mode`                      | Rendered image                                                                                                                                        |
+| ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `data window` (default)            | Every stored pixel, at the data window's size.                                                                                                        |
+| `display window`                   | The display window's size. Overscan is cropped away, and frame areas with no stored pixels are black, with zero alpha in RGBA output.                 |
+| `data window with display overlay` | Every stored pixel, with a dashed black-and-white outline just inside the display window's edge. Edges that fall outside the data window are clipped. |
+
+Only the rendered PNG or video changes. The EXR's channels, header metadata, and the `part` and `channels` outputs keep the data window, and **Load EXR** and **Load EXR Sequence** report both windows as stored. For a sequence, each frame is framed by its own header, so a data window that changes from frame to frame still renders at one size in `display window` mode. Workflows saved before this option existed load with `data window`, so they render as they did.
+
 #### Colour profiles
 
 By default the written PNG carries no colour profile, so viewers read it as
@@ -246,17 +260,18 @@ Combines 1–4 individual `EXRChannelArtifact` inputs into an 8-bit PNG (RGB or 
 
 **Inputs**
 
-| Parameter             | Type                                       | Description                                                                                                      |
-| --------------------- | ------------------------------------------ | ---------------------------------------------------------------------------------------------------------------- |
-| `channel_r`           | `EXRChannelArtifact`                       | Channel mapped to the red plane. Optional.                                                                       |
-| `channel_g`           | `EXRChannelArtifact`                       | Channel mapped to the green plane. Optional.                                                                     |
-| `channel_b`           | `EXRChannelArtifact`                       | Channel mapped to the blue plane. Optional.                                                                      |
-| `channel_a`           | `EXRChannelArtifact`                       | Channel used as alpha. Optional; when connected, output is RGBA.                                                 |
-| `exposure`            | `float`                                    | Exposure in EV stops applied before tone mapping. Range −10 to +10, default `0.0`.                               |
-| `color_mode`          | `str`                                      | `basic` (local tone mapping) or `ocio` (connected `OCIOColorParamsArtifact`). Default `basic`.                   |
-| `tone_mapping`        | `str`                                      | `sRGB`, `rec709`, `rec1886`, or `raw`. Default `sRGB`. See [Display transforms](#display-transforms).            |
-| `embed_color_profile` | `bool`                                     | Embed an ICC profile describing the display transform. Default `false`. See [Colour profiles](#colour-profiles). |
-| `background`          | `ImageArtifact \| ImageUrlArtifact \| str` | Background image for A-over-B compositing. Ignored when no alpha channel is connected.                           |
+| Parameter             | Type                                       | Description                                                                                                                                                                           |
+| --------------------- | ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `channel_r`           | `EXRChannelArtifact`                       | Channel mapped to the red plane. Optional.                                                                                                                                            |
+| `channel_g`           | `EXRChannelArtifact`                       | Channel mapped to the green plane. Optional.                                                                                                                                          |
+| `channel_b`           | `EXRChannelArtifact`                       | Channel mapped to the blue plane. Optional.                                                                                                                                           |
+| `channel_a`           | `EXRChannelArtifact`                       | Channel used as alpha. Optional; when connected, output is RGBA.                                                                                                                      |
+| `exposure`            | `float`                                    | Exposure in EV stops applied before tone mapping. Range −10 to +10, default `0.0`.                                                                                                    |
+| `window_mode`         | `str`                                      | `data window` (default), `display window`, or `data window with display overlay`, using the windows of the first connected RGB channel's part. See [Display window](#display-window). |
+| `color_mode`          | `str`                                      | `basic` (local tone mapping) or `ocio` (connected `OCIOColorParamsArtifact`). Default `basic`.                                                                                        |
+| `tone_mapping`        | `str`                                      | `sRGB`, `rec709`, `rec1886`, or `raw`. Default `sRGB`. See [Display transforms](#display-transforms).                                                                                 |
+| `embed_color_profile` | `bool`                                     | Embed an ICC profile describing the display transform. Default `false`. See [Colour profiles](#colour-profiles).                                                                      |
+| `background`          | `ImageArtifact \| ImageUrlArtifact \| str` | Background image for A-over-B compositing. Ignored when no alpha channel is connected.                                                                                                |
 
 **Outputs**
 
@@ -316,18 +331,19 @@ Bakes an EXR frame sequence down to a single MP4/MOV preview video, applying exp
 
 **Inputs**
 
-| Parameter          | Type                      | Description                                                                                           |
-| ------------------ | ------------------------- | ----------------------------------------------------------------------------------------------------- |
-| `sequence`         | `Sequence`                | Frame sequence from **Scan Sequence** / **Scan Split Sequence**                                       |
-| `frame_rate`       | `float`                   | Output frame rate. Default `24.0`.                                                                    |
-| `part_index`       | `int`                     | Part index to read from every frame. Default `0`.                                                     |
-| `exposure`         | `float`                   | Exposure in EV stops applied before tone mapping. Default `0.0`.                                      |
-| `color_mode`       | `str`                     | `basic` or `ocio`. Default `basic`.                                                                   |
-| `tone_mapping`     | `str`                     | `sRGB`, `rec709`, `rec1886`, or `raw`. Default `sRGB`. See [Display transforms](#display-transforms). |
-| `color_params`     | `OCIOColorParamsArtifact` | OCIO colour parameters. Required when `color_mode` is `ocio`.                                         |
-| `format`           | `str`                     | Output container: `mp4` or `mov`. Default `mp4`.                                                      |
-| `processing_speed` | `str`                     | `fast`, `balanced`, or `quality`. Trades encode speed for size/quality.                               |
-| `threads`          | `int`                     | Worker count for per-frame conversion. Range 1-16, default `4`. In the Advanced group.                |
+| Parameter          | Type                      | Description                                                                                                                                                  |
+| ------------------ | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `sequence`         | `Sequence`                | Frame sequence from **Scan Sequence** / **Scan Split Sequence**                                                                                              |
+| `frame_rate`       | `float`                   | Output frame rate. Default `24.0`.                                                                                                                           |
+| `part_index`       | `int`                     | Part index to read from every frame. Default `0`.                                                                                                            |
+| `exposure`         | `float`                   | Exposure in EV stops applied before tone mapping. Default `0.0`.                                                                                             |
+| `window_mode`      | `str`                     | `data window` (default), `display window`, or `data window with display overlay`, framed by each frame's own windows. See [Display window](#display-window). |
+| `color_mode`       | `str`                     | `basic` or `ocio`. Default `basic`.                                                                                                                          |
+| `tone_mapping`     | `str`                     | `sRGB`, `rec709`, `rec1886`, or `raw`. Default `sRGB`. See [Display transforms](#display-transforms).                                                        |
+| `color_params`     | `OCIOColorParamsArtifact` | OCIO colour parameters. Required when `color_mode` is `ocio`.                                                                                                |
+| `format`           | `str`                     | Output container: `mp4` or `mov`. Default `mp4`.                                                                                                             |
+| `processing_speed` | `str`                     | `fast`, `balanced`, or `quality`. Trades encode speed for size/quality.                                                                                      |
+| `threads`          | `int`                     | Worker count for per-frame conversion. Range 1-16, default `4`. In the Advanced group.                                                                       |
 
 **Outputs**
 

@@ -13,6 +13,12 @@ from griptape_nodes.exe_types.param_types.parameter_button import ParameterButto
 from griptape_nodes.exe_types.param_types.parameter_float import ParameterFloat
 
 from griptape_nodes_openexr.exr.channel_selection import select_alpha_channel, select_display_channels
+from griptape_nodes_openexr.exr.display_window import (
+    WINDOW_MODE_DEFAULT,
+    WindowFraming,
+    add_window_mode_parameter,
+    window_size,
+)
 from griptape_nodes_openexr.exr.exr_header_artifact import EXRPartArtifact
 from griptape_nodes_openexr.exr.ocio_helpers import (
     COLOR_MODE_BASIC,
@@ -70,6 +76,8 @@ class DisplayEXRPart(SuccessFailureNode):
             allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
         )
         self.add_parameter(self._exposure_param)
+
+        self._window_mode_param = add_window_mode_parameter(self)
 
         (
             self._color_mode_param,
@@ -166,6 +174,9 @@ class DisplayEXRPart(SuccessFailureNode):
                 self._on_fail_handler("OCIO mode requires a connected color_params artifact.")
                 return
 
+        window_mode = str(self.get_parameter_value(self._window_mode_param.name) or WINDOW_MODE_DEFAULT)
+        framing = WindowFraming.for_header(window_mode, part.header)
+
         try:
             png_bytes, tone_mode = render_part_png(
                 file_path=part.file_path,
@@ -176,6 +187,7 @@ class DisplayEXRPart(SuccessFailureNode):
                 color_params=color_params,
                 tone_mapping=tone_mapping,
                 embed_color_profile=bool(self.get_parameter_value(self._embed_color_profile_param.name)),
+                framing=framing,
             )
         except (ValueError, RuntimeError) as e:
             self._on_fail_handler(str(e))
@@ -193,6 +205,7 @@ class DisplayEXRPart(SuccessFailureNode):
         self.publish_update_to_parameter(self._image_param.name, artifact)
         label = part.name or f"part {part.part_index}"
         alpha_info = f", alpha: {alpha_channel}" if alpha_channel else ""
-        details = f"Rendered '{label}' — {part.width}×{part.height}, channels: {selected}{alpha_info}, EV={ev:+.1f}, {tone_mode}"
+        width, height = window_size(framing)
+        details = f"Rendered '{label}' — {width}×{height} ({window_mode}), channels: {selected}{alpha_info}, EV={ev:+.1f}, {tone_mode}"
         self._set_status_results(was_successful=True, result_details=details)
         logger.info("DisplayEXRPart '%s': %s", self.name, details)

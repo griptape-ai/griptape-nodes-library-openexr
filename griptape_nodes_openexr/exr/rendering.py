@@ -13,6 +13,7 @@ import io
 import numpy as np
 from PIL import Image
 
+from griptape_nodes_openexr.exr.display_window import WindowFraming, apply_window_mode, select_window_channels
 from griptape_nodes_openexr.exr.exr_io import build_rgb_array, load_exr_channels
 from griptape_nodes_openexr.exr.icc_profiles import profile_for_tone_mapping
 from griptape_nodes_openexr.exr.ocio_helpers import ColorParamsProtocol, apply_color_management
@@ -32,6 +33,7 @@ def render_part_png(  # noqa: PLR0913
     color_params: ColorParamsProtocol | None = None,
     tone_mapping: str,
     embed_color_profile: bool = False,
+    framing: WindowFraming | None = None,
 ) -> tuple[bytes, str]:
     """Load the selected channels, tone map them, and encode the result as PNG.
 
@@ -46,6 +48,8 @@ def render_part_png(  # noqa: PLR0913
         tone_mapping: Local display transform, used when color_params is None.
         embed_color_profile: Embed an ICC profile describing that transform.
             Ignored under OCIO, whose output is already display-referred.
+        framing: Crop to, or outline, the part's display window. None renders
+            the data window.
 
     Returns:
         A `(png_bytes, tone_mode)` pair, where tone_mode names the transform
@@ -53,8 +57,8 @@ def render_part_png(  # noqa: PLR0913
 
     Raises:
         RuntimeError: If the channels cannot be read or assembled.
-        ValueError: If colour management fails (OCIO errors carry their own
-            user-facing message).
+        ValueError: If colour management or framing fails (OCIO errors carry
+            their own user-facing message).
     """
     channels_to_load = selected + ([alpha_channel] if alpha_channel else [])
 
@@ -63,6 +67,9 @@ def render_part_png(  # noqa: PLR0913
     except (ValueError, RuntimeError) as e:
         msg = f"Failed to load channels: {e}"
         raise RuntimeError(msg) from e
+
+    if framing is not None:
+        pixels, framing = select_window_channels(pixels, framing)
 
     try:
         rgb = build_rgb_array(pixels, selected)
@@ -79,6 +86,9 @@ def render_part_png(  # noqa: PLR0913
         uint8 = np.concatenate([uint8_rgb, alpha_uint8], axis=-1)
     else:
         uint8 = uint8_rgb
+
+    if framing is not None:
+        uint8 = apply_window_mode(uint8, framing)
 
     # OCIO output carries no profile: the display/view transform resolves to
     # whatever the config's display colorspace is, which we cannot describe.

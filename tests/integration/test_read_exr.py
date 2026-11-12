@@ -14,7 +14,7 @@ from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
-from griptape.artifacts import ImageUrlArtifact
+from griptape.artifacts import ImageArtifact, ImageUrlArtifact
 from griptape_nodes.common.sequences import Sequence
 from griptape_nodes.retained_mode.engine import Engine
 from griptape_nodes.retained_mode.events.artifact_events import (
@@ -32,6 +32,14 @@ from griptape_nodes.retained_mode.griptape_nodes import GriptapeNodes
 from PIL import Image
 
 from griptape_nodes_openexr.exr.channel_selection import select_display_channels
+from griptape_nodes_openexr.exr.display_window import (
+    WINDOW_MODE_DATA,
+    WINDOW_MODE_DISPLAY,
+    WINDOW_MODE_OVERLAY,
+    WindowFraming,
+    apply_window_mode,
+    window_size,
+)
 from griptape_nodes_openexr.exr.exr_header_artifact import EXRChannelArtifact, EXRPartArtifact
 from griptape_nodes_openexr.exr.exr_io import scan_exr_header, write_exr_channels
 from griptape_nodes_openexr.exr.ocio_helpers import COLOR_MODE_BASIC, COLOR_MODE_OCIO
@@ -517,3 +525,331 @@ class TestSequenceOverRealFiles:
         assert _was_successful(node) is True, _result_details(node)
         after = _rendered(node)[..., :3].astype(np.int32).sum()
         assert after > before, "served a cached render of the old pixels"
+
+
+def _write_windowed(
+    path: Path,
+    data: tuple[int, int, int, int],
+    display: tuple[int, int, int, int],
+    *,
+    alpha: float | None = None,
+    half: bool = False,
+    tiled: bool = False,
+) -> Path:
+    """Write an EXR with the given data and display windows, every pixel distinct."""
+    import OpenEXR
+
+    x0, y0, x1, y1 = data
+    height, width = y1 - y0 + 1, x1 - x0 + 1
+    ys, xs = np.mgrid[0:height, 0:width].astype(np.float32)
+    channels = {"R": (xs + 1) / width, "G": (ys + 1) / height, "B": np.full((height, width), 0.25, np.float32)}
+    if alpha is not None:
+        channels["A"] = np.full((height, width), alpha, dtype=np.float32)
+    header = {
+        "compression": OpenEXR.NO_COMPRESSION,
+        "type": OpenEXR.scanlineimage,
+        "dataWindow": (np.array([x0, y0], dtype=np.int32), np.array([x1, y1], dtype=np.int32)),
+        "displayWindow": (np.array(display[:2], dtype=np.int32), np.array(display[2:], dtype=np.int32)),
+    }
+    if half:
+        channels = {name: plane.astype(np.float16) for name, plane in channels.items()}
+    if tiled:
+        header["type"] = OpenEXR.tiledimage
+        tiles = OpenEXR.TileDescription()
+        tiles.xSize = tiles.ySize = 8
+        header["tiles"] = tiles
+    OpenEXR.File(header, channels).write(str(path))
+    return path
+
+
+def _part_artifact(path: Path) -> EXRPartArtifact:
+    part = scan_exr_header(str(path)).parts[0]
+    return EXRPartArtifact(
+        file_path=str(path),
+        part_index=0,
+        name=part.header.name,
+        width=part.width,
+        height=part.height,
+        header=part.header,
+        channels=part.channels,
+    )
+
+
+def _render_with_display_node(node_class: type, tmp_path: Path, **values: Any) -> np.ndarray:
+    """Run Display EXR Part or Display EXR Channel and return its rendered pixels."""
+    import asyncio
+
+    with patch(f"{_OCIO_MODULE}.find_colorspace_transform_request_type", return_value=None):
+        node = node_class("test_display")
+    out = tmp_path / f"{node_class.__name__}.png"
+    destination = MagicMock()
+    destination.write_bytes.side_effect = lambda content: (out.write_bytes(content), MagicMock(location=str(out)))[1]
+    node._output_file = MagicMock()
+    node._output_file.build_file.return_value = destination
+    node.set_parameter_value("color_mode", COLOR_MODE_BASIC)
+    for name, value in values.items():
+        node.set_parameter_value(name, value)
+    with patch.object(node, "publish_update_to_parameter"):
+        asyncio.run(node.aprocess())
+    assert node.parameter_output_values.get("was_successful") is True, node.parameter_output_values.get(
+        "result_details"
+    )
+    with Image.open(out) as image:
+        return np.array(image)
+
+
+def _image_artifact(image: Image.Image) -> ImageArtifact:
+    buffer = BytesIO()
+    image.save(buffer, format="PNG")
+    return ImageArtifact(buffer.getvalue(), format="png", width=image.width, height=image.height)
+
+
+_WINDOW_CASES = {
+    "matching": ((0, 0, 15, 11), (0, 0, 15, 11)),
+    "overscan": ((-8, -4, 23, 15), (0, 0, 15, 11)),
+    "data-smaller-than-display": ((4, 2, 11, 7), (0, 0, 15, 11)),
+    "partial-overlap": ((8, -4, 27, 7), (0, 0, 15, 11)),
+    "negative-origins": ((-30, -20, -5, -3), (-24, -16, -9, -7)),
+    "disjoint": ((-8, -4, -1, 3), (0, 4, 15, 15)),
+    "shifted-equal-size": ((-8, -4, 7, 7), (0, 0, 15, 11)),
+    "matching-negative-origin": ((-16, -12, -1, -1), (-16, -12, -1, -1)),
+}
+
+
+@pytest.mark.parametrize("alpha", [None, 0.75])
+def test_channel_processing_uses_intersection(engine: _Engine, tmp_path: Path, alpha: float | None) -> None:
+    from griptape_nodes_openexr.nodes import display_exr_channel as channel_node
+
+    # Given real half-float tiled EXR channels with overscan.
+    path = _write_windowed(tmp_path / "crop.exr", *_WINDOW_CASES["overscan"], alpha=alpha, half=True, tiled=True)
+    part = _part_artifact(path)
+    values = {f"channel_{channel.name.lower()}": EXRChannelArtifact(str(path), 0, channel) for channel in part.channels}
+    with (
+        patch.object(channel_node, "apply_exposure", wraps=channel_node.apply_exposure) as exposure,
+        patch.object(channel_node, "apply_color_management", wraps=channel_node.apply_color_management) as colour,
+    ):
+        # When the channel node renders the display window without a background.
+        pixels = _render_with_display_node(
+            channel_node.DisplayEXRChannel, tmp_path, window_mode=WINDOW_MODE_DISPLAY, **values
+        )
+    # Then full-data planes never reach exposure or colour processing.
+    assert exposure.call_args.args[0].shape == (12, 16, 3)
+    assert colour.call_args.args[0].shape == (12, 16, 3)
+    assert pixels.shape == (12, 16, 3 if alpha is None else 4)
+
+
+class TestWindowModesAcrossNodes:
+    """Read EXR, Display EXR Part, Display EXR Channel and EXR Sequence to Preview frame alike."""
+
+    @pytest.mark.parametrize("mode", [WINDOW_MODE_DATA, WINDOW_MODE_DISPLAY, WINDOW_MODE_OVERLAY])
+    @pytest.mark.parametrize("case", list(_WINDOW_CASES))
+    @pytest.mark.parametrize(("half", "tiled"), [(False, False), (True, False), (True, True)])
+    @pytest.mark.parametrize("alpha", [None, 0.75])
+    def test_every_node_renders_the_same_framed_image(
+        self, engine: _Engine, tmp_path: Path, case: str, mode: str, half: bool, tiled: bool, alpha: float | None
+    ) -> None:
+        import asyncio
+
+        from griptape_nodes_openexr.nodes.display_exr_channel import DisplayEXRChannel
+        from griptape_nodes_openexr.nodes.display_exr_part import DisplayEXRPart
+        from griptape_nodes_openexr.nodes.exr_sequence_to_preview import _convert_frame
+
+        data, display = _WINDOW_CASES[case]
+        path = _write_windowed(tmp_path / "windowed.exr", data, display, half=half, tiled=tiled, alpha=alpha)
+        part = _part_artifact(path)
+
+        read = _make_node()
+        read.set_parameter_value("path", str(path))
+        read.set_parameter_value("window_mode", mode)
+        asyncio.run(_run(read))
+        assert _was_successful(read) is True, _result_details(read)
+        read_pixels = _rendered(read)
+
+        part_pixels = _render_with_display_node(DisplayEXRPart, tmp_path, part=part, window_mode=mode)
+        channels = {channel.name: EXRChannelArtifact(str(path), 0, channel) for channel in part.channels}
+        channel_pixels = _render_with_display_node(
+            DisplayEXRChannel,
+            tmp_path,
+            channel_r=channels["R"],
+            channel_g=channels["G"],
+            channel_b=channels["B"],
+            channel_a=channels.get("A"),
+            window_mode=mode,
+        )
+        frame_png = _convert_frame(str(path), 0, tmp_path, 0, 0.0, None, TONE_SRGB, mode)
+        with Image.open(frame_png) as image:
+            frame_pixels = np.array(image)
+
+        expected_size = window_size(WindowFraming.for_header(mode, part.header))
+        assert read_pixels.shape == (expected_size[1], expected_size[0], 3 if alpha is None else 4)
+        np.testing.assert_array_equal(part_pixels, read_pixels)
+        np.testing.assert_array_equal(channel_pixels, read_pixels)
+        # Sequence previews deliberately omit alpha.
+        np.testing.assert_array_equal(frame_pixels, read_pixels[..., :3])
+        if mode == WINDOW_MODE_DISPLAY:
+            # Build the oracle from full-data pixels and coordinates independently of framing helpers.
+            reference = _render_with_display_node(DisplayEXRPart, tmp_path, part=part, window_mode=WINDOW_MODE_DATA)
+            expected = np.zeros_like(read_pixels)
+            xmin, xmax = max(data[0], display[0]), min(data[2], display[2])
+            ymin, ymax = max(data[1], display[1]), min(data[3], display[3])
+            if xmin <= xmax and ymin <= ymax:
+                expected[ymin - display[1] : ymax - display[1] + 1, xmin - display[0] : xmax - display[0] + 1] = (
+                    reference[ymin - data[1] : ymax - data[1] + 1, xmin - data[0] : xmax - data[0] + 1]
+                )
+            np.testing.assert_array_equal(read_pixels, expected)
+        assert (read.parameter_output_values["image_width"], read.parameter_output_values["image_height"]) == (
+            expected_size
+        )
+
+    @pytest.mark.parametrize("mode", [WINDOW_MODE_DISPLAY, WINDOW_MODE_OVERLAY])
+    def test_framing_matches_the_data_window_render(self, engine: _Engine, tmp_path: Path, mode: str) -> None:
+        import asyncio
+
+        path = _write_windowed(tmp_path / "overscan.exr", *_WINDOW_CASES["overscan"])
+        node = _make_node()
+        node.set_parameter_value("path", str(path))
+        asyncio.run(_run(node))
+        data_render = _rendered(node)
+
+        node.set_parameter_value("window_mode", mode)
+        asyncio.run(_run(node))
+
+        assert _was_successful(node) is True, _result_details(node)
+        framing = WindowFraming.for_header(mode, scan_exr_header(str(path)).parts[0].header)
+        np.testing.assert_array_equal(_rendered(node), apply_window_mode(data_render, framing))
+
+    def test_source_data_is_passed_on_unchanged(self, engine: _Engine, tmp_path: Path) -> None:
+        import asyncio
+
+        path = _write_windowed(tmp_path / "overscan.exr", *_WINDOW_CASES["overscan"])
+        node = _make_node()
+        node.set_parameter_value("path", str(path))
+        node.set_parameter_value("window_mode", WINDOW_MODE_DISPLAY)
+        asyncio.run(_run(node))
+
+        part = node.parameter_output_values["part"]
+        assert (part.width, part.height) == (32, 20)
+        assert part.header.data_window == (-8, -4, 23, 15)
+        assert part.header.display_window == (0, 0, 15, 11)
+
+    def test_a_new_node_renders_the_data_window(self, engine: _Engine, tmp_path: Path) -> None:
+        import asyncio
+
+        path = _write_windowed(tmp_path / "overscan.exr", *_WINDOW_CASES["overscan"])
+        node = _make_node()
+        assert node.get_parameter_value("window_mode") == WINDOW_MODE_DATA
+        node.set_parameter_value("path", str(path))
+        asyncio.run(_run(node))
+
+        assert _rendered(node).shape == (20, 32, 3)
+
+    def test_display_window_padding_is_transparent_with_alpha(self, engine: _Engine, tmp_path: Path) -> None:
+        from griptape_nodes_openexr.nodes.display_exr_part import DisplayEXRPart
+
+        path = _write_windowed(tmp_path / "small.exr", *_WINDOW_CASES["data-smaller-than-display"], alpha=1.0)
+        pixels = _render_with_display_node(
+            DisplayEXRPart, tmp_path, part=_part_artifact(path), window_mode=WINDOW_MODE_DISPLAY
+        )
+
+        assert pixels.shape == (12, 16, 4)
+        assert (pixels[2:8, 4:12, 3] == 255).all()  # noqa: PLR2004
+        assert not pixels[0].any()
+        assert not pixels[:, 0].any()
+
+    def test_each_sequence_frame_is_framed_by_its_own_windows(self, engine: _Engine, tmp_path: Path) -> None:
+        import asyncio
+
+        from griptape_nodes_openexr.nodes.exr_sequence_to_preview import _convert_frame
+
+        # One display window, with the data window auto-cropped differently per frame.
+        display = (0, 0, 15, 11)
+        paths = [
+            _write_windowed(tmp_path / "frame.1001.exr", (-8, -4, 23, 15), display),
+            _write_windowed(tmp_path / "frame.1002.exr", (4, 2, 11, 7), display),
+        ]
+
+        node = _make_node()
+        node.set_parameter_value("path", _sequence_dict(paths, start=1001))
+        node.set_parameter_value("window_mode", WINDOW_MODE_DISPLAY)
+        sizes = []
+        for frame in (1001, 1002):
+            node.set_parameter_value("frame", frame)
+            asyncio.run(_run(node))
+            assert _was_successful(node) is True, _result_details(node)
+            sizes.append(_rendered(node).shape)
+        assert sizes == [(12, 16, 3), (12, 16, 3)]
+
+        converted = []
+        for i, path in enumerate(paths):
+            with Image.open(
+                _convert_frame(str(path), i, tmp_path, 0, 0.0, None, TONE_SRGB, WINDOW_MODE_DISPLAY)
+            ) as image:
+                converted.append(np.array(image))
+        assert [frame.shape for frame in converted] == [(12, 16, 3), (12, 16, 3)]
+        # The second frame only covers columns 4..11, rows 2..7 of the display window.
+        assert not converted[1][0].any()
+        assert converted[1][2:8, 4:12].any(axis=-1).all()
+
+    def test_changing_the_mode_renders_again(self, engine: _Engine, tmp_path: Path) -> None:
+        import asyncio
+
+        path = _write_windowed(tmp_path / "overscan.exr", *_WINDOW_CASES["overscan"])
+        node = _make_node()
+        node.set_parameter_value("path", str(path))
+        asyncio.run(_run(node))
+        node.set_parameter_value("window_mode", WINDOW_MODE_DISPLAY)
+        asyncio.run(_run(node))
+
+        assert "Reused cached render" not in _result_details(node)
+        assert _rendered(node).shape == (12, 16, 3)
+
+    def test_a_background_is_fitted_to_the_display_window(self, engine: _Engine, tmp_path: Path) -> None:
+        from griptape_nodes_openexr.nodes.display_exr_channel import DisplayEXRChannel
+
+        # Fully transparent overscan pixels, so the output is the background alone.
+        path = _write_windowed(tmp_path / "overscan.exr", *_WINDOW_CASES["overscan"], alpha=0.0)
+        ys, xs = np.mgrid[0:12, 0:16]
+        plate = np.stack([xs * 16, ys * 20, np.full_like(xs, 90)], axis=-1).astype(np.uint8)
+        plate_artifact = _image_artifact(Image.fromarray(plate, "RGB"))
+
+        channels = {
+            channel.name: EXRChannelArtifact(str(path), 0, channel) for channel in _part_artifact(path).channels
+        }
+        pixels = _render_with_display_node(
+            DisplayEXRChannel,
+            tmp_path,
+            channel_r=channels["R"],
+            channel_g=channels["G"],
+            channel_b=channels["B"],
+            channel_a=channels["A"],
+            background=plate_artifact,
+            window_mode=WINDOW_MODE_DISPLAY,
+        )
+
+        # Linear-light round trip through sRGB can shift a code value by one.
+        assert pixels.shape == plate.shape
+        assert np.abs(pixels.astype(np.int16) - plate).max() <= 1
+
+    def test_a_background_shows_through_frame_areas_with_no_pixels(self, engine: _Engine, tmp_path: Path) -> None:
+        from griptape_nodes_openexr.nodes.display_exr_channel import DisplayEXRChannel
+
+        path = _write_windowed(tmp_path / "small.exr", *_WINDOW_CASES["data-smaller-than-display"], alpha=1.0)
+        plate_artifact = _image_artifact(Image.new("RGB", (16, 12), (255, 0, 0)))
+
+        channels = {
+            channel.name: EXRChannelArtifact(str(path), 0, channel) for channel in _part_artifact(path).channels
+        }
+        pixels = _render_with_display_node(
+            DisplayEXRChannel,
+            tmp_path,
+            channel_r=channels["R"],
+            channel_g=channels["G"],
+            channel_b=channels["B"],
+            channel_a=channels["A"],
+            background=plate_artifact,
+            window_mode=WINDOW_MODE_DISPLAY,
+        )
+
+        assert pixels.shape == (12, 16, 3)
+        assert (pixels[0] == (255, 0, 0)).all()
+        assert (pixels[2:8, 4:12, 1] > 0).all(), "the opaque data window should cover the plate"

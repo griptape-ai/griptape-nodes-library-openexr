@@ -40,6 +40,12 @@ from griptape_nodes_openexr.exr.channel_selection import (
     select_alpha_channel,
     select_display_channels,
 )
+from griptape_nodes_openexr.exr.display_window import (
+    WINDOW_MODE_DEFAULT,
+    WindowFraming,
+    add_window_mode_parameter,
+    window_size,
+)
 from griptape_nodes_openexr.exr.exr_header_artifact import EXRChannelArtifact, EXRPartArtifact
 from griptape_nodes_openexr.exr.exr_io import scan_exr_header
 from griptape_nodes_openexr.exr.ocio_helpers import (
@@ -82,6 +88,7 @@ class RenderKey(NamedTuple):
     frame_number: int
     part_index: int
     layer: str
+    window_mode: str
     exposure_ev: float
     color_mode: str
     tone_mapping: str
@@ -127,11 +134,17 @@ class _FramePlan:
     part: EXRPart
     exr_data: EXRData
     layer: str
+    window_mode: str
     exposure_ev: float
     color_mode: str
     tone_mapping: str
     embed_color_profile: bool
     color_params: ColorParamsProtocol | None
+
+    @property
+    def framing(self) -> WindowFraming:
+        # From the frame being read, since each frame of a sequence carries its own windows.
+        return WindowFraming.for_header(self.window_mode, self.part.header)
 
 
 @dataclass(frozen=True)
@@ -236,6 +249,8 @@ class ReadEXR(SuccessFailureNode):
         )
         self.add_parameter(self._frame_param)
 
+        self._window_mode_param = add_window_mode_parameter(self)
+
         # --- Color management ---
         color_group = ParameterGroup(name="Color Management", ui_options={"collapsed": True})
         with color_group:
@@ -318,14 +333,20 @@ class ReadEXR(SuccessFailureNode):
                 name="image_width",
                 display_name="Image Width",
                 default_value=0,
-                tooltip="Image width in pixels",
+                tooltip=(
+                    "Width of the rendered image in pixels: the display window in 'display window' mode, "
+                    "otherwise the data window"
+                ),
                 allowed_modes={ParameterMode.OUTPUT},
             )
             self._image_height_param = ParameterInt(
                 name="image_height",
                 display_name="Image Height",
                 default_value=0,
-                tooltip="Image height in pixels",
+                tooltip=(
+                    "Height of the rendered image in pixels: the display window in 'display window' mode, "
+                    "otherwise the data window"
+                ),
                 allowed_modes={ParameterMode.OUTPUT},
             )
             self._part_count_param = ParameterInt(
@@ -728,7 +749,7 @@ class ReadEXR(SuccessFailureNode):
         alpha_info = f", alpha: {alpha_channel}" if alpha_channel else ""
         details = (
             f"Read {_part_label(plan.part, plan.part_index)}{plan.frame_note} - "
-            f"{plan.part.width}x{plan.part.height}, "
+            f"{outputs[self._image_width_param.name]}x{outputs[self._image_height_param.name]} ({plan.window_mode}), "
             f"channels: {selected}{alpha_info}, EV={plan.exposure_ev:+.1f}, {tone_mode}"
         )
         self._set_status_results(was_successful=True, result_details=details)
@@ -797,6 +818,7 @@ class ReadEXR(SuccessFailureNode):
             part=exr_data.parts[part_index],
             exr_data=exr_data,
             layer=str(self.get_parameter_value(self._layer_param.name) or ""),
+            window_mode=str(self.get_parameter_value(self._window_mode_param.name) or WINDOW_MODE_DEFAULT),
             exposure_ev=float(self.get_parameter_value(self._exposure_param.name) or 0.0),
             color_mode=color_mode,
             tone_mapping=str(self.get_parameter_value(self._tone_mapping_param.name) or TONE_DEFAULT),
@@ -820,6 +842,7 @@ class ReadEXR(SuccessFailureNode):
             frame_number=plan.entry.number,
             part_index=plan.part_index,
             layer=plan.layer,
+            window_mode=plan.window_mode,
             exposure_ev=plan.exposure_ev,
             color_mode=plan.color_mode,
             tone_mapping=plan.tone_mapping,
@@ -890,6 +913,7 @@ class ReadEXR(SuccessFailureNode):
                 plan.color_params,
                 plan.tone_mapping,
                 plan.embed_color_profile,
+                plan.framing,
             )
         except (ValueError, RuntimeError) as e:
             self._on_fail(str(e))
@@ -911,6 +935,7 @@ class ReadEXR(SuccessFailureNode):
     def _build_outputs(self, plan: _FramePlan, artifact: ImageUrlArtifact) -> dict[str, Any]:
         """Assemble the published outputs for a completed render."""
         part = plan.part
+        width, height = window_size(plan.framing)
         part_artifact = EXRPartArtifact(
             file_path=plan.entry.path,
             part_index=plan.part_index,
@@ -931,8 +956,8 @@ class ReadEXR(SuccessFailureNode):
             self._image_param.name: artifact,
             self._part_param.name: part_artifact,
             self._channels_param.name: channel_artifacts,
-            self._image_width_param.name: part.width,
-            self._image_height_param.name: part.height,
+            self._image_width_param.name: width,
+            self._image_height_param.name: height,
             self._part_count_param.name: len(plan.exr_data.parts),
             self._channel_count_param.name: len(part.channels),
         }
@@ -947,6 +972,7 @@ class ReadEXR(SuccessFailureNode):
         color_params: ColorParamsProtocol | None,
         tone_mapping: str,
         embed_color_profile: bool,
+        framing: WindowFraming,
     ) -> tuple[bytes, str]:
         """Decode the selected channels and encode them as PNG bytes.
 
@@ -963,6 +989,7 @@ class ReadEXR(SuccessFailureNode):
             color_params=color_params,
             tone_mapping=tone_mapping,
             embed_color_profile=embed_color_profile,
+            framing=framing,
         )
 
     def _emit_render(self, outputs: dict[str, Any]) -> None:

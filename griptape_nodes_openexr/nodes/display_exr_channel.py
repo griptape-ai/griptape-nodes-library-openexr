@@ -15,6 +15,16 @@ from griptape_nodes.exe_types.param_types.parameter_button import ParameterButto
 from griptape_nodes.exe_types.param_types.parameter_float import ParameterFloat
 from PIL import Image
 
+from griptape_nodes_openexr.exr.display_window import (
+    WINDOW_MODE_DATA,
+    WINDOW_MODE_DEFAULT,
+    WINDOW_MODE_DISPLAY,
+    WindowFraming,
+    add_window_mode_parameter,
+    apply_window_mode,
+    read_framing,
+    select_window_channels,
+)
 from griptape_nodes_openexr.exr.exr_header_artifact import EXRChannelArtifact
 from griptape_nodes_openexr.exr.exr_io import load_slot_channels
 from griptape_nodes_openexr.exr.icc_profiles import profile_for_tone_mapping
@@ -111,6 +121,8 @@ class DisplayEXRChannel(SuccessFailureNode):
             allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
         )
         self.add_parameter(self._exposure_param)
+
+        self._window_mode_param = add_window_mode_parameter(self)
 
         (
             self._color_mode_param,
@@ -224,6 +236,21 @@ class DisplayEXRChannel(SuccessFailureNode):
 
         height, width = shapes[0]
 
+        window_mode = str(self.get_parameter_value(self._window_mode_param.name) or WINDOW_MODE_DEFAULT)
+        framing: WindowFraming | None = None
+        composite_background = background is not None and alpha_plane is not None
+        try:
+            if window_mode != WINDOW_MODE_DATA:
+                framing = read_framing(window_mode, first_artifact.file_path, first_artifact.part_index)
+                planes = pixels if alpha_plane is None else {**pixels, "A": alpha_plane}
+                planes, framing = select_window_channels(planes, framing)
+                pixels = {name: plane for name, plane in planes.items() if name != "A"}
+                alpha_plane = planes.get("A")
+                height, width = next(iter(pixels.values())).shape
+        except (ValueError, RuntimeError) as e:
+            self._on_fail_handler(str(e))
+            return
+
         try:
             rgb = _build_rgb(pixels, height, width)
         except Exception as e:
@@ -245,6 +272,17 @@ class DisplayEXRChannel(SuccessFailureNode):
         rgb = apply_exposure(rgb, ev)
 
         alpha_f32 = alpha_plane.reshape(height, width) if alpha_plane is not None else None
+
+        try:
+            if framing is not None and framing.mode == WINDOW_MODE_DISPLAY and composite_background:
+                # Fit and composite the background over the full display canvas.
+                rgb = apply_window_mode(rgb, framing)
+                if alpha_f32 is not None:
+                    alpha_f32 = apply_window_mode(alpha_f32[..., np.newaxis], framing)[..., 0]
+                height, width = rgb.shape[:2]
+        except (ValueError, RuntimeError) as e:
+            self._on_fail_handler(str(e))
+            return
 
         bg_rgb: np.ndarray | None = None
         if background is not None:
@@ -278,6 +316,14 @@ class DisplayEXRChannel(SuccessFailureNode):
         # A composited image is opaque, so alpha is only kept when there was no background.
         uint8 = _compose_alpha(to_uint8(rgb), alpha_f32 if bg_rgb is None else None)
 
+        if framing is not None and (framing.mode != WINDOW_MODE_DISPLAY or not composite_background):
+            try:
+                uint8 = apply_window_mode(uint8, framing)
+                height, width = uint8.shape[:2]
+            except ValueError as e:
+                self._on_fail_handler(str(e))
+                return
+
         # OCIO output carries no profile: its display/view transform resolves
         # to a config colorspace we cannot describe.
         profile = _output_profile(tone_mapping, embed=embed_color_profile, ocio=not is_basic_color_mode)
@@ -297,7 +343,7 @@ class DisplayEXRChannel(SuccessFailureNode):
         slot_info = ", ".join(f"{slot}={rgb_slots[slot].channel.name}" for slot in sorted(rgb_slots))
         alpha_info = f", A={channel_a.channel.name}" if channel_a else ""
         bg_info = ", bg=composite" if bg_rgb is not None else ""
-        details = f"Rendered {width}×{height}, channels: [{slot_info}{alpha_info}]{bg_info}, EV={ev:+.1f}, {tone_mode}"
+        details = f"Rendered {width}×{height} ({window_mode}), channels: [{slot_info}{alpha_info}]{bg_info}, EV={ev:+.1f}, {tone_mode}"
         self._set_status_results(was_successful=True, result_details=details)
         logger.info("DisplayEXRChannel '%s': %s", self.name, details)
 
