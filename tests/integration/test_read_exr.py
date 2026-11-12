@@ -36,6 +36,9 @@ from griptape_nodes_openexr.exr.exr_header_artifact import EXRChannelArtifact, E
 from griptape_nodes_openexr.exr.exr_io import scan_exr_header, write_exr_channels
 from griptape_nodes_openexr.exr.ocio_helpers import COLOR_MODE_BASIC, COLOR_MODE_OCIO
 from griptape_nodes_openexr.exr.tone_mapping import (
+    TONE_ACES2065_SRGB,
+    TONE_ACESCG_REC709,
+    TONE_ACESCG_SRGB,
     TONE_CHOICES,
     TONE_RAW,
     TONE_REC709,
@@ -368,6 +371,11 @@ class TestColorManagement:
         assert renders[TONE_SRGB].sum() < renders[TONE_REC1886].sum()
         # raw skips the transfer function entirely, so it is darkest of all.
         assert renders[TONE_RAW].sum() < renders[TONE_REC709].sum()
+        # The ACES choices convert gamut before encoding, so a colour image
+        # renders differently from the base curve alone.
+        assert not np.array_equal(renders[TONE_ACESCG_SRGB], renders[TONE_SRGB])
+        assert not np.array_equal(renders[TONE_ACESCG_REC709], renders[TONE_REC709])
+        assert not np.array_equal(renders[TONE_ACES2065_SRGB], renders[TONE_ACESCG_SRGB])
 
     def test_ocio_mode_without_color_params_fails_loudly(self, engine: _Engine) -> None:
         import asyncio

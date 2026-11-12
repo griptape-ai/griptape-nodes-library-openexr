@@ -16,17 +16,17 @@ An **Open in external viewer** button opens the source EXR in a configured HDR v
 
 **Inputs**
 
-| Parameter             | Type              | Description                                                                                                                              |
-| --------------------- | ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| `path`                | `Sequence \| str` | Path to an `.exr` file, or a frame pattern such as `render.####.exr`. A connected `Sequence` is used as-is.                              |
-| `part_name`           | `str`             | Which part to read, as `"0: rgba"`, `"1: depth"`. Populated after the scan, hidden for single-part files.                                |
-| `layer`               | `str`             | Which layer of the part to render. Populated after the scan, hidden when the part has one layer.                                         |
-| `frame`               | `int`             | Absolute frame number, matching the filenames on disk. Hidden for a single file.                                                         |
-| `exposure`            | `float`           | Exposure in EV stops applied before tone mapping. Range -10 to +10, default `0.0`. In the Color Management group.                        |
-| `color_mode`          | `str`             | `basic` (local tone mapping) or `ocio` (connected `OCIOColorParamsArtifact`). Default `basic`.                                           |
-| `tone_mapping`        | `str`             | `sRGB`, `rec709`, `rec1886`, or `raw`. Default `sRGB`. See [Display transforms](#display-transforms). Used when `color_mode` is `basic`. |
-| `embed_color_profile` | `bool`            | Embed an ICC profile describing the display transform. Default `false`. See [Colour profiles](#colour-profiles).                         |
-| `output_file`         | `str`             | Filename for the saved PNG. Carries the frame number for a sequence, e.g. `read_exr.1001.png`.                                           |
+| Parameter             | Type              | Description                                                                                                                                                 |
+| --------------------- | ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `path`                | `Sequence \| str` | Path to an `.exr` file, or a frame pattern such as `render.####.exr`. A connected `Sequence` is used as-is.                                                 |
+| `part_name`           | `str`             | Which part to read, as `"0: rgba"`, `"1: depth"`. Populated after the scan, hidden for single-part files.                                                   |
+| `layer`               | `str`             | Which layer of the part to render. Populated after the scan, hidden when the part has one layer.                                                            |
+| `frame`               | `int`             | Absolute frame number, matching the filenames on disk. Hidden for a single file.                                                                            |
+| `exposure`            | `float`           | Exposure in EV stops applied before tone mapping. Range -10 to +10, default `0.0`. In the Color Management group.                                           |
+| `color_mode`          | `str`             | `basic` (local tone mapping) or `ocio` (connected `OCIOColorParamsArtifact`). Default `basic`.                                                              |
+| `tone_mapping`        | `str`             | `sRGB`, `rec709`, `rec1886`, `raw`, or an ACES transform. Default `sRGB`. See [Display transforms](#display-transforms). Used when `color_mode` is `basic`. |
+| `embed_color_profile` | `bool`            | Embed an ICC profile describing the display transform. Default `false`. See [Colour profiles](#colour-profiles).                                            |
+| `output_file`         | `str`             | Filename for the saved PNG. Carries the frame number for a sequence, e.g. `read_exr.1001.png`.                                                              |
 
 **Outputs**
 
@@ -147,13 +147,13 @@ An **Open in external viewer** button opens the source EXR in a configured HDR v
 
 **Inputs**
 
-| Parameter             | Type              | Description                                                                                                      |
-| --------------------- | ----------------- | ---------------------------------------------------------------------------------------------------------------- |
-| `part`                | `EXRPartArtifact` | EXR part to render. Assumes scene-linear HDR data; no gamut conversion is applied.                               |
-| `exposure`            | `float`           | Exposure in EV stops applied before tone mapping. Range −10 to +10, default `0.0`.                               |
-| `color_mode`          | `str`             | `basic` (local tone mapping) or `ocio` (connected `OCIOColorParamsArtifact`). Default `basic`.                   |
-| `tone_mapping`        | `str`             | `sRGB`, `rec709`, `rec1886`, or `raw`. Default `sRGB`. See [Display transforms](#display-transforms).            |
-| `embed_color_profile` | `bool`            | Embed an ICC profile describing the display transform. Default `false`. See [Colour profiles](#colour-profiles). |
+| Parameter             | Type              | Description                                                                                                              |
+| --------------------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `part`                | `EXRPartArtifact` | EXR part to render. Assumes scene-linear HDR data; only the ACES display transforms convert gamut.                       |
+| `exposure`            | `float`           | Exposure in EV stops applied before tone mapping. Range −10 to +10, default `0.0`.                                       |
+| `color_mode`          | `str`             | `basic` (local tone mapping) or `ocio` (connected `OCIOColorParamsArtifact`). Default `basic`.                           |
+| `tone_mapping`        | `str`             | `sRGB`, `rec709`, `rec1886`, `raw`, or an ACES transform. Default `sRGB`. See [Display transforms](#display-transforms). |
+| `embed_color_profile` | `bool`            | Embed an ICC profile describing the display transform. Default `false`. See [Colour profiles](#colour-profiles).         |
 
 **Outputs**
 
@@ -180,9 +180,26 @@ because sRGB's effective gamma of roughly 2.2 sits between the two. `raw`
 applies no transfer function, which is useful for reading actual pixel values
 but looks dark on screen.
 
-Every choice is a pure transfer function, so scene values above 1.0 clip to
-white. Nuke's default viewer behaves the same way. Lower the `exposure` to
-bring highlights into range, or use `ocio` mode with a config that provides a
+These four assume linear Rec.709/sRGB primaries, so `sRGB` is also the view
+for a linear sRGB plate. For an ACES plate, pick a transform that converts its
+primaries to Rec.709 first and then applies one of the curves above:
+
+| Choice               | Source primaries | Then encodes as |
+| -------------------- | ---------------- | --------------- |
+| `ACEScg to sRGB`     | ACEScg (AP1)     | `sRGB`          |
+| `ACEScg to rec709`   | ACEScg (AP1)     | `rec709`        |
+| `ACES2065-1 to sRGB` | ACES2065-1 (AP0) | `sRGB`          |
+
+The conversion is a 3x3 matrix with a Bradford adaptation from the ACES white
+point to D65, so neutral greys stay neutral and render as they do with the
+matching base curve. Colours outside Rec.709 clip. This is a gamut conversion
+and display encode, not the ACES output transform (RRT and ODT): there is no
+tone curve or highlight roll-off, so it will not match an ACES view in Nuke or
+an OCIO ACES config. Use `ocio` mode for that.
+
+No choice applies a tone curve, so scene values above 1.0 clip to white.
+Nuke's default viewer behaves the same way. Lower the `exposure` to bring
+highlights into range, or use `ocio` mode with a config that provides a
 tone-mapped view transform such as ACES.
 
 Without an embedded profile, viewers decode the PNG as sRGB, so picking
@@ -246,17 +263,17 @@ Combines 1–4 individual `EXRChannelArtifact` inputs into an 8-bit PNG (RGB or 
 
 **Inputs**
 
-| Parameter             | Type                                       | Description                                                                                                      |
-| --------------------- | ------------------------------------------ | ---------------------------------------------------------------------------------------------------------------- |
-| `channel_r`           | `EXRChannelArtifact`                       | Channel mapped to the red plane. Optional.                                                                       |
-| `channel_g`           | `EXRChannelArtifact`                       | Channel mapped to the green plane. Optional.                                                                     |
-| `channel_b`           | `EXRChannelArtifact`                       | Channel mapped to the blue plane. Optional.                                                                      |
-| `channel_a`           | `EXRChannelArtifact`                       | Channel used as alpha. Optional; when connected, output is RGBA.                                                 |
-| `exposure`            | `float`                                    | Exposure in EV stops applied before tone mapping. Range −10 to +10, default `0.0`.                               |
-| `color_mode`          | `str`                                      | `basic` (local tone mapping) or `ocio` (connected `OCIOColorParamsArtifact`). Default `basic`.                   |
-| `tone_mapping`        | `str`                                      | `sRGB`, `rec709`, `rec1886`, or `raw`. Default `sRGB`. See [Display transforms](#display-transforms).            |
-| `embed_color_profile` | `bool`                                     | Embed an ICC profile describing the display transform. Default `false`. See [Colour profiles](#colour-profiles). |
-| `background`          | `ImageArtifact \| ImageUrlArtifact \| str` | Background image for A-over-B compositing. Ignored when no alpha channel is connected.                           |
+| Parameter             | Type                                       | Description                                                                                                              |
+| --------------------- | ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------ |
+| `channel_r`           | `EXRChannelArtifact`                       | Channel mapped to the red plane. Optional.                                                                               |
+| `channel_g`           | `EXRChannelArtifact`                       | Channel mapped to the green plane. Optional.                                                                             |
+| `channel_b`           | `EXRChannelArtifact`                       | Channel mapped to the blue plane. Optional.                                                                              |
+| `channel_a`           | `EXRChannelArtifact`                       | Channel used as alpha. Optional; when connected, output is RGBA.                                                         |
+| `exposure`            | `float`                                    | Exposure in EV stops applied before tone mapping. Range −10 to +10, default `0.0`.                                       |
+| `color_mode`          | `str`                                      | `basic` (local tone mapping) or `ocio` (connected `OCIOColorParamsArtifact`). Default `basic`.                           |
+| `tone_mapping`        | `str`                                      | `sRGB`, `rec709`, `rec1886`, `raw`, or an ACES transform. Default `sRGB`. See [Display transforms](#display-transforms). |
+| `embed_color_profile` | `bool`                                     | Embed an ICC profile describing the display transform. Default `false`. See [Colour profiles](#colour-profiles).         |
+| `background`          | `ImageArtifact \| ImageUrlArtifact \| str` | Background image for A-over-B compositing. Ignored when no alpha channel is connected.                                   |
 
 **Outputs**
 
@@ -316,18 +333,18 @@ Bakes an EXR frame sequence down to a single MP4/MOV preview video, applying exp
 
 **Inputs**
 
-| Parameter          | Type                      | Description                                                                                           |
-| ------------------ | ------------------------- | ----------------------------------------------------------------------------------------------------- |
-| `sequence`         | `Sequence`                | Frame sequence from **Scan Sequence** / **Scan Split Sequence**                                       |
-| `frame_rate`       | `float`                   | Output frame rate. Default `24.0`.                                                                    |
-| `part_index`       | `int`                     | Part index to read from every frame. Default `0`.                                                     |
-| `exposure`         | `float`                   | Exposure in EV stops applied before tone mapping. Default `0.0`.                                      |
-| `color_mode`       | `str`                     | `basic` or `ocio`. Default `basic`.                                                                   |
-| `tone_mapping`     | `str`                     | `sRGB`, `rec709`, `rec1886`, or `raw`. Default `sRGB`. See [Display transforms](#display-transforms). |
-| `color_params`     | `OCIOColorParamsArtifact` | OCIO colour parameters. Required when `color_mode` is `ocio`.                                         |
-| `format`           | `str`                     | Output container: `mp4` or `mov`. Default `mp4`.                                                      |
-| `processing_speed` | `str`                     | `fast`, `balanced`, or `quality`. Trades encode speed for size/quality.                               |
-| `threads`          | `int`                     | Worker count for per-frame conversion. Range 1-16, default `4`. In the Advanced group.                |
+| Parameter          | Type                      | Description                                                                                                              |
+| ------------------ | ------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `sequence`         | `Sequence`                | Frame sequence from **Scan Sequence** / **Scan Split Sequence**                                                          |
+| `frame_rate`       | `float`                   | Output frame rate. Default `24.0`.                                                                                       |
+| `part_index`       | `int`                     | Part index to read from every frame. Default `0`.                                                                        |
+| `exposure`         | `float`                   | Exposure in EV stops applied before tone mapping. Default `0.0`.                                                         |
+| `color_mode`       | `str`                     | `basic` or `ocio`. Default `basic`.                                                                                      |
+| `tone_mapping`     | `str`                     | `sRGB`, `rec709`, `rec1886`, `raw`, or an ACES transform. Default `sRGB`. See [Display transforms](#display-transforms). |
+| `color_params`     | `OCIOColorParamsArtifact` | OCIO colour parameters. Required when `color_mode` is `ocio`.                                                            |
+| `format`           | `str`                     | Output container: `mp4` or `mov`. Default `mp4`.                                                                         |
+| `processing_speed` | `str`                     | `fast`, `balanced`, or `quality`. Trades encode speed for size/quality.                                                  |
+| `threads`          | `int`                     | Worker count for per-frame conversion. Range 1-16, default `4`. In the Advanced group.                                   |
 
 **Outputs**
 

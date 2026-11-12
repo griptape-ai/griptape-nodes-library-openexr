@@ -30,6 +30,8 @@ from griptape_nodes_openexr.exr.rendering import ndarray_to_png
 from griptape_nodes_openexr.exr.tone_mapping import (
     TONE_DEFAULT,
     apply_exposure,
+    convert_gamut,
+    gamut_matrix,
     srgb_to_linear,
     to_uint8,
 )
@@ -54,7 +56,8 @@ class DisplayEXRChannel(SuccessFailureNode):
     Single RGB channel → placed in its colour plane (R-only → red, etc.). Missing RGB slots → zero-filled plane.
     Connected alpha slot → RGBA output PNG.
 
-    In 'basic' mode, a local display transform (sRGB, rec709, rec1886 or raw) is applied.
+    In 'basic' mode, a local display transform (sRGB, rec709, rec1886, raw, or an ACES
+    transform such as 'ACEScg to sRGB') is applied.
     In 'ocio' mode, a connected OCIOColorParamsArtifact drives an OCIO
     display-view transform. OCIO failures are always surfaced loudly.
     """
@@ -258,14 +261,16 @@ class DisplayEXRChannel(SuccessFailureNode):
                     return
 
         # Basic mode blends in linear light, before the display transform encodes the result.
-        # OCIO mode blends after its transform: the background is sRGB, and nothing here can
-        # convert it into the config's source colorspace. OCIO output isn't clamped, so it is
-        # clamped to display range before blending.
+        # The background is sRGB, so for an ACES transform it is first moved into the source's
+        # ACES primaries, letting the transform's gamut conversion bring it back unchanged.
+        # OCIO mode blends after its transform: nothing here can convert the background into
+        # the config's source colorspace. OCIO output isn't clamped, so it is clamped to
+        # display range before blending.
         is_basic_color_mode = color_params is None
         try:
             if is_basic_color_mode:
                 if alpha_f32 is not None and bg_rgb is not None:
-                    rgb = _composite(rgb, alpha_f32, srgb_to_linear(bg_rgb))
+                    rgb = _composite(rgb, alpha_f32, _background_in_source_primaries(bg_rgb, tone_mapping))
                 rgb, tone_mode = apply_color_management(rgb, color_params, tone_mapping)
             else:
                 rgb, tone_mode = apply_color_management(rgb, color_params, tone_mapping)
@@ -320,6 +325,15 @@ def _build_rgb(pixels: dict[str, np.ndarray], height: int, width: int) -> np.nda
     g = pixels.get("G", zero).reshape(height, width)
     b = pixels.get("B", zero).reshape(height, width)
     return np.stack([r, g, b], axis=-1)
+
+
+def _background_in_source_primaries(bg_rgb: np.ndarray, tone_mapping: str) -> np.ndarray:
+    """Decode an sRGB background to linear light in the primaries `tone_mapping` expects."""
+    linear = srgb_to_linear(bg_rgb)
+    matrix = gamut_matrix(tone_mapping)
+    if matrix is None:
+        return linear
+    return convert_gamut(linear, np.linalg.inv(matrix))
 
 
 def _load_background_rgb(artifact: Any, width: int, height: int) -> np.ndarray:
