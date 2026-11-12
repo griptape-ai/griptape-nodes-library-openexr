@@ -195,6 +195,33 @@ class TestOverlay:
         image = _image(framing.data_window)
         np.testing.assert_array_equal(apply_window_mode(image, framing), image)
 
+    @pytest.mark.parametrize(
+        "display",
+        [(2049, 100, 2050, 200), (100, 2049, 200, 2050), (-3, 100, -2, 200), (100, -3, 200, -2)],
+    )
+    def test_narrow_disjoint_window_draws_nothing(self, display: tuple[int, int, int, int]) -> None:
+        framing = _framing(WINDOW_MODE_OVERLAY, (0, 0, 2047, 2047), display)
+        image = np.full((2048, 2048, 3), 127, dtype=np.uint8)
+        out = apply_window_mode(image, framing)
+
+        assert out.shape == image.shape
+        np.testing.assert_array_equal(out, image)
+
+    @pytest.mark.parametrize("display", [(100, 100, 101, 200), (100, 100, 200, 101)])
+    def test_outline_thicker_than_window_stays_inside_it(self, display: tuple[int, int, int, int]) -> None:
+        framing = _framing(WINDOW_MODE_OVERLAY, (0, 0, 2047, 2047), display)
+        image = np.full((2048, 2048, 3), 127, dtype=np.uint8)
+        out = apply_window_mode(image, framing)
+        changed = (out != image).any(axis=-1)
+        xmin, ymin, xmax, ymax = display
+        inside = np.zeros_like(changed)
+        inside[ymin : ymax + 1, xmin : xmax + 1] = True
+
+        assert out.shape == image.shape
+        assert changed[inside].all()
+        assert not changed[~inside].any()
+        np.testing.assert_array_equal(image, np.full_like(image, 127))
+
     def test_rgba_outline_is_opaque(self) -> None:
         framing = _framing(WINDOW_MODE_OVERLAY, (-4, -4, 11, 11), (0, 0, 7, 7))
         image = _image(framing.data_window, channels=4)

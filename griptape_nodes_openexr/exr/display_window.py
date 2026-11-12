@@ -215,8 +215,9 @@ def _outline_display_window(image: np.ndarray, data: WindowCoordinates, display:
         (top, bottom + 1, right - thickness + 1, right + 1),
     ]
     for y0, y1, x0, x1 in bands:
-        y0, y1 = max(y0, 0), min(y1, height)
-        x0, x1 = max(x0, 0), min(x1, width)
+        # Keep thick bands inside narrow display windows before clipping to the image.
+        y0, y1 = max(y0, top, 0), min(y1, bottom + 1, height)
+        x0, x1 = max(x0, left, 0), min(x1, right + 1, width)
         if y0 >= y1 or x0 >= x1:
             continue
         ys, xs = np.ogrid[y0:y1, x0:x1]
