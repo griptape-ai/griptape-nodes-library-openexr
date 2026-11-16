@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import shutil
+import threading
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -79,6 +80,7 @@ class TestNodeInit:
         parameter = node.get_parameter_by_name("sequence")
         assert parameter is not None
         assert parameter.input_types == ["Sequence", "str"]
+        assert parameter.type == "str"
         assert parameter.allowed_modes == {ParameterMode.INPUT, ParameterMode.PROPERTY}
         assert node.get_parameter_value("sequence") == ""
         picker = parameter.ui_options["fileSystemPicker"]
@@ -301,6 +303,37 @@ class TestAProcessNoInput:
         asyncio.run(node.aprocess())
         assert _was_successful(node) is False
         assert "No sequence provided" in node.parameter_output_values["result_details"]
+
+    @pytest.mark.asyncio
+    async def test_cancelled_scan_waits_for_worker_completion(self) -> None:
+        # Given a scan worker that remains active until released.
+        started = threading.Event()
+        release = threading.Event()
+        node = _make_node()
+        node.set_parameter_value("sequence", "frame.####.exr")
+
+        def blocking_resolver(raw):
+            started.set()
+            assert release.wait(timeout=5)
+            return "No matching frames"
+
+        with patch(f"{_NODE_MODULE}.resolve_sequence_path", side_effect=blocking_resolver):
+            task = asyncio.create_task(node.aprocess())
+            try:
+                async with asyncio.timeout(5):
+                    while not started.is_set():
+                        await asyncio.sleep(0.001)
+
+                # When execution is cancelled with the scan still running.
+                task.cancel()
+                await asyncio.sleep(0.01)
+
+                # Then cancellation waits for the worker before propagating.
+                assert not task.done()
+            finally:
+                release.set()
+                with pytest.raises(asyncio.CancelledError):
+                    await task
 
     @pytest.mark.parametrize("path", ["missing.####.exr", "invalid.##@@.exr"])
     def test_unusable_path_reports_failure(self, tmp_path: Path, path: str) -> None:

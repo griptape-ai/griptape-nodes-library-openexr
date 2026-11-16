@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any, NamedTuple
 
 from griptape.artifacts import ImageUrlArtifact
 from griptape_nodes.common.macro_parser import MacroSyntaxError, ParsedMacro
-from griptape_nodes.common.sequences import MissingItemPolicy, NoTokenBehavior, Sequence, SequenceEntry
+from griptape_nodes.common.sequences import Sequence, SequenceEntry
 from griptape_nodes.exe_types.core_types import NodeMessageResult, Parameter, ParameterGroup, ParameterMode
 from griptape_nodes.exe_types.node_types import SuccessFailureNode
 from griptape_nodes.exe_types.param_components.project_file_parameter import ProjectFileParameter
@@ -22,13 +22,8 @@ from griptape_nodes.retained_mode.events.artifact_events import (
     GetPreviewForArtifactRequest,
     PreviewGenerationPolicy,
 )
-from griptape_nodes.retained_mode.events.os_events import (
-    ScanSequencesRequest,
-    ScanSequencesResultSuccess,
-)
 from griptape_nodes.retained_mode.events.project_events import MacroPath
 from griptape_nodes.retained_mode.griptape_nodes import GriptapeNodes
-from griptape_nodes.traits.file_system_picker import FileSystemPicker
 from griptape_nodes.traits.options import Options
 from griptape_nodes.utils.async_utils import to_thread
 
@@ -56,6 +51,7 @@ from griptape_nodes_openexr.exr.ocio_helpers import (
     handle_color_mode_change,
 )
 from griptape_nodes_openexr.exr.rendering import render_part_png
+from griptape_nodes_openexr.exr.sequence_helpers import resolve_sequence_path, sequence_path_parameter
 from griptape_nodes_openexr.exr.tone_mapping import EV_MAX, EV_MIN, TONE_DEFAULT
 from griptape_nodes_openexr.exr.viewer_launcher import handle_viewer_button_click
 
@@ -185,24 +181,7 @@ class ReadEXR(SuccessFailureNode):
         # The after_value_set scan runs as a background task so the setter can return.
         self._pending_scan: asyncio.Task | None = None
 
-        self._path_param = Parameter(
-            name="path",
-            input_types=["Sequence", "str"],
-            type="str",
-            default_value="",
-            tooltip=(
-                "Path to an .exr file, or a frame pattern such as render.####.exr. A connected Sequence is used as-is."
-            ),
-            allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
-        )
-        self._path_param.add_trait(
-            FileSystemPicker(
-                allow_files=True,
-                allow_directories=False,
-                allow_sequences=True,
-                file_extensions=[".exr"],
-            )
-        )
+        self._path_param = sequence_path_parameter("path")
         self.add_parameter(self._path_param)
 
         self._part_name_param = ParameterString(
@@ -493,7 +472,7 @@ class ReadEXR(SuccessFailureNode):
             return
         self._request_canvas_preview()
 
-    def _adopt_if_current(self, raw_path: Any, scanned: ScanState | _Unchanged | None) -> bool:
+    def _adopt_if_current(self, raw_path: Any, scanned: ScanState | _Unchanged | str | None) -> bool:
         """Install a scan result, unless `path` has moved on since the scan started.
 
         Clicking through the file picker starts a scan per click, and they finish in
@@ -507,7 +486,7 @@ class ReadEXR(SuccessFailureNode):
             return False
         if isinstance(scanned, _Unchanged):
             return False
-        if scanned is None:
+        if scanned is None or isinstance(scanned, str):
             # Nothing resolved for the path the node is currently pointing at, so any
             # cached scan and render describe a file it has navigated away from.
             self._clear_scan()
@@ -523,12 +502,12 @@ class ReadEXR(SuccessFailureNode):
         self._scan = None
         self._render = None
 
-    def _scan_blocking(self, raw_path: Any) -> ScanState | _Unchanged | None:
+    def _scan_blocking(self, raw_path: Any) -> ScanState | _Unchanged | str | None:
         """Resolve `raw_path` and read its first entry's header.
 
-        Returns `UNCHANGED` when the cached scan already covers the path, and `None`
-        when the path resolves to nothing, which the caller must treat as "drop what
-        you have" rather than "keep it".
+        Returns `UNCHANGED` when the cached scan already covers the path, `None`
+        for an empty path, or a diagnostic string when resolution fails. Callers
+        drop cached state when the current path cannot be resolved.
 
         Synchronous and slow (a 4K multi-part header is ~1.8s), so callers on the event
         loop run it through `to_thread`. Reads `self._scan` to skip a redundant scan
@@ -547,9 +526,9 @@ class ReadEXR(SuccessFailureNode):
             if stamp is not None and stamp == scan.source_stamp:
                 return UNCHANGED
 
-        sequence = _resolve_to_sequence(raw_path)
-        if sequence is None or not sequence.entries:
-            return None
+        sequence = resolve_sequence_path(raw_path)
+        if isinstance(sequence, str):
+            return sequence
 
         # Stamped before the read, never after. A write landing in this window then
         # pairs an old stamp with a new header, costing one redundant rescan later.
@@ -570,10 +549,11 @@ class ReadEXR(SuccessFailureNode):
 
         self._apply_scan_to_ui(scan.sequence, scan.exr_data)
 
-    async def _arefresh_scan(self, raw_path: Any) -> None:
-        """Scan off the event loop, then adopt the result on it."""
+    async def _arefresh_scan(self, raw_path: Any) -> str | None:
+        """Scan off the event loop, adopt the result and return any diagnostic."""
         scanned = await to_thread(self._scan_blocking, raw_path)
         self._adopt_if_current(raw_path, scanned)
+        return scanned if isinstance(scanned, str) else None
 
     def _apply_scan_to_ui(self, sequence: Sequence, exr_data: EXRData) -> None:
         """Populate the dropdowns and the frame slider range from a fresh scan."""
@@ -766,11 +746,14 @@ class ReadEXR(SuccessFailureNode):
         # node work cold after a workflow reload, and in a worker that never saw the
         # after_value_set hook.
         try:
-            await self._arefresh_scan(raw_path)
+            diagnostic = await self._arefresh_scan(raw_path)
         except (ValueError, RuntimeError) as e:
             self._on_fail(f"Failed to scan EXR header: {e}")
             return None
 
+        if diagnostic is not None:
+            self._on_fail(diagnostic)
+            return None
         scan = self._scan
         if scan is None:
             self._on_fail(f"No EXR found at '{_describe_path(raw_path)}'")
@@ -1115,39 +1098,6 @@ def _scan_key_for(raw_path: Any) -> str:
 
 def _describe_path(raw_path: Any) -> str:
     return _scan_key_for(raw_path) or "<empty>"
-
-
-def _resolve_to_sequence(raw_path: Any) -> Sequence | None:
-    """Turn a path parameter value into a Sequence.
-
-    A connected Sequence (or its serialized dict form) wins over a typed path. A
-    typed path is scanned over the event bus, where NoTokenBehavior.SINGLE_FILE
-    makes a bare filename come back as a one-entry sequence. That is what lets
-    single file and sequence share one input and one code path.
-    """
-    if isinstance(raw_path, Sequence):
-        return raw_path
-    if isinstance(raw_path, dict):
-        try:
-            return Sequence.model_validate(raw_path)
-        except Exception:
-            logger.warning("ReadEXR: could not parse the connected sequence value", exc_info=True)
-            return None
-
-    path = str(raw_path or "").strip()
-    if not path:
-        return None
-
-    result = GriptapeNodes.handle_request(
-        ScanSequencesRequest(
-            path=path,
-            policy=MissingItemPolicy.SKIP,
-            no_token_behavior=NoTokenBehavior.SINGLE_FILE,
-        )
-    )
-    if not isinstance(result, ScanSequencesResultSuccess) or not result.sequences:
-        return None
-    return result.sequences[0]
 
 
 def _part_choices_for(exr_data: EXRData) -> list[str]:

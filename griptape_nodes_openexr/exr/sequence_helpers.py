@@ -1,9 +1,7 @@
-"""Shared helpers for nodes that process a Sequence of EXR frames.
+"""Shared EXR sequence resolution, path inputs and per-frame execution.
 
-Factors out the Sequence parsing and threaded per-frame execution shared by
-LoadEXRSequence and EXRSequenceToPreview, so error-reporting conventions
-(e.g. citing the real sequence frame number, not a list index) stay in one
-place.
+ReadEXR and EXRSequenceToPreview share path discovery and picker configuration.
+LoadEXRSequence uses the connected-sequence parser and bounded frame executor.
 """
 
 from __future__ import annotations
@@ -14,7 +12,62 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any
 
-from griptape_nodes.common.sequences import Sequence, SequenceEntry
+from griptape_nodes.common.sequences import MissingItemPolicy, NoTokenBehavior, Sequence, SequenceEntry
+from griptape_nodes.exe_types.core_types import Parameter, ParameterMode
+from griptape_nodes.retained_mode.events.os_events import ScanSequencesRequest, ScanSequencesResultSuccess
+from griptape_nodes.retained_mode.griptape_nodes import GriptapeNodes
+from griptape_nodes.traits.file_system_picker import FileSystemPicker
+from pydantic import ValidationError
+
+
+def sequence_path_parameter(name: str) -> Parameter:
+    """Build an editable EXR path input that also accepts connected Sequences."""
+    parameter = Parameter(
+        name=name,
+        input_types=["Sequence", "str"],
+        type="str",
+        default_value="",
+        tooltip="Path to an .exr file, or a frame pattern such as render.####.exr. A connected Sequence is used as-is.",
+        allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
+    )
+    parameter.add_trait(
+        FileSystemPicker(allow_files=True, allow_directories=False, allow_sequences=True, file_extensions=[".exr"])
+    )
+    return parameter
+
+
+def _parse_sequence(raw: Any) -> Sequence | str:
+    """Validate a connected Sequence without changing its entries or policy."""
+    try:
+        sequence = Sequence.model_validate(raw)
+    except ValidationError as error:
+        return f"Failed to parse sequence: {error}"
+    if not sequence.entries:
+        return "Sequence contains no entries."
+    return sequence
+
+
+def resolve_sequence_path(raw: Any) -> Sequence | str:
+    """Resolve an EXR path or connected Sequence, returning diagnostics on failure.
+
+    Paths use the engine's SKIP and SINGLE_FILE policies. Connected Sequences
+    retain their entries and policy. This function performs blocking I/O;
+    async callers must use griptape_nodes.utils.async_utils.to_thread.
+    """
+    if raw is None or (isinstance(raw, str) and not raw.strip()):
+        return "No sequence provided. Enter an EXR path or connect a Sequence."
+    if not isinstance(raw, str):
+        return _parse_sequence(raw)
+
+    path = raw.strip()
+    result = GriptapeNodes.handle_request(
+        ScanSequencesRequest(path=path, policy=MissingItemPolicy.SKIP, no_token_behavior=NoTokenBehavior.SINGLE_FILE)
+    )
+    if result.failed():
+        return f"Failed to scan sequence '{path}': {result.result_details}"
+    if not isinstance(result, ScanSequencesResultSuccess) or not result.sequences:
+        return f"No EXR frames matched '{path}'. Check the path and frame pattern."
+    return _parse_sequence(result.sequences[0])
 
 
 @dataclass
@@ -40,14 +93,9 @@ def resolve_sequence(raw: Any) -> ResolvedSequence | str:
     if raw is None:
         return "No sequence provided — connect a ScanSequenceNode."
 
-    try:
-        sequence = Sequence.model_validate(raw) if isinstance(raw, dict) else raw
-    except Exception as e:
-        return f"Failed to parse sequence: {e}"
-
-    if not sequence.entries:
-        return "Sequence contains no entries."
-
+    sequence = _parse_sequence(raw)
+    if isinstance(sequence, str):
+        return sequence
     return ResolvedSequence(entries=sequence.entries)
 
 

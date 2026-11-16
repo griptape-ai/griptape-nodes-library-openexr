@@ -745,6 +745,16 @@ class TestCaching:
         asyncio.run(node.aprocess())
         assert len(harness.load_calls) == loads + 1
 
+    def test_missing_path_reports_scan_diagnostic(self, harness: _Harness, tmp_path: Path) -> None:
+        path = str(tmp_path / "missing.####.exr")
+        harness.unresolvable.add(path)
+        node = _make_node()
+        node.set_parameter_value("path", path, initial_setup=True)
+        asyncio.run(node.aprocess())
+        assert _was_successful(node) is False
+        assert "No EXR frames matched" in _result_details(node)
+        assert path in _result_details(node)
+
     def test_a_scan_failure_does_not_break_the_value_set(self, harness: _Harness, tmp_path: Path) -> None:
         with patch(f"{_NODE_MODULE}.scan_exr_header", side_effect=RuntimeError("corrupt header")):
             node = _make_node()

@@ -3,6 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+from unittest.mock import patch
+
+import pytest
+from griptape_nodes.common.sequences import MissingItemPolicy, NoTokenBehavior, Sequence
+from griptape_nodes.retained_mode.events.os_events import ScanSequencesRequest, ScanSequencesResultSuccess
+from griptape_nodes.retained_mode.griptape_nodes import GriptapeNodes
 
 from griptape_nodes_openexr.exr.sequence_helpers import ResolvedSequence, resolve_sequence, run_over_sequence
 
@@ -53,6 +59,73 @@ class TestResolveSequence:
         result = resolve_sequence(sequence)
         assert isinstance(result, ResolvedSequence)
         assert [e.number for e in result.entries] == [5]
+
+
+class TestResolveSequencePath:
+    @pytest.mark.parametrize("raw", [None, "", "   "])
+    def test_empty_input_reports_missing_sequence(self, raw) -> None:
+        from griptape_nodes_openexr.exr.sequence_helpers import resolve_sequence_path
+
+        error = resolve_sequence_path(raw)
+        assert isinstance(error, str)
+        assert "No sequence provided" in error
+
+    @pytest.mark.parametrize("serialized", [False, True])
+    def test_connected_sequence_preserves_entries_and_policy_without_scanning(self, serialized: bool) -> None:
+        from griptape_nodes_openexr.exr.sequence_helpers import resolve_sequence_path
+
+        sequence = Sequence.model_validate(_make_sequence_dict([1, 3]))
+        sequence.policy = MissingItemPolicy.FILL_NEAREST
+        raw = sequence.model_dump() if serialized else sequence
+        with patch.object(GriptapeNodes, "handle_request") as request:
+            resolved = resolve_sequence_path(raw)
+        assert isinstance(resolved, Sequence)
+        assert resolved == sequence
+        request.assert_not_called()
+
+    def test_path_uses_skip_and_single_file_scan(self) -> None:
+        from griptape_nodes_openexr.exr.sequence_helpers import resolve_sequence_path
+
+        sequence = Sequence.model_validate(_make_sequence_dict([1, 3]))
+        result = ScanSequencesResultSuccess(
+            sequences=[sequence], has_entries=True, directory_had_matching_files=True, result_details=""
+        )
+        with patch.object(GriptapeNodes, "handle_request", return_value=result) as request:
+            assert resolve_sequence_path("  /frame.####.exr  ") is sequence
+        request.assert_called_once_with(
+            ScanSequencesRequest(
+                path="/frame.####.exr",
+                policy=MissingItemPolicy.SKIP,
+                no_token_behavior=NoTokenBehavior.SINGLE_FILE,
+            )
+        )
+
+    def test_no_matches_reports_path(self) -> None:
+        from griptape_nodes_openexr.exr.sequence_helpers import resolve_sequence_path
+
+        result = ScanSequencesResultSuccess(
+            sequences=[], has_entries=False, directory_had_matching_files=False, result_details=""
+        )
+        with patch.object(GriptapeNodes, "handle_request", return_value=result):
+            error = resolve_sequence_path("/missing.####.exr")
+        assert isinstance(error, str)
+        assert "No EXR frames matched" in error
+        assert "/missing.####.exr" in error
+
+    def test_scan_failure_keeps_engine_diagnostic(self, tmp_path) -> None:
+        from griptape_nodes_openexr.exr.sequence_helpers import resolve_sequence_path
+
+        path = str(tmp_path / "missing-directory" / "frame.####.exr")
+        error = resolve_sequence_path(path)
+        assert isinstance(error, str)
+        assert "Failed to scan sequence" in error
+        assert path in error
+
+    @pytest.mark.parametrize("raw", [{"invalid": True}, _make_sequence_dict([]), 42])
+    def test_invalid_or_empty_sequence_reports_failure(self, raw) -> None:
+        from griptape_nodes_openexr.exr.sequence_helpers import resolve_sequence_path
+
+        assert isinstance(resolve_sequence_path(raw), str)
 
 
 class TestRunOverSequence:

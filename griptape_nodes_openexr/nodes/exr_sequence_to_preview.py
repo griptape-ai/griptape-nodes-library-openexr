@@ -5,12 +5,11 @@ from __future__ import annotations
 import logging
 import subprocess
 import uuid
-from asyncio import to_thread
 from pathlib import Path
 from typing import Any
 
 from griptape.artifacts import VideoUrlArtifact
-from griptape_nodes.common.sequences import MissingItemPolicy, NoTokenBehavior, SequenceEntry
+from griptape_nodes.common.sequences import SequenceEntry
 from griptape_nodes.exe_types.core_types import Parameter, ParameterGroup, ParameterMode
 from griptape_nodes.exe_types.node_types import SuccessFailureNode
 from griptape_nodes.exe_types.param_components.project_file_parameter import ProjectFileParameter
@@ -19,15 +18,10 @@ from griptape_nodes.exe_types.param_types.parameter_int import ParameterInt
 from griptape_nodes.exe_types.param_types.parameter_string import ParameterString
 from griptape_nodes.exe_types.param_types.parameter_video import ParameterVideo
 from griptape_nodes.files.project_file import ProjectFileDestination
-from griptape_nodes.retained_mode.events.os_events import (
-    DeleteFileRequest,
-    DeleteFileResultFailure,
-    ScanSequencesRequest,
-    ScanSequencesResultSuccess,
-)
+from griptape_nodes.retained_mode.events.os_events import DeleteFileRequest, DeleteFileResultFailure
 from griptape_nodes.retained_mode.griptape_nodes import GriptapeNodes
-from griptape_nodes.traits.file_system_picker import FileSystemPicker
 from griptape_nodes.traits.options import Options
+from griptape_nodes.utils.async_utils import to_thread
 from PIL import Image
 
 # static_ffmpeg is dynamically installed by the library loader at runtime
@@ -54,7 +48,11 @@ from griptape_nodes_openexr.exr.ocio_helpers import (
     apply_color_management,
     handle_color_mode_change,
 )
-from griptape_nodes_openexr.exr.sequence_helpers import resolve_sequence, run_over_sequence
+from griptape_nodes_openexr.exr.sequence_helpers import (
+    resolve_sequence_path,
+    run_over_sequence,
+    sequence_path_parameter,
+)
 from griptape_nodes_openexr.exr.tone_mapping import (
     EV_MAX,
     EV_MIN,
@@ -127,23 +125,7 @@ class EXRSequenceToPreview(SuccessFailureNode):
     def __init__(self, name: str, metadata: dict[Any, Any] | None = None) -> None:
         super().__init__(name, metadata)
 
-        self._sequence_param = Parameter(
-            name="sequence",
-            input_types=["Sequence", "str"],
-            default_value="",
-            tooltip=(
-                "Path to an .exr file, or a frame pattern such as render.####.exr. A connected Sequence is used as-is."
-            ),
-            allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
-        )
-        self._sequence_param.add_trait(
-            FileSystemPicker(
-                allow_files=True,
-                allow_directories=False,
-                allow_sequences=True,
-                file_extensions=[".exr"],
-            )
-        )
+        self._sequence_param = sequence_path_parameter("sequence")
         self.add_parameter(self._sequence_param)
 
         self._frame_rate_param = ParameterFloat(
@@ -323,26 +305,7 @@ class EXRSequenceToPreview(SuccessFailureNode):
 
         # --- Resolve sequence ---
         raw = self.get_parameter_value(self._sequence_param.name)
-        if raw is None or (isinstance(raw, str) and not raw.strip()):
-            self._on_fail("No sequence provided. Enter an EXR path or connect a Sequence.")
-            return
-        if isinstance(raw, str):
-            result = await to_thread(
-                GriptapeNodes.handle_request,
-                ScanSequencesRequest(
-                    path=raw.strip(),
-                    policy=MissingItemPolicy.SKIP,
-                    no_token_behavior=NoTokenBehavior.SINGLE_FILE,
-                ),
-            )
-            if result.failed():
-                self._on_fail(f"Failed to scan sequence '{raw}': {result.result_details}")
-                return
-            if not isinstance(result, ScanSequencesResultSuccess) or not result.sequences:
-                self._on_fail(f"No EXR frames matched '{raw}'. Check the path and frame pattern.")
-                return
-            raw = result.sequences[0]
-        resolved = resolve_sequence(raw)
+        resolved = await to_thread(resolve_sequence_path, raw)
         if isinstance(resolved, str):
             self._on_fail(resolved)
             return
