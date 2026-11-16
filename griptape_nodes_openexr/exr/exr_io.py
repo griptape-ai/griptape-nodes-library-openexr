@@ -123,13 +123,11 @@ def scan_exr_header(file_path: str, *, header_only: bool = True) -> EXRData:
                 )
                 header = _build_header(part, raw_header)
                 dw = header.data_window
-                width = int(dw.xmax - dw.xmin + 1)
-                height = int(dw.ymax - dw.ymin + 1)
                 parts.append(
                     EXRPart(
                         name=part.name(),
-                        width=width,
-                        height=height,
+                        width=dw.width,
+                        height=dw.height,
                         header=header,
                         channels=channels,
                     )

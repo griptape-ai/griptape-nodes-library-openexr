@@ -112,7 +112,7 @@ def add_window_mode_parameter(node: BaseNode) -> ParameterString:
 def window_size(framing: WindowFraming) -> tuple[int, int]:
     """The `(width, height)` of the image `apply_window_mode` produces for this framing."""
     window = framing.display_window if framing.mode == WINDOW_MODE_DISPLAY else framing.data_window
-    return _width(window), _height(window)
+    return window.width, window.height
 
 
 @dataclass(frozen=True)
@@ -168,7 +168,7 @@ def _validate_window_shape(image: np.ndarray, framing: WindowFraming) -> None:
         raise ValueError(msg)
     if framing.mode == WINDOW_MODE_DATA:
         return
-    expected = (_height(framing.data_window), _width(framing.data_window))
+    expected = (framing.data_window.height, framing.data_window.width)
     if image.shape[:2] != expected:
         msg = (
             f"window_mode '{framing.mode}' needs an image the size of the data window "
@@ -207,7 +207,7 @@ def _crop_to_display_window(image: np.ndarray, data: WindowCoordinates, display:
     if data == display:
         return image
     # Zeros are black, and transparent when the image has alpha.
-    out = np.zeros((_height(display), _width(display), image.shape[2]), dtype=image.dtype)
+    out = np.zeros((display.height, display.width, image.shape[2]), dtype=image.dtype)
     intersection = WindowIntersection.for_framing(WindowFraming(WINDOW_MODE_DISPLAY, data, display))
     if intersection is not None:
         out[intersection.destination] = image[intersection.source]
@@ -243,11 +243,3 @@ def _outline_display_window(image: np.ndarray, data: WindowCoordinates, display:
         if out.shape[2] == _RGBA_CHANNELS:
             out[y0:y1, x0:x1, 3] = _OPAQUE
     return out
-
-
-def _width(window: WindowCoordinates) -> int:
-    return int(window.xmax - window.xmin + 1)
-
-
-def _height(window: WindowCoordinates) -> int:
-    return int(window.ymax - window.ymin + 1)
