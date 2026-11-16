@@ -303,6 +303,225 @@ def _single_file(tmp_path: Path) -> Path:
 # ---------------------------------------------------------------------------
 
 
+class TestHeaderMetadata:
+    def test_declares_typed_outputs(self, harness: _Harness) -> None:
+        from griptape_nodes_openexr.exr.header_metadata import HEADER_METADATA_DEFAULTS
+
+        node = _make_node()
+        for name, default in HEADER_METADATA_DEFAULTS.items():
+            parameter = _param(node, name)
+            assert parameter.allowed_modes == {ParameterMode.OUTPUT}
+            assert parameter.type == ("float" if name == "pixel_aspect_ratio" else "str")
+            assert parameter.default_value == default
+
+    def test_source_refresh_and_execution_publish_same_header(self, harness: _Harness, tmp_path: Path) -> None:
+        from griptape_nodes_openexr.exr.header_metadata import header_metadata_outputs
+
+        path = _single_file(tmp_path)
+        header = harness.exr_data.parts[0].header
+        header.software = "renderer"
+        header.owner = "artist"
+        header.custom = {"shot": "010"}
+        node = _make_node()
+        node.set_parameter_value("path", str(path))
+        expected = header_metadata_outputs(header)
+        assert {name: node.parameter_output_values[name] for name in expected} == expected
+        assert harness.load_calls == []
+        asyncio.run(node.aprocess())
+        assert {name: node.parameter_output_values[name] for name in expected} == expected
+        node.parameter_output_values.clear()
+        asyncio.run(node.aprocess())
+        assert {name: node.parameter_output_values[name] for name in expected} == expected
+
+    def test_part_edit_refreshes_without_rendering(self, harness: _Harness, tmp_path: Path) -> None:
+        harness.exr_data = _make_exr_data(_make_part("beauty"), _make_part("depth", ("Z",)))
+        harness.exr_data.parts[0].header.owner = "beauty artist"
+        harness.exr_data.parts[1].header.owner = "depth artist"
+        node = _make_node()
+        node.set_parameter_value("path", str(_single_file(tmp_path)))
+        assert node.parameter_output_values["owner"] == "beauty artist"
+        node.set_parameter_value("part_name", "1: depth")
+        assert node.parameter_output_values["owner"] == "depth artist"
+        assert harness.load_calls == []
+
+    def test_frame_edit_uses_selected_header_and_clamps(self, harness: _Harness, tmp_path: Path) -> None:
+        paths = _frames(tmp_path, range(1001, 1003))
+        harness.sequence = _make_sequence(paths, start=1001)
+        later = _make_exr_data()
+        later.parts[0].header.owner = "later frame"
+        harness.exr_data_by_path[str(paths[1])] = later
+        node = _make_node()
+        node.set_parameter_value("path", str(tmp_path / "frame.####.exr"))
+        node.set_parameter_value("frame", 2000)
+        assert node.parameter_output_values["owner"] == "later frame"
+        assert harness.load_calls == []
+        asyncio.run(node.aprocess())
+        assert node.parameter_output_values["owner"] == "later frame"
+
+    @pytest.mark.parametrize("bad_source", ["", "missing", "corrupt"])
+    def test_invalid_source_clears_metadata_before_execution(
+        self, harness: _Harness, tmp_path: Path, bad_source: str
+    ) -> None:
+        from griptape_nodes_openexr.exr.header_metadata import HEADER_METADATA_DEFAULTS
+
+        harness.exr_data.parts[0].header.owner = "previous artist"
+        node = _make_node()
+        node.set_parameter_value("path", str(_single_file(tmp_path)))
+        if bad_source == "missing":
+            harness.unresolvable.add(bad_source)
+        if bad_source == "corrupt":
+            with patch(f"{_NODE_MODULE}.scan_exr_header", side_effect=ValueError("corrupt")):
+                node.set_parameter_value("path", bad_source)
+        else:
+            node.set_parameter_value("path", bad_source)
+        assert {
+            name: node.parameter_output_values[name] for name in HEADER_METADATA_DEFAULTS
+        } == HEADER_METADATA_DEFAULTS
+
+    def test_execution_failure_clears_typed_defaults(self, harness: _Harness, tmp_path: Path) -> None:
+        from griptape_nodes_openexr.exr.header_metadata import HEADER_METADATA_DEFAULTS
+
+        node = _make_node()
+        node.set_parameter_value("path", str(_single_file(tmp_path)))
+        asyncio.run(node.aprocess())
+        with patch(f"{_RENDER_MODULE}.load_exr_channels", side_effect=RuntimeError("decode failed")):
+            node.set_parameter_value("exposure", 1.0)
+            asyncio.run(node.aprocess())
+        assert _was_successful(node) is False
+        assert {
+            name: node.parameter_output_values[name] for name in HEADER_METADATA_DEFAULTS
+        } == HEADER_METADATA_DEFAULTS
+
+    @pytest.mark.asyncio
+    async def test_same_source_refresh_restores_metadata(self, harness: _Harness, tmp_path: Path) -> None:
+        path = _single_file(tmp_path)
+        harness.exr_data.parts[0].header.owner = "artist"
+        node = _make_node()
+        node.set_parameter_value("path", str(path))
+        await node.wait_for_pending_scan()
+        node.set_parameter_value("path", str(path))
+        await node.wait_for_pending_scan()
+        assert node.parameter_output_values["owner"] == "artist"
+
+    @pytest.mark.asyncio
+    async def test_frame_edit_during_source_scan_cannot_publish_old_metadata(
+        self, harness: _Harness, tmp_path: Path
+    ) -> None:
+        # Given a completed read and a slow replacement source scan.
+        old_path = _single_file(tmp_path)
+        new_path = tmp_path / "replacement.exr"
+        new_path.write_bytes(b"")
+        harness.exr_data.parts[0].header.owner = "old artist"
+        harness.scan_delay_by_path[str(new_path)] = 0.1
+        node = _make_node()
+        node.set_parameter_value("path", str(old_path))
+        await node.wait_for_pending_scan()
+
+        # When a frame edit occurs before the replacement scan is adopted.
+        node.set_parameter_value("path", str(new_path))
+        node.set_parameter_value("frame", 1)
+        await asyncio.sleep(0.03)
+
+        # Then the old source's header remains cleared.
+        assert node.parameter_output_values["owner"] == ""
+        await node.wait_for_pending_scan()
+
+    @pytest.mark.parametrize("selection", ["frame", "part_name"])
+    def test_invalid_selection_clears_metadata(self, harness: _Harness, tmp_path: Path, selection: str) -> None:
+        from griptape_nodes_openexr.exr.header_metadata import HEADER_METADATA_DEFAULTS
+
+        paths = _frames(tmp_path, range(1001, 1004))
+        harness.sequence = _make_sequence(paths, start=1001, missing=[1002])
+        node = _make_node()
+        node.set_parameter_value("path", str(tmp_path / "frame.####.exr"))
+        node.set_parameter_value(selection, 1002 if selection == "frame" else "9: missing")
+        assert {
+            name: node.parameter_output_values[name] for name in HEADER_METADATA_DEFAULTS
+        } == HEADER_METADATA_DEFAULTS
+
+    @pytest.mark.asyncio
+    async def test_clearing_source_during_metadata_refresh_finishes_cleanly(
+        self, harness: _Harness, tmp_path: Path
+    ) -> None:
+        paths = _frames(tmp_path, range(1001, 1003))
+        harness.sequence = _make_sequence(paths, start=1001)
+        node = _make_node()
+        node.set_parameter_value("path", str(tmp_path / "frame.####.exr"))
+        await node.wait_for_pending_scan()
+        harness.scan_delay_by_path[str(paths[1])] = 0.1
+        node.set_parameter_value("frame", 1002)
+        await asyncio.sleep(0.02)
+        node.set_parameter_value("path", "")
+        await node.wait_for_pending_scan()
+        assert node.parameter_output_values["owner"] == ""
+
+    @pytest.mark.asyncio
+    async def test_late_source_scan_cannot_repopulate_after_execution_failure(
+        self, harness: _Harness, tmp_path: Path
+    ) -> None:
+        # Given an edit-time scan still reading while execution performs its own scan.
+        path = _single_file(tmp_path)
+        harness.exr_data.parts[0].header.owner = "artist"
+        harness.scan_delay = 0.15
+        node = _make_node()
+        node.set_parameter_value("path", str(path))
+        await asyncio.sleep(0.03)
+        harness.scan_delay = 0.0
+        node.set_parameter_value("color_mode", "ocio")
+
+        # When execution fails before the edit-time scan completes.
+        await node.aprocess()
+        assert _was_successful(node) is False
+        await asyncio.sleep(0.2)
+
+        # Then metadata stays cleared.
+        assert node.parameter_output_values["owner"] == ""
+
+    def test_first_frame_rewrite_refreshes_on_selection_edit(self, harness: _Harness, tmp_path: Path) -> None:
+        path = _single_file(tmp_path)
+        node = _make_node()
+        node.set_parameter_value("path", str(path))
+        replacement = _make_exr_data()
+        replacement.parts[0].header.owner = "replacement artist"
+        harness.exr_data_by_path[str(path)] = replacement
+        TestInPlaceRewrite._touch(path)
+        node.set_parameter_value("part_name", "0: part")
+        assert node.parameter_output_values["owner"] == "replacement artist"
+
+    def test_first_frame_deleted_clears_on_selection_edit(self, harness: _Harness, tmp_path: Path) -> None:
+        path = _single_file(tmp_path)
+        harness.exr_data.parts[0].header.owner = "previous artist"
+        node = _make_node()
+        node.set_parameter_value("path", str(path))
+        path.unlink()
+        node.set_parameter_value("part_name", "0: part")
+        assert node.parameter_output_values["owner"] == ""
+
+    @pytest.mark.asyncio
+    async def test_superseded_frame_refresh_cannot_publish(self, harness: _Harness, tmp_path: Path) -> None:
+        # Given frames with different owners and a slow earlier request.
+        paths = _frames(tmp_path, range(1001, 1004))
+        harness.sequence = _make_sequence(paths, start=1001)
+        for number, path in enumerate(paths):
+            data = _make_exr_data()
+            data.parts[0].header.owner = str(number)
+            harness.exr_data_by_path[str(path)] = data
+        node = _make_node()
+        node.set_parameter_value("path", str(tmp_path / "frame.####.exr"))
+        await node.wait_for_pending_scan()
+        harness.scan_delay_by_path[str(paths[1])] = 0.1
+
+        # When a later selection overtakes the slow refresh.
+        node.set_parameter_value("frame", 1002)
+        await asyncio.sleep(0.02)
+        node.set_parameter_value("frame", 1003)
+        await node.wait_for_pending_scan()
+        await asyncio.sleep(0.12)
+
+        # Then only the current selection is published.
+        assert node.parameter_output_values["owner"] == "2"
+
+
 class TestNodeInit:
     def test_input_and_output_parameters_exist(self, harness: _Harness) -> None:
         node = _make_node()
@@ -707,8 +926,9 @@ class TestCaching:
 
         node.set_parameter_value("frame", 1003)
         asyncio.run(node.aprocess())
-        # The sequence scan is reused; only the new frame's own header is read.
-        assert harness.scan_calls[scans_after_first:] == [str(paths[2])]
+        # The sequence scan is reused. The property refresh and execution each
+        # read the selected frame's header; neither rescans the sequence's first entry.
+        assert harness.scan_calls[scans_after_first:] == [str(paths[2]), str(paths[2])]
         assert len(harness.load_calls) == loads_after_first + 1
 
     def test_rerun_with_identical_inputs_does_not_redecode(self, harness: _Harness, tmp_path: Path) -> None:

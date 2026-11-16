@@ -43,6 +43,7 @@ from griptape_nodes_openexr.exr.display_window import (
 )
 from griptape_nodes_openexr.exr.exr_header_artifact import EXRChannelArtifact, EXRPartArtifact
 from griptape_nodes_openexr.exr.exr_io import scan_exr_header
+from griptape_nodes_openexr.exr.header_metadata import HEADER_METADATA_DEFAULTS, header_metadata_outputs
 from griptape_nodes_openexr.exr.ocio_helpers import (
     COLOR_MODE_BASIC,
     COLOR_MODE_OCIO,
@@ -58,7 +59,7 @@ from griptape_nodes_openexr.exr.viewer_launcher import handle_viewer_button_clic
 if TYPE_CHECKING:
     from griptape_nodes.traits.button import Button, ButtonDetailsMessagePayload
 
-    from griptape_nodes_openexr.exr.exr_types import EXRData, EXRPart
+    from griptape_nodes_openexr.exr.exr_types import EXRData, EXRHeader, EXRPart
 
 logger = logging.getLogger("griptape_nodes")
 
@@ -180,6 +181,8 @@ class ReadEXR(SuccessFailureNode):
         self._render: RenderState | None = None
         # The after_value_set scan runs as a background task so the setter can return.
         self._pending_scan: asyncio.Task | None = None
+        self._pending_metadata: asyncio.Task | None = None
+        self._metadata_revision = 0
 
         self._path_param = sequence_path_parameter("path")
         self.add_parameter(self._path_param)
@@ -363,6 +366,29 @@ class ReadEXR(SuccessFailureNode):
                 tooltip="Number of frames in the sequence; 1 for a single file",
                 allowed_modes={ParameterMode.OUTPUT},
             )
+        formats = {
+            "compression": "Compression enum name, e.g. ZIP_COMPRESSION. Empty when cleared.",
+            "storage_type": "Storage mode: scanlineimage, tiledimage, deepscanline or deeptiled.",
+            "pixel_aspect_ratio": "Source pixel width/height ratio; defaults to 1.0.",
+            "data_window": "Source pixel bounds as xmin,ymin - xmax,ymax.",
+            "display_window": "Source display bounds as xmin,ymin - xmax,ymax.",
+            "time_code": "Source timecode text; empty if absent.",
+            "software": "Authoring application; empty if absent.",
+            "owner": "Asset owner; empty if absent.",
+            "chromaticities": "Colour primaries as JSON with red_x/y, green_x/y, blue_x/y and white_x/y; empty if absent.",
+            "custom_attributes": "Non-standard header attributes as JSON; {} if absent.",
+        }
+        with info_group:
+            for output_name, default in HEADER_METADATA_DEFAULTS.items():
+                parameter = (
+                    ParameterFloat(name=output_name, default_value=float(default), allowed_modes={ParameterMode.OUTPUT})
+                    if output_name == "pixel_aspect_ratio"
+                    else ParameterString(
+                        name=output_name, default_value=str(default), allowed_modes={ParameterMode.OUTPUT}
+                    )
+                )
+                parameter.display_name = output_name.replace("_", " ").title()
+                parameter.tooltip = f"{formats[output_name]} Describes the selected part of the selected frame."
         self.add_node_element(info_group)
         # Cleared together on failure; see _on_fail.
         self._info_params = (
@@ -409,9 +435,15 @@ class ReadEXR(SuccessFailureNode):
             # No rescan: the cached header already describes every part in the file.
             if self._scan is not None:
                 self._apply_layer_choices(self._scan.exr_data, str(value or ""))
+            self._refresh_metadata()
+            return
+
+        if parameter.name == self._frame_param.name:
+            self._refresh_metadata()
             return
 
         if parameter.name == self._path_param.name:
+            self._clear_metadata()
             # A live-preview optimisation only. after_value_set is skipped on workflow
             # load and unreliable under parallel execution, so aprocess scans on a miss
             # rather than relying on this having run.
@@ -434,15 +466,70 @@ class ReadEXR(SuccessFailureNode):
             self._pending_scan = asyncio.ensure_future(self._ascan_and_preview(value))
 
     async def wait_for_pending_scan(self) -> None:
-        """Await the background scan started by `after_value_set`, if one is running.
+        """Await outstanding source and metadata refreshes started by value hooks.
 
-        Exists for tests and for anything that needs the dropdowns populated before it
-        reads them. Execution does not need it: `aprocess` scans on a cache miss.
+        Exists for tests and for callers that need refreshed dropdowns and metadata.
+        Execution resolves its own headers without relying on value hooks.
         """
         task = self._pending_scan
         if task is not None:
             self._pending_scan = None
             await asyncio.shield(task)
+        metadata_task = self._pending_metadata
+        if metadata_task is not None:
+            self._pending_metadata = None
+            await asyncio.shield(metadata_task)
+
+    def _clear_metadata(self) -> None:
+        self._metadata_revision += 1
+        previous = self._pending_metadata
+        self._pending_metadata = None
+        if previous is not None and not previous.done():
+            previous.cancel()
+        self.parameter_output_values.update(HEADER_METADATA_DEFAULTS)
+
+    def _metadata_header(self, scan: ScanState, frame: Any, part_choice: str) -> EXRHeader:
+        """Read a selection's header without requiring render or colour settings."""
+        entry, reason = _select_sequence_entry(scan.sequence, frame, is_sequence=len(scan.sequence.entries) > 1)
+        if entry is None:
+            raise ValueError(reason)
+        index = _part_index_for(scan.exr_data, part_choice)
+        if index is None:
+            raise ValueError(f"Part '{part_choice}' is not in this file")
+        data = scan.exr_data
+        stamp = _file_stamp(entry.path)
+        if stamp is None:
+            raise ValueError(f"Cannot read '{entry.path}'")
+        if entry.path != scan.sequence.entries[0].path or stamp != scan.source_stamp:
+            data = scan_exr_header(entry.path, header_only=True)
+            if index >= len(data.parts) or data.parts[index].header.name != scan.exr_data.parts[index].header.name:
+                raise ValueError(f"Part '{part_choice}' is not in{reason}")
+        return data.parts[index].header
+
+    def _refresh_metadata(self) -> None:
+        self._clear_metadata()
+        scan = self._scan
+        if scan is None or scan.key != _scan_key_for(self.get_parameter_value(self._path_param.name)):
+            return
+        revision = self._metadata_revision
+        frame = self.get_parameter_value(self._frame_param.name)
+        part_choice = str(self.get_parameter_value(self._part_name_param.name) or "")
+        if _running_loop() is None:
+            try:
+                header = self._metadata_header(scan, frame, part_choice)
+            except (ValueError, RuntimeError, OSError):
+                return
+            self.parameter_output_values.update(header_metadata_outputs(header))
+        else:
+            self._pending_metadata = asyncio.ensure_future(self._arefresh_metadata(scan, frame, part_choice, revision))
+
+    async def _arefresh_metadata(self, scan: ScanState, frame: Any, part_choice: str, revision: int) -> None:
+        try:
+            header = await to_thread(self._metadata_header, scan, frame, part_choice)
+        except (ValueError, RuntimeError, OSError):
+            return
+        if revision == self._metadata_revision and scan is self._scan:
+            self.parameter_output_values.update(header_metadata_outputs(header))
 
     async def _ascan_and_preview(self, raw_path: Any) -> None:
         """Scan and request a canvas preview, with only the blocking calls off the loop.
@@ -453,8 +540,12 @@ class ReadEXR(SuccessFailureNode):
             scanned = await to_thread(self._scan_blocking, raw_path)
         except Exception:
             logger.warning("ReadEXR '%s': failed to scan '%s'", self.name, raw_path, exc_info=True)
+            if _scan_key_for(raw_path) == _scan_key_for(self.get_parameter_value(self._path_param.name)):
+                self._clear_scan()
             return
         if not self._adopt_if_current(raw_path, scanned):
+            if isinstance(scanned, _Unchanged):
+                self._refresh_metadata()
             return
         await to_thread(self._request_canvas_preview)
 
@@ -467,8 +558,11 @@ class ReadEXR(SuccessFailureNode):
             scanned = self._scan_blocking(raw_path)
         except Exception:
             logger.warning("ReadEXR '%s': failed to scan '%s'", self.name, raw_path, exc_info=True)
+            self._clear_scan()
             return
         if not self._adopt_if_current(raw_path, scanned):
+            if isinstance(scanned, _Unchanged):
+                self._refresh_metadata()
             return
         self._request_canvas_preview()
 
@@ -499,6 +593,7 @@ class ReadEXR(SuccessFailureNode):
     # ------------------------------------------------------------------
 
     def _clear_scan(self) -> None:
+        self._clear_metadata()
         self._scan = None
         self._render = None
 
@@ -548,6 +643,7 @@ class ReadEXR(SuccessFailureNode):
         self._render = None
 
         self._apply_scan_to_ui(scan.sequence, scan.exr_data)
+        self._refresh_metadata()
 
     async def _arefresh_scan(self, raw_path: Any) -> str | None:
         """Scan off the event loop, adopt the result and return any diagnostic."""
@@ -660,6 +756,7 @@ class ReadEXR(SuccessFailureNode):
         return handle_viewer_button_click(self.name, render.source_path if render is not None else None)
 
     def _on_fail(self, details: str) -> None:
+        self._clear_metadata()
         self._render = None
         self.parameter_output_values[self._image_param.name] = None
         self.parameter_output_values[self._part_param.name] = None
@@ -682,6 +779,13 @@ class ReadEXR(SuccessFailureNode):
         spine stays a flat sequence of guards.
         """
         self._clear_execution_status()
+        # Execution owns publication from here. An edit-time scan completing later
+        # must not republish metadata after execution has failed.
+        pending_scan = self._pending_scan
+        self._pending_scan = None
+        if pending_scan is not None and not pending_scan.done():
+            pending_scan.cancel()
+        self._clear_metadata()
 
         scan = await self._aresolve_scan()
         if scan is None:
@@ -948,6 +1052,7 @@ class ReadEXR(SuccessFailureNode):
             self._image_height_param.name: height,
             self._part_count_param.name: len(plan.exr_data.parts),
             self._channel_count_param.name: len(part.channels),
+            **header_metadata_outputs(part.header),
         }
 
     def _render_png(  # noqa: PLR0913, PLR0917
@@ -987,47 +1092,50 @@ class ReadEXR(SuccessFailureNode):
         self.publish_update_to_parameter(self._image_param.name, outputs[self._image_param.name])
 
     def _select_entry(self, sequence: Sequence, *, is_sequence: bool) -> tuple[SequenceEntry | None, str]:
-        """Pick the entry for the requested frame.
-
-        Returns the entry plus a note for the status details, or `(None, reason)`
-        when the requested frame is absent from the sequence.
-        """
-        if not is_sequence:
-            return sequence.entries[0], ""
-
-        requested = self.get_parameter_value(self._frame_param.name)
-        # ParameterInt's converter maps None and "" to 0 and the parameter defaults to 0,
-        # so unset and an explicit frame 0 arrive here as the same int. They also pick the
-        # same entry either way: the engine's scanner drops negative frame numbers, so
-        # sequence.first is never below 0 and the clamp below would land on entries[0].
-        if not requested:
-            return sequence.entries[0], f" frame {sequence.entries[0].number}"
-
-        try:
-            requested = int(requested)
-        except (TypeError, ValueError):
-            # Unreachable through a connection or a property set: ParameterInt's converter
-            # runs first and raises there. This catches a direct parameter_values write,
-            # so it fails the node rather than letting the exception escape aprocess and
-            # leave the previous run's outputs published.
-            return None, f"Frame value {requested!r} is not a number"
-
-        clamped = max(sequence.first, min(sequence.last, requested))
-        for entry in sequence.entries:
-            if entry.number == clamped:
-                note = f" frame {clamped}"
-                if clamped != requested:
-                    note += f" (clamped from {requested}, sequence is {sequence.first}-{sequence.last})"
-                return entry, note
-
-        # The scan already applied the user's MissingItemPolicy, so a gap here is their
-        # decision to tolerate. Re-deciding it would override them.
-        reason = (
-            f"Frame {clamped} is not in the sequence (it spans {sequence.first}-{sequence.last} "
-            f"with {len(sequence.entries)} frame(s) present). Rescan with a SKIP or FILL_NEAREST "
-            f"missing-item policy to tolerate gaps."
+        return _select_sequence_entry(
+            sequence, self.get_parameter_value(self._frame_param.name), is_sequence=is_sequence
         )
-        return None, reason
+
+
+def _select_sequence_entry(
+    sequence: Sequence, requested: Any, *, is_sequence: bool
+) -> tuple[SequenceEntry | None, str]:
+    """Select an entry using the same clamp and missing-frame policy for metadata and rendering."""
+    if not is_sequence:
+        return sequence.entries[0], ""
+
+    # ParameterInt's converter maps None and "" to 0 and the parameter defaults to 0,
+    # so unset and an explicit frame 0 arrive here as the same int. They also pick the
+    # same entry either way: the engine's scanner drops negative frame numbers, so
+    # sequence.first is never below 0 and the clamp below would land on entries[0].
+    if not requested:
+        return sequence.entries[0], f" frame {sequence.entries[0].number}"
+
+    try:
+        requested = int(requested)
+    except (TypeError, ValueError):
+        # Unreachable through a connection or a property set: ParameterInt's converter
+        # runs first and raises there. This catches a direct parameter_values write,
+        # so it fails the node rather than letting the exception escape aprocess and
+        # leave the previous run's outputs published.
+        return None, f"Frame value {requested!r} is not a number"
+
+    clamped = max(sequence.first, min(sequence.last, requested))
+    for entry in sequence.entries:
+        if entry.number == clamped:
+            note = f" frame {clamped}"
+            if clamped != requested:
+                note += f" (clamped from {requested}, sequence is {sequence.first}-{sequence.last})"
+            return entry, note
+
+    # The scan already applied the user's MissingItemPolicy, so a gap here is their
+    # decision to tolerate. Re-deciding it would override them.
+    reason = (
+        f"Frame {clamped} is not in the sequence (it spans {sequence.first}-{sequence.last} "
+        f"with {len(sequence.entries)} frame(s) present). Rescan with a SKIP or FILL_NEAREST "
+        f"missing-item policy to tolerate gaps."
+    )
+    return None, reason
 
 
 # ---------------------------------------------------------------------------

@@ -103,12 +103,12 @@ its HDR data. Choose `FLOAT` when you need 32-bit storage. The default `HALF` us
 
 Configure these settings in the engine's `openexr` category.
 
-| Setting                     | Default    | Purpose                                                                                                                                                                                             |
-| --------------------------- | ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `openexr.header_only`       | `true`     | Load EXR scans headers only and labels channel types as `half`. Set to `false` to load pixels and report accurate types. Read EXR always reads pixels; Load EXR Sequence always scans headers only. |
-| `openexr.max_render_pixels` | `67108864` | Pixel limit for Display EXR Channel and EXR Sequence to Preview output and intermediate canvases, including video padding. Allows an 8192x8192 canvas.                                              |
-| `openexr.viewer_executable` | `""`       | Path to an external HDR viewer. Empty uses the OS default file association.                                                                                                                         |
-| `openexr.viewer_args`       | `""`       | Viewer arguments placed before the file path, parsed with shell-style quoting.                                                                                                                      |
+| Setting                     | Default    | Purpose                                                                                                                                                                                                                                                      |
+| --------------------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `openexr.header_only`       | `true`     | Load EXR scans headers only and labels channel types as `half`. Set to `false` to load pixels and report accurate types. Read EXR reads pixels during execution; its live metadata refreshes scan headers only. Load EXR Sequence always scans headers only. |
+| `openexr.max_render_pixels` | `67108864` | Pixel limit for Display EXR Channel and EXR Sequence to Preview output and intermediate canvases, including video padding. Allows an 8192x8192 canvas.                                                                                                       |
+| `openexr.viewer_executable` | `""`       | Path to an external HDR viewer. Empty uses the OS default file association.                                                                                                                                                                                  |
+| `openexr.viewer_args`       | `""`       | Viewer arguments placed before the file path, parsed with shell-style quoting.                                                                                                                                                                               |
 
 After running a supported node, click **Open in external viewer** to open its
 source EXR. The viewer launches without blocking the canvas.
