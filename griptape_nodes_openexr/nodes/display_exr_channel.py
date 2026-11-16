@@ -13,20 +13,20 @@ from griptape_nodes.exe_types.node_types import SuccessFailureNode
 from griptape_nodes.exe_types.param_components.project_file_parameter import ProjectFileParameter
 from griptape_nodes.exe_types.param_types.parameter_button import ParameterButton
 from griptape_nodes.exe_types.param_types.parameter_float import ParameterFloat
+from griptape_nodes.exe_types.param_types.parameter_string import ParameterString
+from griptape_nodes.retained_mode.events.config_events import GetConfigValueRequest, GetConfigValueResultSuccess
+from griptape_nodes.retained_mode.griptape_nodes import GriptapeNodes
+from griptape_nodes.traits.options import Options
 from PIL import Image
 
+from griptape_nodes_openexr.exr import channel_alignment
 from griptape_nodes_openexr.exr.display_window import (
-    WINDOW_MODE_DATA,
-    WINDOW_MODE_DEFAULT,
     WINDOW_MODE_DISPLAY,
-    WindowFraming,
     add_window_mode_parameter,
     apply_window_mode,
-    read_framing,
-    select_window_channels,
 )
 from griptape_nodes_openexr.exr.exr_header_artifact import EXRChannelArtifact
-from griptape_nodes_openexr.exr.exr_io import load_slot_channels
+from griptape_nodes_openexr.exr.exr_io import load_slot_sources
 from griptape_nodes_openexr.exr.icc_profiles import profile_for_tone_mapping
 from griptape_nodes_openexr.exr.ocio_helpers import (
     COLOR_MODE_BASIC,
@@ -123,6 +123,30 @@ class DisplayEXRChannel(SuccessFailureNode):
         self.add_parameter(self._exposure_param)
 
         self._window_mode_param = add_window_mode_parameter(self)
+        self._alignment_param = ParameterString(
+            name="channel_alignment",
+            default_value=channel_alignment.ALIGN_PIXELS,
+            tooltip=(
+                "Match pixel positions aligns top-left stored pixels and ignores other sources' header offsets; "
+                "array sizes must match. Match EXR coordinates places each channel using its own data window. "
+                "Require matching windows rejects differing data or display windows, including alpha."
+            ),
+            allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
+        )
+        self._alignment_param.add_trait(Options(choices=channel_alignment.ALIGN_CHOICES, allow_custom=True))
+        self.add_parameter(self._alignment_param)
+        self._frame_reference_param = ParameterString(
+            name="frame_reference",
+            default_value=channel_alignment.REFERENCE_DEFAULT,
+            tooltip=(
+                "Channel whose display window defines the intended frame. First connected RGB uses R, G, B order. "
+                "Pixel-position alignment also uses this source's data-window origin. "
+                "An explicitly selected slot must be connected."
+            ),
+            allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
+        )
+        self._frame_reference_param.add_trait(Options(choices=channel_alignment.REFERENCE_CHOICES, allow_custom=True))
+        self.add_parameter(self._frame_reference_param)
 
         (
             self._color_mode_param,
@@ -218,38 +242,25 @@ class DisplayEXRChannel(SuccessFailureNode):
         self._current_exr_path = first_artifact.file_path
 
         all_slots = rgb_slots if channel_a is None else {**rgb_slots, "A": channel_a}
+        window_mode = str(self.get_parameter_value(self._window_mode_param.name))
+        alignment_policy = str(self.get_parameter_value(self._alignment_param.name))
+        frame_reference = str(self.get_parameter_value(self._frame_reference_param.name))
         try:
-            pixels = load_slot_channels(all_slots)
+            channel_alignment.resolve_reference(all_slots, alignment_policy, frame_reference, window_mode)
+            limit = _get_render_limit()
+            sources = load_slot_sources(all_slots)
+            assembly = channel_alignment.assemble_channels(
+                sources, alignment_policy, frame_reference, window_mode, limit
+            )
         except (ValueError, RuntimeError) as e:
             self._on_fail_handler(str(e))
             return
-        alpha_plane: np.ndarray | None = pixels.pop("A", None)
-
-        all_arrays = list(pixels.values()) + ([alpha_plane] if alpha_plane is not None else [])
-        shapes = [arr.shape for arr in all_arrays]
-        if len(set(shapes)) > 1:
-            shape_detail = {slot: arr.shape for slot, arr in pixels.items()}
-            if alpha_plane is not None:
-                shape_detail["A"] = alpha_plane.shape
-            self._on_fail_handler(f"Channel dimensions do not match: {shape_detail}")
-            return
-
-        height, width = shapes[0]
-
-        window_mode = str(self.get_parameter_value(self._window_mode_param.name) or WINDOW_MODE_DEFAULT)
-        framing: WindowFraming | None = None
+        framing = assembly.framing
+        pixels = {slot: plane for slot, plane in assembly.planes.items() if slot != "A"}
+        alpha_plane = assembly.planes.get("A")
+        rgb_coverage = assembly.rgb_coverage
+        height, width = next(iter(pixels.values())).shape
         composite_background = background is not None and alpha_plane is not None
-        try:
-            if window_mode != WINDOW_MODE_DATA:
-                framing = read_framing(window_mode, first_artifact.file_path, first_artifact.part_index)
-                planes = pixels if alpha_plane is None else {**pixels, "A": alpha_plane}
-                planes, framing = select_window_channels(planes, framing)
-                pixels = {name: plane for name, plane in planes.items() if name != "A"}
-                alpha_plane = planes.get("A")
-                height, width = next(iter(pixels.values())).shape
-        except (ValueError, RuntimeError) as e:
-            self._on_fail_handler(str(e))
-            return
 
         try:
             rgb = _build_rgb(pixels, height, width)
@@ -274,9 +285,10 @@ class DisplayEXRChannel(SuccessFailureNode):
         alpha_f32 = alpha_plane.reshape(height, width) if alpha_plane is not None else None
 
         try:
-            if framing is not None and framing.mode == WINDOW_MODE_DISPLAY and composite_background:
+            if framing.mode == WINDOW_MODE_DISPLAY and composite_background:
                 # Fit and composite the background over the full display canvas.
                 rgb = apply_window_mode(rgb, framing)
+                rgb_coverage = apply_window_mode(rgb_coverage[..., np.newaxis], framing)[..., 0]
                 if alpha_f32 is not None:
                     alpha_f32 = apply_window_mode(alpha_f32[..., np.newaxis], framing)[..., 0]
                 height, width = rgb.shape[:2]
@@ -305,8 +317,12 @@ class DisplayEXRChannel(SuccessFailureNode):
                 if alpha_f32 is not None and bg_rgb is not None:
                     rgb = _composite(rgb, alpha_f32, srgb_to_linear(bg_rgb))
                 rgb, tone_mode = apply_color_management(rgb, color_params, tone_mapping)
+                if alpha_f32 is not None and bg_rgb is not None:
+                    # Opaque alpha with no RGB source represents black, even when the transform lifts zero.
+                    rgb[~rgb_coverage & (alpha_f32 >= 1.0)] = 0.0
             else:
                 rgb, tone_mode = apply_color_management(rgb, color_params, tone_mapping)
+                rgb[~rgb_coverage] = 0.0
                 if alpha_f32 is not None and bg_rgb is not None:
                     rgb = _composite(np.clip(rgb, 0.0, 1.0), alpha_f32, bg_rgb)
         except ValueError as e:
@@ -314,9 +330,11 @@ class DisplayEXRChannel(SuccessFailureNode):
             return
 
         # A composited image is opaque, so alpha is only kept when there was no background.
+        if bg_rgb is None:
+            rgb[~rgb_coverage] = 0.0
         uint8 = _compose_alpha(to_uint8(rgb), alpha_f32 if bg_rgb is None else None)
 
-        if framing is not None and (framing.mode != WINDOW_MODE_DISPLAY or not composite_background):
+        if framing.mode != WINDOW_MODE_DISPLAY or not composite_background:
             try:
                 uint8 = apply_window_mode(uint8, framing)
                 height, width = uint8.shape[:2]
@@ -343,9 +361,25 @@ class DisplayEXRChannel(SuccessFailureNode):
         slot_info = ", ".join(f"{slot}={rgb_slots[slot].channel.name}" for slot in sorted(rgb_slots))
         alpha_info = f", A={channel_a.channel.name}" if channel_a else ""
         bg_info = ", bg=composite" if bg_rgb is not None else ""
-        details = f"Rendered {width}×{height} ({window_mode}), channels: [{slot_info}{alpha_info}]{bg_info}, EV={ev:+.1f}, {tone_mode}"
+        details = (
+            f"Rendered {width}x{height} ({window_mode}), {alignment_policy}, reference={assembly.reference_slot}, "
+            f"channels: [{slot_info}{alpha_info}]{bg_info}, EV={ev:+.1f}, {tone_mode}"
+        )
         self._set_status_results(was_successful=True, result_details=details)
         logger.info("DisplayEXRChannel '%s': %s", self.name, details)
+
+
+def _get_render_limit() -> int:
+    """Read the library setting on every execution, falling back when absent."""
+    result = GriptapeNodes.handle_request(
+        GetConfigValueRequest(category_and_key=channel_alignment.MAX_RENDER_PIXELS_SETTING)
+    )
+    if result.failed():
+        return channel_alignment.MAX_RENDER_PIXELS_DEFAULT
+    if not isinstance(result, GetConfigValueResultSuccess):
+        msg = f"Unexpected response reading {channel_alignment.MAX_RENDER_PIXELS_SETTING}"
+        raise RuntimeError(msg)
+    return channel_alignment.validate_render_limit(result.value)
 
 
 def _output_profile(tone_mapping: str, *, embed: bool, ocio: bool) -> bytes | None:

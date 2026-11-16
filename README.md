@@ -267,18 +267,20 @@ Combines 1–4 individual `EXRChannelArtifact` inputs into an 8-bit PNG (RGB or 
 
 **Inputs**
 
-| Parameter             | Type                                       | Description                                                                                                                                                         |
-| --------------------- | ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `channel_r`           | `EXRChannelArtifact`                       | Channel mapped to the red plane. Optional.                                                                                                                          |
-| `channel_g`           | `EXRChannelArtifact`                       | Channel mapped to the green plane. Optional.                                                                                                                        |
-| `channel_b`           | `EXRChannelArtifact`                       | Channel mapped to the blue plane. Optional.                                                                                                                         |
-| `channel_a`           | `EXRChannelArtifact`                       | Channel used as alpha. Optional; when connected, output is RGBA.                                                                                                    |
-| `exposure`            | `float`                                    | Exposure in EV stops applied before tone mapping. Range −10 to +10, default `0.0`.                                                                                  |
-| `window_mode`         | `str`                                      | `Full` (default), `Crop Overscan`, or `Show Overscan Boundary`, using the windows of the first connected RGB channel's part. See [Display window](#display-window). |
-| `color_mode`          | `str`                                      | `basic` (local tone mapping) or `ocio` (connected `OCIOColorParamsArtifact`). Default `basic`.                                                                      |
-| `tone_mapping`        | `str`                                      | `sRGB`, `rec709`, `rec1886`, or `raw`. Default `sRGB`. See [Display transforms](#display-transforms).                                                               |
-| `embed_color_profile` | `bool`                                     | Embed an ICC profile describing the display transform. Default `false`. See [Colour profiles](#colour-profiles).                                                    |
-| `background`          | `ImageArtifact \| ImageUrlArtifact \| str` | Background image for A-over-B compositing. Ignored when no alpha channel is connected.                                                                              |
+| Parameter             | Type                                       | Description                                                                                                                                    |
+| --------------------- | ------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `channel_r`           | `EXRChannelArtifact`                       | Channel mapped to the red plane. Optional.                                                                                                     |
+| `channel_g`           | `EXRChannelArtifact`                       | Channel mapped to the green plane. Optional.                                                                                                   |
+| `channel_b`           | `EXRChannelArtifact`                       | Channel mapped to the blue plane. Optional.                                                                                                    |
+| `channel_a`           | `EXRChannelArtifact`                       | Channel used as alpha. Optional; when connected, output is RGBA.                                                                               |
+| `exposure`            | `float`                                    | Exposure in EV stops applied before tone mapping. Range −10 to +10, default `0.0`.                                                             |
+| `window_mode`         | `str`                                      | `Full` (default), `Crop Overscan`, or `Show Overscan Boundary`. The frame comes from `frame_reference`. See [Display window](#display-window). |
+| `channel_alignment`   | `str`                                      | `Match pixel positions` (default), `Match EXR coordinates`, or `Require matching windows`. See below.                                          |
+| `frame_reference`     | `str`                                      | `First connected RGB` (default), `R`, `G`, `B`, or `A`. Selects the source whose display window defines the intended frame.                    |
+| `color_mode`          | `str`                                      | `basic` (local tone mapping) or `ocio` (connected `OCIOColorParamsArtifact`). Default `basic`.                                                 |
+| `tone_mapping`        | `str`                                      | `sRGB`, `rec709`, `rec1886`, or `raw`. Default `sRGB`. See [Display transforms](#display-transforms).                                          |
+| `embed_color_profile` | `bool`                                     | Embed an ICC profile describing the display transform. Default `false`. See [Colour profiles](#colour-profiles).                               |
+| `background`          | `ImageArtifact \| ImageUrlArtifact \| str` | Background image for A-over-B compositing. Ignored when no alpha channel is connected.                                                         |
 
 **Outputs**
 
@@ -287,7 +289,21 @@ Combines 1–4 individual `EXRChannelArtifact` inputs into an 8-bit PNG (RGB or 
 | `image`       | `ImageUrlArtifact` | 8-bit PNG (RGB or RGBA) for in-canvas display |
 | `output_file` | `str`              | Path to the saved PNG file                    |
 
-At least one RGB slot must be connected. All connected channels must have the same pixel dimensions.
+At least one RGB slot must be connected.
+
+**Channel alignment**
+
+- `Match pixel positions` aligns the top-left stored pixels and requires equal array dimensions. It ignores other sources' data-window offsets. The reference source supplies the coordinate origin and intended frame. This default preserves existing saved workflows.
+- `Match EXR coordinates` places every channel using its own data-window coordinates, supporting different sizes and origins without resizing. Missing samples are zero-filled. `Full` and `Show Overscan Boundary` include the bounding rectangle of all connected data windows, including alpha. `Crop Overscan` renders the reference display window directly.
+- `Require matching windows` fails if any connected channel, including alpha, has different data or display windows. The error identifies the affected slot.
+
+Coordinate and strict alignment require channels with one sample per EXR coordinate; subsampled channels fail with a slot-specific error. Source planes are never resampled.
+
+`First connected RGB` chooses R, then G, then B. An explicitly selected reference slot must be connected. Use `frame_reference=A` when a matte defines the intended frame, or `R` when beauty should define it.
+
+For beauty with a data window starting at `(-8, -8)` and a matte starting at `(0, 0)`, choose `Match EXR coordinates` to align their EXR positions. Choose `Match pixel positions` to align their stored array positions instead. Result details report the alignment policy and effective reference.
+
+Display EXR Channel checks output and intermediate assembly sizes against `openexr.max_render_pixels`. See [Library Settings](#library-settings) for the default and how to raise it.
 
 ______________________________________________________________________
 
@@ -367,11 +383,16 @@ Frames that fail to convert are skipped; the run continues and the error count i
 
 Settings are configured in the engine under the `openexr` category.
 
-| Setting                     | Default | Description                                                                                                                                                                                         |
-| --------------------------- | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `openexr.header_only`       | `true`  | When `true`, **Load EXR** reads only the file header (fast) and labels every channel `half`. Set to `false` to read accurate per-channel pixel types at the cost of loading pixel data into memory. |
-| `openexr.viewer_executable` | `""`    | Full path to an external HDR viewer executable (e.g. `/usr/bin/djv`, `/Applications/Nuke15.0v1/Nuke15.0v1.app/Contents/MacOS/Nuke15.0v1`). When empty, the OS default file association is used.     |
-| `openexr.viewer_args`       | `""`    | Additional command-line arguments passed to the viewer before the file path, e.g. `--hdr --linear`. Parsed with shell-style quoting rules.                                                          |
+| Setting                     | Default    | Description                                                                                                                                                                                         |
+| --------------------------- | ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `openexr.max_render_pixels` | `67108864` | Maximum pixels in Display EXR Channel output and intermediate assembly canvases, across all alignment modes. Must be a positive integer. Default supports 8192x8192 images.                         |
+| `openexr.header_only`       | `true`     | When `true`, **Load EXR** reads only the file header (fast) and labels every channel `half`. Set to `false` to read accurate per-channel pixel types at the cost of loading pixel data into memory. |
+| `openexr.viewer_executable` | `""`       | Full path to an external HDR viewer executable (e.g. `/usr/bin/djv`, `/Applications/Nuke15.0v1/Nuke15.0v1.app/Contents/MacOS/Nuke15.0v1`). When empty, the OS default file association is used.     |
+| `openexr.viewer_args`       | `""`       | Additional command-line arguments passed to the viewer before the file path, e.g. `--hdr --linear`. Parsed with shell-style quoting rules.                                                          |
+
+Increase `max_render_pixels` in the engine's `openexr` library settings to permit larger canvases. For example, `134217728` allows twice the default pixel count. The setting is read on every execution; oversized renders fail with the required dimensions and setting name. Images are never resized to fit the limit.
+
+The limit applies to Display EXR Channel's output and intermediate assembly canvases. Other rendering nodes and source EXR decoding are outside this guard: the OpenEXR binding still decodes the full source file. This is a pixel-count limit, with no separate width or height cap. Float32 processing and concurrent buffers require additional memory; one 8192x8192 RGBA float32 buffer occupies 1 GiB.
 
 Only **Load EXR** honours `openexr.header_only`. **Load EXR Sequence** always scans header-only, since its output carries no pixel data and a full scan would only buy slower, discarded reads. **Read EXR** always reads pixels, since decoding the selected part is the whole job.
 

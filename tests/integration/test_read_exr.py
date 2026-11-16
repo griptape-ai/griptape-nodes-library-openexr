@@ -21,6 +21,7 @@ from griptape_nodes.retained_mode.events.artifact_events import (
     GetPreviewForArtifactRequest,
     GetPreviewForArtifactResultFailure,
 )
+from griptape_nodes.retained_mode.events.config_events import GetConfigValueRequest, GetConfigValueResultFailure
 from griptape_nodes.retained_mode.events.connection_events import (
     ListConnectionsForNodeResultSuccess,
 )
@@ -96,6 +97,8 @@ class _Engine:
         self.written: list[Path] = []
 
     def handle_request(self, request: Any) -> Any:
+        if isinstance(request, GetConfigValueRequest):
+            return GetConfigValueResultFailure(result_details="setting absent in test engine")
         if isinstance(request, ScanSequencesRequest):
             sequence = Sequence.model_validate(_sequence_dict([Path(request.path)], start=1))
             return ScanSequencesResultSuccess(

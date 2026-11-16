@@ -13,6 +13,7 @@ Two-phase design:
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
@@ -209,9 +210,66 @@ def load_slot_channels(slots: Mapping[str, EXRChannelArtifact]) -> dict[str, np.
     return {slot: pixels[slot] for slot in slots}
 
 
+@dataclass(frozen=True)
+class ChannelSource:
+    """One decoded channel plane and its source part's geometry."""
+
+    pixels: np.ndarray
+    data_window: WindowCoordinates
+    display_window: WindowCoordinates
+    x_sampling: int = 1
+    y_sampling: int = 1
+
+
+def load_slot_sources(slots: Mapping[str, EXRChannelArtifact]) -> dict[str, ChannelSource]:
+    """Decode each source file once, retaining per-slot window metadata.
+
+    Raises ValueError or RuntimeError with the affected slot names, as
+    load_slot_channels does. Metadata comes from the pixel-decoding open.
+    """
+    groups: dict[str, list[str]] = {}
+    for slot, artifact in slots.items():
+        groups.setdefault(artifact.file_path, []).append(slot)
+    sources: dict[str, ChannelSource] = {}
+    for file_path, group in groups.items():
+        requests: dict[int, list[str] | None] = {}
+        for slot in group:
+            names = requests.setdefault(slots[slot].part_index, [])
+            assert names is not None
+            if slots[slot].channel.name not in names:
+                names.append(slots[slot].channel.name)
+        windows: dict[int, tuple[WindowCoordinates, WindowCoordinates]] = {}
+        sampling: dict[int, dict[str, tuple[int, int]]] = {}
+        try:
+            loaded = _decode_parts_channels(file_path, requests, windows=windows, sampling=sampling)
+        except (ValueError, RuntimeError) as e:
+            label = f"{group[0]} channel" if len(group) == 1 else f"{', '.join(group)} channels"
+            msg = f"Failed to load {label}: {e}"
+            raise type(e)(msg) from e
+        for slot in group:
+            artifact = slots[slot]
+            data, display = windows[artifact.part_index]
+            x_sampling, y_sampling = sampling[artifact.part_index][artifact.channel.name]
+            sources[slot] = ChannelSource(
+                loaded[artifact.part_index][artifact.channel.name], data, display, x_sampling, y_sampling
+            )
+    return {slot: sources[slot] for slot in slots}
+
+
 def _load_parts_channels(
     file_path: str,
     requests: Mapping[int, list[str] | None],
+) -> dict[int, dict[str, np.ndarray]]:
+    """Array-only compatibility wrapper for the shared decoder."""
+    return _decode_parts_channels(file_path, requests)
+
+
+def _decode_parts_channels(
+    file_path: str,
+    requests: Mapping[int, list[str] | None],
+    *,
+    windows: dict[int, tuple[WindowCoordinates, WindowCoordinates]] | None = None,
+    sampling: dict[int, dict[str, tuple[int, int]]] | None = None,
 ) -> dict[int, dict[str, np.ndarray]]:
     """Read channels from several parts of one EXR file with a single decode.
 
@@ -250,6 +308,15 @@ def _load_parts_channels(
         try:
             for part_index, channel_names in requests.items():
                 part = parts[part_index]
+                if windows is not None:
+                    windows[part_index] = (
+                        _extract_window_coordinates(_require_exr_attribute(part.header, _ATTR_DATA_WINDOW)),
+                        _extract_window_coordinates(_require_exr_attribute(part.header, _ATTR_DISPLAY_WINDOW)),
+                    )
+                if sampling is not None:
+                    sampling[part_index] = {
+                        name: (channel.xSampling, channel.ySampling) for name, channel in part.channels.items()
+                    }
                 names_to_load = channel_names if channel_names is not None else list(part.channels)
                 result[part_index] = {
                     name: part.channels[name].pixels.astype(np.float32, copy=False) for name in names_to_load

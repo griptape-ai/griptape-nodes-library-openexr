@@ -10,8 +10,12 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import pytest
 from griptape.artifacts import ImageArtifact
+from griptape_nodes.retained_mode.events.config_events import GetConfigValueResultFailure
+from griptape_nodes.retained_mode.griptape_nodes import GriptapeNodes
 from PIL import Image
 
+from griptape_nodes_openexr.exr.exr_io import ChannelSource
+from griptape_nodes_openexr.exr.exr_types import WindowCoordinates
 from griptape_nodes_openexr.exr.ocio_helpers import COLOR_MODE_OCIO
 from griptape_nodes_openexr.exr.tone_mapping import linear_to_srgb, srgb_to_linear
 from griptape_nodes_openexr.nodes.display_exr_channel import _composite
@@ -63,12 +67,14 @@ def _render(
         captured.append(arr)
         return b""
 
+    window = WindowCoordinates(0, 0, W - 1, H - 1)
+    config_result = GetConfigValueResultFailure(result_details="setting absent")
+    assert isinstance(config_result, GetConfigValueResultFailure)
     with (
+        patch.object(GriptapeNodes, "handle_request", return_value=config_result),
         patch(
-            "griptape_nodes_openexr.exr.exr_io._load_parts_channels",
-            side_effect=lambda _p, requests: {
-                i: {name: planes[name] for name in names} for i, names in requests.items()
-            },
+            f"{_NODE_MODULE}.load_slot_sources",
+            return_value={slot: ChannelSource(plane, window, window) for slot, plane in planes.items()},
         ),
         patch(f"{_NODE_MODULE}.ndarray_to_png", side_effect=_capture),
         patch(f"{_NODE_MODULE}.ImageUrlArtifact"),
