@@ -2,7 +2,7 @@
 
 Professional OpenEXR support for Griptape Nodes, designed for VFX and HDR pipelines. Read an EXR file or frame sequence straight to a viewable image, inspect a file's structure, load an EXR frame sequence, display individual parts or manually-assembled channels as tone-mapped images, convert a sequence to a preview video, and save images or channel data back to EXR.
 
-Start with **Read EXR**. The other nodes are there when you need the structure, the lower-level sequence controls, or explicit per-channel wiring.
+Use **Read EXR** for new file and sequence reading workflows. **Load EXR** and **Load EXR Sequence** are deprecated and remain available during migration. We are migrating missing functionality to Read EXR. Keep the retained nodes where their capabilities are still needed; see the [migration guide](#migration-from-deprecated-load-nodes).
 
 ## Nodes
 
@@ -57,17 +57,32 @@ While a connection drives `frame`, the slider renders disabled but live, so it d
 
 An out-of-range `frame` clamps to the sequence bounds and says so in the result details rather than failing. A frame that is absent from the sequence's entries fails loudly, naming the frame: the scan already applied your `MissingItemPolicy`, so deciding it again here would override you. Set `SKIP` or `FILL_NEAREST` at the scan if you want gaps tolerated.
 
-#### Relationship to the other nodes
+#### Migration from deprecated load nodes
 
-All of these coexist. **Read EXR** is the recommended starting point; the others keep the jobs it deliberately does not do.
+**Load EXR** and **Load EXR Sequence** are deprecated. Both nodes remain available during migration. Existing saved workflows retain their parameters, connections and execution behaviour, and receive deprecation warnings. Workflows are not converted automatically.
 
-- **Load EXR** is the structural inspector: header-only, the full set of header outputs, dynamic per-part and per-channel groups.
-- **Load EXR Sequence** is the lower-level sequence node: `on_mismatch`, a thread count, and a header-only pass over hundreds of frames with no rendering.
-- **Display EXR Channel** is still the only way to map arbitrary channels onto R/G/B/A slots.
+We are migrating missing functionality to Read EXR. Use it for new file and sequence reading workflows. No removal release is scheduled. Removal is a separate change, gated on [header metadata migration (#111)](https://github.com/griptape-ai/griptape-nodes-library-openexr/issues/111), agreed replacements for the gaps below, and an agreed removal release. [#110](https://github.com/griptape-ai/griptape-nodes-library-openexr/issues/110) covers named part/channel outputs.
+
+| Existing capability                               | Migration workflow or remaining gap                                                                                                                                                                                                                                                                         |
+| ------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Load EXR -> select a part -> Display EXR Part     | Set Read EXR's `path`, select `part_name`, and use its `image` or selected `part`. Carry across display settings.                                                                                                                                                                                           |
+| Scalar header metadata                            | Compression, storage, aspect ratio, windows, time code, software, owner, chromaticities and custom attributes are covered by #111. Keep Load EXR for these connections until replacements ship. Check frame/part semantics before rewiring.                                                                 |
+| Named part/channel connections                    | #110 covers individually connectable named outputs. Keep Load EXR for existing dynamic-output connections until replacements ship.                                                                                                                                                                          |
+| All-parts descriptor list                         | Read EXR emits one selected `part`. #110 does not promise an all-parts list. Keep Load EXR for list consumers until a replacement is agreed.                                                                                                                                                                |
+| Dimensions and counts                             | Load EXR reports the first part's data-window dimensions and a file-wide channel count. Read EXR reports rendered-image dimensions, depending on `window_mode`, and the selected part's channel count. Its `part` retains source dimensions. Check semantics before reconnecting same-named outputs.        |
+| Header-only inspection and accurate channel types | Read EXR renders an image and ignores `openexr.header_only`. Keep Load EXR for inspection-only work, including files Read EXR cannot render. Its warning and `openexr.header_only=false` option remain available. Reliable type/sampling coverage and warnings need verification under #110 before removal. |
+| Sequence input and selected-frame reading         | Connect `Sequence` to Read EXR's `path` and drive `frame` with actual frame numbers. Map numeric `part_index` to the corresponding `part_name` label; check part order/names across frames.                                                                                                                 |
+| Sequence descriptor list                          | Read EXR emits one descriptor per execution. A loop can process frames but does not reproduce the ordered batch `parts` list by itself. Keep Load EXR Sequence for list consumers. Its descriptors retain real `frame_number` values when skipped frames make the list shorter than `frame_count`.          |
+| Sequence mismatch validation                      | Read EXR has no equivalent batch `on_mismatch=skip/fail`, majority-layout validation or no-majority failure. Keep Load EXR Sequence for scan-failure and resolution/channel-layout validation. Scan Sequence's missing-frame policy handles a different condition.                                          |
+| Parallel header-only sequence scans               | Keep Load EXR Sequence for always-header-only scans and `threads` (1-16, default 4) until replacement throughput and controls are agreed. Read EXR renders one frame per execution.                                                                                                                         |
+
+**Display EXR Channel** remains available for mapping arbitrary channels onto R/G/B/A slots. Select descriptors from Read EXR's `channels` output for new workflows, or retain existing named Load EXR connections during migration.
 
 ______________________________________________________________________
 
 ### Load EXR
+
+**Deprecated.** Use **Read EXR** for new file-reading workflows. Load EXR remains available while missing functionality is migrated, with no scheduled removal release. See the [migration guide](#migration-from-deprecated-load-nodes).
 
 Loads an EXR file and exposes its full structure as typed outputs. Pixel loading is off by default (`header_only=True`), making it fast even on large multi-part renders. This is configurable via the `openexr.header_only` engine setting. A header-only scan labels every channel `half`, and the node shows a warning saying so.
 
@@ -105,6 +120,8 @@ ______________________________________________________________________
 
 ### Load EXR Sequence
 
+**Deprecated.** Use **Read EXR** for new sequence-reading workflows. Load EXR Sequence remains available while missing functionality is migrated, with no scheduled removal release. See the [migration guide](#migration-from-deprecated-load-nodes).
+
 Loads an EXR frame sequence (from `ScanSequence`/`ScanSplitSequence`) and exposes per-frame structure as a list. Unlike **Load EXR**, this node always scans header-only and ignores the `openexr.header_only` engine setting: the output `EXRPartArtifact` never carries pixel data, so there is nothing to gain from a full scan.
 
 v1 is single-part: every frame is scanned at the same `part_index`. Multi-part-per-frame sequences (AOV stacks) are out of scope for now.
@@ -136,13 +153,15 @@ The output `parts` is a plain list, so it connects directly into a **For Each** 
 
 #### Manual composition alternative
 
-For full per-frame control, you can wire `ScanSequence -> ForEach -> LoadEXR` by hand instead: feed `ScanSequence`'s `paths` output into **For Each Start**, and connect the current item to **Load EXR**'s `file_path`. This works today but isn't recommended for tight loops: **Load EXR**'s dynamic per-part/per-channel UI parameters re-populate on every `file_path` change, which is wasteful run hundreds of times. **Load EXR Sequence** followed by **For Each** over its `parts` output is the preferred path for most users.
+For new selected-frame reading workflows, connect `Sequence` to **Read EXR**'s `path` and iterate actual frame numbers through `frame`. See [Iterating a sequence](#iterating-a-sequence).
+
+Existing `ScanSequence -> ForEach -> LoadEXR` workflows remain supported during migration. Load EXR's dynamic parameters repopulate on every `file_path` change. Keep **Load EXR Sequence** followed by **For Each** where you need its batch descriptor list, mismatch validation or parallel header-only scans.
 
 ______________________________________________________________________
 
 ### Display EXR Part
 
-Renders an EXR part to an 8-bit PNG (RGB or RGBA). Accepts an `EXRPartArtifact` from **Load EXR**, auto-selects RGB display channels, applies exposure and tone mapping, and writes the result as an `ImageUrlArtifact`.
+Renders an EXR part to an 8-bit PNG (RGB or RGBA). Accepts an `EXRPartArtifact` from **Read EXR**'s `part` output or the retained deprecated load nodes, auto-selects RGB display channels, applies exposure and tone mapping, and writes the result as an `ImageUrlArtifact`.
 
 An **Open in external viewer** button opens the source EXR in a configured HDR viewer (or the OS default) after the node has been run. See [Library Settings](#library-settings).
 
@@ -345,16 +364,16 @@ The collapsed **Metadata** group exposes optional header fields:
 
 **Outputs**
 
-| Parameter     | Type              | Description                                                                           |
-| ------------- | ----------------- | ------------------------------------------------------------------------------------- |
-| `output_file` | `str`             | Path to the written `.exr` file                                                       |
-| `output_part` | `EXRPartArtifact` | Descriptor for the written part — connectable to **Display EXR Part** or **Load EXR** |
+| Parameter     | Type              | Description                                                          |
+| ------------- | ----------------- | -------------------------------------------------------------------- |
+| `output_file` | `str`             | Path to the written `.exr` file                                      |
+| `output_part` | `EXRPartArtifact` | Descriptor for the written part, connectable to **Display EXR Part** |
 
 ______________________________________________________________________
 
 ### EXR Sequence to Preview
 
-Bakes an EXR frame sequence down to a single MP4/MOV preview video, applying exposure and color management per frame. Accepts a `Sequence` (from **Scan Sequence**/**Scan Split Sequence**) and loads pixels eagerly, since it has to encode a video. Use **Load EXR Sequence** instead if you need per-frame EXR data in the graph rather than a baked preview.
+Bakes an EXR frame sequence down to a single MP4/MOV preview video, applying exposure and color management per frame. Accepts a `Sequence` (from **Scan Sequence**/**Scan Split Sequence**) and loads pixels eagerly, since it has to encode a video. Use **Read EXR** for new per-frame reading workflows. Keep the deprecated **Load EXR Sequence** where you need its batch descriptor list, mismatch validation or parallel header-only scans during migration.
 
 **Inputs**
 
