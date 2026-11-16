@@ -790,6 +790,28 @@ class TestWindowModesAcrossNodes:
         assert not converted[1][0].any()
         assert converted[1][2:8, 4:12].any(axis=-1).all()
 
+    @pytest.mark.parametrize(
+        ("legacy", "current"),
+        [
+            ("data window", WINDOW_MODE_DATA),
+            ("display window", WINDOW_MODE_DISPLAY),
+            ("data window with display overlay", WINDOW_MODE_OVERLAY),
+        ],
+    )
+    def test_saved_mode_names_use_current_labels(
+        self, engine: _Engine, tmp_path: Path, legacy: str, current: str
+    ) -> None:
+        import asyncio
+
+        path = _write_windowed(tmp_path / "overscan.exr", *_WINDOW_CASES["overscan"])
+        node = _make_node()
+        node.set_parameter_value("path", str(path))
+        node.set_parameter_value("window_mode", legacy)
+        assert node.get_parameter_value("window_mode") == current
+        asyncio.run(_run(node))
+        assert _was_successful(node) is True, _result_details(node)
+        assert _rendered(node).shape[:2] == ((12, 16) if current == WINDOW_MODE_DISPLAY else (20, 32))
+
     def test_changing_the_mode_renders_again(self, engine: _Engine, tmp_path: Path) -> None:
         import asyncio
 

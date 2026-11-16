@@ -27,16 +27,28 @@ if TYPE_CHECKING:
 
     from griptape_nodes_openexr.exr.exr_types import EXRHeader
 
-WINDOW_MODE_DATA = "data window"
-WINDOW_MODE_DISPLAY = "display window"
-WINDOW_MODE_OVERLAY = "data window with display overlay"
+WINDOW_MODE_DATA = "Full"
+WINDOW_MODE_DISPLAY = "Crop Overscan"
+WINDOW_MODE_OVERLAY = "Show Overscan Boundary"
 WINDOW_MODE_CHOICES = [WINDOW_MODE_DATA, WINDOW_MODE_DISPLAY, WINDOW_MODE_OVERLAY]
 WINDOW_MODE_DEFAULT = WINDOW_MODE_DATA
 
+_LEGACY_WINDOW_MODES = {
+    "data window": WINDOW_MODE_DATA,
+    "display window": WINDOW_MODE_DISPLAY,
+    "data window with display overlay": WINDOW_MODE_OVERLAY,
+}
+
+
+def _normalise_window_mode(mode: str) -> str:
+    """Keep saved workflows using the original mode names compatible."""
+    return _LEGACY_WINDOW_MODES.get(mode, mode)
+
+
 WINDOW_MODE_TOOLTIP = (
-    "Which region of the EXR to render. 'data window' shows every stored pixel. "
-    "'display window' crops to the intended frame, removing overscan and filling frame areas "
-    "with no stored pixels with transparent black. 'data window with display overlay' shows every "
+    "Which region of the EXR to render. 'Full' shows every stored pixel. "
+    "'Crop Overscan' crops to the intended frame, removing overscan and filling frame areas "
+    "with no stored pixels with transparent black. 'Show Overscan Boundary' shows every "
     "stored pixel and outlines the intended frame. Only the rendered image changes; the EXR's "
     "channels and metadata are passed on as stored."
 )
@@ -58,6 +70,9 @@ class WindowFraming:
     mode: str
     data_window: WindowCoordinates
     display_window: WindowCoordinates
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "mode", _normalise_window_mode(self.mode))
 
     @classmethod
     def for_header(cls, mode: str, header: EXRHeader) -> WindowFraming:
@@ -83,6 +98,7 @@ def add_window_mode_parameter(node: BaseNode) -> ParameterString:
     parameter = ParameterString(
         name="window_mode",
         default_value=WINDOW_MODE_DEFAULT,
+        converters=[_normalise_window_mode],
         tooltip=WINDOW_MODE_TOOLTIP,
         allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
     )
@@ -169,8 +185,8 @@ def apply_window_mode(image: np.ndarray, framing: WindowFraming) -> np.ndarray:
         framing: The mode and the part's windows.
 
     Returns:
-        The image unchanged for 'data window'; cropped and padded to the display
-        window for 'display window'; a copy with the display window outlined for
+        The image unchanged for 'Full'; cropped and padded to the display
+        window for 'Crop Overscan'; a copy with the display window outlined for
         the overlay mode.
 
     Raises:

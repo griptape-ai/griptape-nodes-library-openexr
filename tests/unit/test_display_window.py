@@ -45,7 +45,37 @@ class TestChoices:
         assert WINDOW_MODE_DEFAULT == WINDOW_MODE_DATA
 
     def test_three_modes_are_offered(self) -> None:
-        assert WINDOW_MODE_CHOICES == [WINDOW_MODE_DATA, WINDOW_MODE_DISPLAY, WINDOW_MODE_OVERLAY]
+        assert WINDOW_MODE_CHOICES == ["Full", "Crop Overscan", "Show Overscan Boundary"]
+
+    @pytest.mark.parametrize(
+        ("legacy", "current"),
+        [
+            ("data window", "Full"),
+            ("display window", "Crop Overscan"),
+            ("data window with display overlay", "Show Overscan Boundary"),
+        ],
+    )
+    def test_saved_mode_values_keep_their_rendering(self, legacy: str, current: str) -> None:
+        data, display = (-2, -2, 5, 5), (0, 0, 3, 3)
+        old_framing = _framing(legacy, data, display)
+        new_framing = _framing(current, data, display)
+        image = _image(old_framing.data_window)
+        assert old_framing.mode == current
+        assert window_size(old_framing) == window_size(new_framing)
+        np.testing.assert_array_equal(apply_window_mode(image, old_framing), apply_window_mode(image, new_framing))
+
+    def test_parameter_converts_saved_values_to_current_labels(self) -> None:
+        from unittest.mock import MagicMock
+
+        from griptape_nodes_openexr.exr.display_window import add_window_mode_parameter
+
+        parameter = add_window_mode_parameter(MagicMock())
+        assert parameter.default_value == "Full"
+        for original, expected in [("display window", "Crop Overscan"), ("typo", "typo")]:
+            value = original
+            for converter in parameter.converters:
+                value = converter(value)
+            assert value == expected
 
     def test_unknown_mode_is_reported(self) -> None:
         framing = _framing("letterbox", (0, 0, 3, 3), (0, 0, 3, 3))
