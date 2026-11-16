@@ -71,6 +71,8 @@ class TestChoices:
 
         parameter = add_window_mode_parameter(MagicMock())
         assert parameter.default_value == "Full"
+        assert "with black, with zero alpha in RGBA output" in parameter.tooltip
+        assert "transparent black" not in parameter.tooltip
         for original, expected in [("display window", "Crop Overscan"), ("typo", "typo")]:
             value = original
             for converter in parameter.converters:

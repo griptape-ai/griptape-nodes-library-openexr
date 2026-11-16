@@ -48,7 +48,7 @@ def _normalise_window_mode(mode: str) -> str:
 WINDOW_MODE_TOOLTIP = (
     "Which region of the EXR to render. 'Full' shows every stored pixel. "
     "'Crop Overscan' crops to the intended frame, removing overscan and filling frame areas "
-    "with no stored pixels with transparent black. 'Show Overscan Boundary' shows every "
+    "with no stored pixels with black, with zero alpha in RGBA output. 'Show Overscan Boundary' shows every "
     "stored pixel and outlines the intended frame. Only the rendered image changes; the EXR's "
     "channels and metadata are passed on as stored."
 )
