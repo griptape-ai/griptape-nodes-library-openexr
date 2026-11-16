@@ -56,7 +56,13 @@
       "file_path": "griptape_nodes_openexr/nodes/load_exr.py",
       "metadata": {
         "category": "exr",
-        "description": "Load an OpenEXR file and expose its metadata (parts, channels, attributes) without reading pixels",
+        "description": "Deprecated. Use Read EXR for new file-reading workflows. Missing functionality is being migrated to Read EXR; Load EXR remains available during migration.",
+        "deprecation": {
+          "deprecation_message": "Use Read EXR for new file-reading workflows. We are migrating missing functionality to Read EXR. Both load nodes remain available during migration, with no scheduled removal release. Keep Load EXR for header-only inspection, metadata outputs, all-parts lists and named part/channel connections until their replacements are available. See the README migration guide."
+        },
+        "declarations": [
+          { "type": "lifecycle_stage", "stage": "DEPRECATED" }
+        ],
         "display_name": "Load EXR",
         "icon": "file-search",
         "group": "load"
@@ -67,7 +73,13 @@
       "file_path": "griptape_nodes_openexr/nodes/load_exr_sequence.py",
       "metadata": {
         "category": "exr",
-        "description": "Load an EXR frame sequence and expose per-frame structure as a list, without reading pixels",
+        "description": "Deprecated. Use Read EXR for new sequence-reading workflows. Missing functionality is being migrated to Read EXR; Load EXR Sequence remains available during migration.",
+        "deprecation": {
+          "deprecation_message": "Use Read EXR for new sequence-reading workflows: connect Sequence to path and drive frame with actual frame numbers. We are migrating missing functionality to Read EXR. Both load nodes remain available during migration, with no scheduled removal release. Keep Load EXR Sequence for per-frame descriptor lists, mismatch validation and parallel header-only scans until their replacements are available. See the README migration guide."
+        },
+        "declarations": [
+          { "type": "lifecycle_stage", "stage": "DEPRECATED" }
+        ],
         "display_name": "Load EXR Sequence",
         "icon": "file-search",
         "group": "load"
