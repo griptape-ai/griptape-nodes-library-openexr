@@ -62,6 +62,7 @@ from griptape_nodes_openexr.exr.tone_mapping import (
     TONE_REC1886,
     TONE_SRGB,
     apply_exposure,
+    canonical_tone_mapping,
     display_encoding,
     to_uint8,
 )
@@ -110,7 +111,7 @@ def color_trc_for(tone_mapping: str) -> str:
         An x264 transfer characteristic value (passed via -x264-params),
         falling back to bt709 for an unrecognised name.
     """
-    return _FFMPEG_TRC_VALUES.get(tone_mapping.lower(), _DEFAULT_TRC)
+    return _FFMPEG_TRC_VALUES.get(canonical_tone_mapping(tone_mapping).lower(), _DEFAULT_TRC)
 
 
 _SPEED_FAST = "fast"

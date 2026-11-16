@@ -15,8 +15,12 @@ from griptape_nodes_openexr.exr.tone_mapping import (
     TONE_ACESCG_SRGB,
     TONE_CHOICES,
     TONE_DEFAULT,
+    TONE_REC709,
+    TONE_REC1886,
+    TONE_SRGB,
     apply_exposure,
     apply_tone_mapping,
+    canonical_tone_mapping,
     convert_gamut,
     display_encoding,
     linear_to_rec709,
@@ -329,7 +333,7 @@ class TestApplyToneMapping:
         with pytest.raises(ValueError, match="no longer supported") as excinfo:
             apply_tone_mapping(arr, "linear")
         message = str(excinfo.value)
-        assert "sRGB" in message
+        assert TONE_SRGB in message
         assert "raw" in message
 
     def test_filmic_is_retired_and_names_alternatives(self) -> None:
@@ -339,7 +343,7 @@ class TestApplyToneMapping:
         with pytest.raises(ValueError, match="no longer supported") as excinfo:
             apply_tone_mapping(arr, "filmic")
         message = str(excinfo.value)
-        assert "sRGB" in message
+        assert TONE_SRGB in message
         assert "ocio" in message
 
     def test_no_choice_rolls_off_above_one(self) -> None:
@@ -367,7 +371,7 @@ class TestApplyToneMapping:
         assert apply_tone_mapping(arr, tone).shape == (1, 1, 3)
 
     def test_default_is_srgb(self) -> None:
-        assert TONE_DEFAULT == "sRGB"
+        assert TONE_DEFAULT == "Linear sRGB to sRGB"
         assert TONE_DEFAULT in TONE_CHOICES
 
     def test_case_insensitive(self) -> None:
@@ -456,10 +460,24 @@ class TestAcesDisplayTransforms:
     def test_choices_are_offered(self) -> None:
         assert {TONE_ACESCG_SRGB, TONE_ACESCG_REC709, TONE_ACES2065_SRGB} <= set(TONE_CHOICES)
 
-    def test_existing_choices_and_default_are_unchanged(self) -> None:
-        # Saved workflows store these names, so they must stay first and as spelled.
-        assert TONE_CHOICES[:4] == ["sRGB", "rec709", "rec1886", "raw"]
-        assert TONE_DEFAULT == "sRGB"
+    def test_linear_srgb_choices_come_first(self) -> None:
+        assert TONE_CHOICES[:4] == ["Linear sRGB to sRGB", "Linear sRGB to rec709", "Linear sRGB to rec1886", "raw"]
+        assert TONE_DEFAULT == "Linear sRGB to sRGB"
+
+    @pytest.mark.parametrize(
+        ("earlier", "current"),
+        [("sRGB", TONE_SRGB), ("SRGB", TONE_SRGB), ("rec709", TONE_REC709), ("rec1886", TONE_REC1886)],
+    )
+    def test_earlier_names_resolve_to_current_choices(self, earlier: str, current: str) -> None:
+        # Saved workflows store the earlier names, so they must keep rendering the same.
+        assert canonical_tone_mapping(earlier) == current
+        arr = np.array([[[0.18, 0.5, 0.9]]], dtype=np.float32)
+        np.testing.assert_array_equal(apply_tone_mapping(arr, earlier), apply_tone_mapping(arr, current))
+        assert display_encoding(earlier) == display_encoding(current)
+
+    @pytest.mark.parametrize("tone", ["raw", TONE_ACESCG_SRGB, "filmic", "reinhard"])
+    def test_other_names_pass_through(self, tone: str) -> None:
+        assert canonical_tone_mapping(tone) == tone
 
     @pytest.mark.parametrize(
         ("tone", "base"),
@@ -507,10 +525,10 @@ class TestAcesDisplayTransforms:
     @pytest.mark.parametrize(
         ("tone", "expected"),
         [
-            (TONE_ACESCG_SRGB, "srgb"),
-            (TONE_ACESCG_REC709, "rec709"),
-            (TONE_ACES2065_SRGB, "srgb"),
-            ("rec1886", "rec1886"),
+            (TONE_ACESCG_SRGB, TONE_SRGB.lower()),
+            (TONE_ACESCG_REC709, TONE_REC709.lower()),
+            (TONE_ACES2065_SRGB, TONE_SRGB.lower()),
+            (TONE_REC1886, TONE_REC1886.lower()),
             ("RAW", "raw"),
             ("reinhard", None),
         ],

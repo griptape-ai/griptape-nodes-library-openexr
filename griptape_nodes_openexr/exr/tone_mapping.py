@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import numpy as np
 
-TONE_SRGB = "sRGB"
-TONE_REC709 = "rec709"
-TONE_REC1886 = "rec1886"
+TONE_SRGB = "Linear sRGB to sRGB"
+TONE_REC709 = "Linear sRGB to rec709"
+TONE_REC1886 = "Linear sRGB to rec1886"
 TONE_RAW = "raw"
 TONE_ACESCG_SRGB = "ACEScg to sRGB"
 TONE_ACESCG_REC709 = "ACEScg to rec709"
@@ -23,11 +23,20 @@ TONE_CHOICES = [
 ]
 TONE_DEFAULT = TONE_SRGB
 
+# Earlier names for the linear sRGB choices, kept so saved workflows and scripted values
+# still resolve. Keyed by the lowercased name.
+_TONE_ALIASES = {
+    "srgb": TONE_SRGB,
+    "rec709": TONE_REC709,
+    "rec1886": TONE_REC1886,
+}
+
 TONE_CURVES_DESCRIPTION = (
-    "'sRGB' applies the sRGB transfer function; 'rec709' applies the BT.709 OETF; "
-    "'rec1886' applies BT.1886 (gamma 2.4); 'raw' clamps to [0, 1] with no transfer "
-    "function. These assume linear Rec.709/sRGB primaries, match the views in Nuke's "
-    "default config, and like that viewer clip scene values above 1.0. "
+    "'Linear sRGB to sRGB' applies the sRGB transfer function; 'Linear sRGB to rec709' "
+    "applies the BT.709 OETF; 'Linear sRGB to rec1886' applies BT.1886 (gamma 2.4); 'raw' "
+    "clamps to [0, 1] with no transfer function. These assume linear Rec.709/sRGB "
+    "primaries, match the sRGB, rec709, rec1886 and raw views in Nuke's default config, "
+    "and like that viewer clip scene values above 1.0. "
     "'ACEScg to sRGB', 'ACEScg to rec709' and 'ACES2065-1 to sRGB' first convert ACES "
     "primaries to Rec.709, then apply the named encoding. That is a gamut conversion, "
     "not the ACES output transform, so highlights still clip. Use 'ocio' mode for a "
@@ -39,12 +48,12 @@ _RETIRED_TONES = {
     "filmic": (
         "'filmic' is no longer supported: it was a Narkowicz 2015 approximation of "
         "the ACES RRT, and basic mode now offers only display encodings, matching "
-        "Nuke's default viewer. Use 'sRGB' for a similar look, or switch to 'ocio' "
-        "mode for a real tone-mapped view transform."
+        "Nuke's default viewer. Use 'Linear sRGB to sRGB' for a similar look, or switch "
+        "to 'ocio' mode for a real tone-mapped view transform."
     ),
     "linear": (
         "'linear' is no longer supported: despite the name it sRGB-encoded the image. "
-        "Use 'sRGB' for the same result, or 'raw' for true unencoded linear."
+        "Use 'Linear sRGB to sRGB' for the same result, or 'raw' for true unencoded linear."
     ),
 }
 
@@ -231,6 +240,23 @@ _TONE_GAMUT_CONVERSIONS = {
 }
 
 
+def canonical_tone_mapping(tone_mapping: str) -> str:
+    """The current name for a display transform, resolving an earlier name.
+
+    Args:
+        tone_mapping: A display transform name (case-insensitive).
+
+    Returns:
+        The current choice for an earlier name such as 'sRGB', otherwise
+        tone_mapping unchanged.
+    """
+    return _TONE_ALIASES.get(tone_mapping.lower(), tone_mapping)
+
+
+def _tone_key(tone_mapping: str) -> str:
+    return canonical_tone_mapping(tone_mapping).lower()
+
+
 def gamut_matrix(tone_mapping: str) -> np.ndarray | None:
     """The matrix a display transform applies into Rec.709 primaries, if any.
 
@@ -241,7 +267,7 @@ def gamut_matrix(tone_mapping: str) -> np.ndarray | None:
         The 3x3 matrix for an ACES choice, or None for a choice that assumes
         Rec.709 primaries already, or an unknown name.
     """
-    conversion = _TONE_GAMUT_CONVERSIONS.get(tone_mapping.lower())
+    conversion = _TONE_GAMUT_CONVERSIONS.get(_tone_key(tone_mapping))
     return None if conversion is None else conversion[0]
 
 
@@ -258,7 +284,7 @@ def display_encoding(tone_mapping: str) -> str | None:
     Returns:
         The lowercased base choice, or None for an unknown name.
     """
-    tone = tone_mapping.lower()
+    tone = _tone_key(tone_mapping)
     if tone in _TONE_GAMUT_CONVERSIONS:
         return _TONE_GAMUT_CONVERSIONS[tone][1].lower()
     if tone in _TONE_TRANSFER_FUNCTIONS:
@@ -281,8 +307,8 @@ def apply_tone_mapping(rgb: np.ndarray, tone_mapping: str) -> np.ndarray:
     that rolls off highlights belongs in 'ocio' mode.
 
     Output is an 8-bit PNG with no embedded profile unless `embed_color_profile`
-    is set, so by default viewers read it as sRGB. Choosing 'rec709' or
-    'rec1886' therefore shows the same deliberate mismatch a Rec.709 view
+    is set, so by default viewers read it as sRGB. Choosing 'Linear sRGB to
+    rec709' or 'Linear sRGB to rec1886' therefore shows the same deliberate mismatch a Rec.709 view
     shows on an sRGB monitor.
 
     Not used for OCIO colour management, where the display/view transform already
@@ -291,7 +317,8 @@ def apply_tone_mapping(rgb: np.ndarray, tone_mapping: str) -> np.ndarray:
     Args:
         rgb: Float32 scene-linear RGB array. The ACES choices need the three
             channels on the last axis.
-        tone_mapping: One of TONE_CHOICES (case-insensitive).
+        tone_mapping: One of TONE_CHOICES or an earlier name for one
+            (case-insensitive).
 
     Returns:
         Display-encoded float32 array in [0, 1], same shape as input.
@@ -300,7 +327,7 @@ def apply_tone_mapping(rgb: np.ndarray, tone_mapping: str) -> np.ndarray:
         ValueError: If tone_mapping is not a supported curve, or an ACES
             choice gets an array without three channels on its last axis.
     """
-    tone = tone_mapping.lower()
+    tone = _tone_key(tone_mapping)
 
     retired = retired_tone_message(tone)
     if retired is not None:

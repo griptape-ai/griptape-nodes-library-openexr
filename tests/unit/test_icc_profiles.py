@@ -107,7 +107,11 @@ class TestProfileStructure:
 
     @pytest.mark.parametrize(
         ("tone", "base"),
-        [("ACEScg to sRGB", "sRGB"), ("ACEScg to rec709", "rec709"), ("ACES2065-1 to sRGB", "sRGB")],
+        [
+            ("ACEScg to sRGB", "Linear sRGB to sRGB"),
+            ("ACEScg to rec709", "Linear sRGB to rec709"),
+            ("ACES2065-1 to sRGB", "Linear sRGB to sRGB"),
+        ],
     )
     def test_aces_choice_shares_its_base_profile(self, tone: str, base: str) -> None:
         # The output is Rec.709 primaries with the base curve, which is what that profile says.

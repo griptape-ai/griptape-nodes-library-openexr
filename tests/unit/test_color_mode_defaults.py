@@ -12,6 +12,9 @@ from griptape_nodes_openexr.exr.tone_mapping import (
     TONE_ACESCG_REC709,
     TONE_ACESCG_SRGB,
     TONE_CHOICES,
+    TONE_REC709,
+    TONE_REC1886,
+    TONE_SRGB,
 )
 from griptape_nodes_openexr.nodes.display_exr_channel import DisplayEXRChannel
 from griptape_nodes_openexr.nodes.display_exr_part import DisplayEXRPart
@@ -115,3 +118,14 @@ class TestToneMappingChoices:
         node.set_parameter_value("tone_mapping", tone, initial_setup=True)
 
         assert node.get_parameter_value("tone_mapping") == tone
+
+    @pytest.mark.parametrize(
+        ("earlier", "current"),
+        [("sRGB", TONE_SRGB), ("rec709", TONE_REC709), ("rec1886", TONE_REC1886)],
+    )
+    def test_saved_earlier_name_loads_as_current_choice(self, node_type: type, earlier: str, current: str) -> None:
+        node = _make_node(node_type, ocio_available=False)
+
+        node.set_parameter_value("tone_mapping", earlier, initial_setup=True)
+
+        assert node.get_parameter_value("tone_mapping") == current

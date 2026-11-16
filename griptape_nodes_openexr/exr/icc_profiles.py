@@ -44,6 +44,7 @@ from griptape_nodes_openexr.exr.tone_mapping import (
     TONE_REC709,
     TONE_REC1886,
     TONE_SRGB,
+    canonical_tone_mapping,
     display_encoding,
 )
 
@@ -249,4 +250,4 @@ def profile_for_tone_mapping(tone_mapping: str) -> bytes | None:
         The profile bytes, or None if the name has no profile. Callers write
         an untagged image when None, which viewers read as sRGB.
     """
-    return _PROFILES.get(tone_mapping.lower())
+    return _PROFILES.get(canonical_tone_mapping(tone_mapping).lower())

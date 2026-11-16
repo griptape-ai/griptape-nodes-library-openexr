@@ -19,6 +19,7 @@ from griptape_nodes_openexr.exr.tone_mapping import (
     TONE_CURVES_DESCRIPTION,
     TONE_DEFAULT,
     apply_tone_mapping,
+    canonical_tone_mapping,
 )
 
 logger = logging.getLogger("griptape_nodes")
@@ -202,6 +203,8 @@ def add_color_mode_parameters(
         default_value=TONE_DEFAULT,
         tooltip=tone_mapping_tooltip,
         allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
+        # Shows a workflow saved with an earlier name such as 'sRGB' under its current name.
+        converters=[canonical_tone_mapping],
     )
     # allow_custom keeps the dropdown but disables the Options converter, which
     # rewrites any off-list value to choices[0]. A workflow saved with a retired

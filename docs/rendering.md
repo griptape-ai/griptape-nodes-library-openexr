@@ -20,23 +20,26 @@ Display EXR Part, Display EXR Channel or EXR Sequence to Preview.
 ## Display Transforms
 
 In `basic` colour mode, `tone_mapping` selects how scene-linear values are
-encoded for display. The names match the views in Nuke's default OCIO config,
-so `rec709` and `rec1886` mean the same curves there as they do here.
+encoded for display. Each name gives the source colour space and the display
+encoding. The encodings match the views in Nuke's default OCIO config, so
+`rec709` and `rec1886` mean the same curves there as they do here.
 
-| Choice    | Curve                                    | Linear 0.18 renders as |
-| --------- | ---------------------------------------- | ---------------------- |
-| `sRGB`    | sRGB transfer function (IEC 61966-2-1)   | 118                    |
-| `rec709`  | BT.709 OETF                              | 104                    |
-| `rec1886` | BT.1886, pure gamma 2.4                  | 125                    |
-| `raw`     | None. Clamped to [0, 1] with no encoding | 46                     |
+| Choice                   | Curve                                    | Linear 0.18 renders as |
+| ------------------------ | ---------------------------------------- | ---------------------- |
+| `Linear sRGB to sRGB`    | sRGB transfer function (IEC 61966-2-1)   | 118                    |
+| `Linear sRGB to rec709`  | BT.709 OETF                              | 104                    |
+| `Linear sRGB to rec1886` | BT.1886, pure gamma 2.4                  | 125                    |
+| `raw`                    | None. Clamped to [0, 1] with no encoding | 46                     |
+
+Workflows saved with the earlier names `sRGB`, `rec709` and `rec1886` load
+with the matching choice above and render the same.
 
 `rec709` is darker than `sRGB` through the midtones and `rec1886` is lighter,
 because sRGB's effective gamma of roughly 2.2 sits between the two. `raw`
 applies no transfer function, which is useful for reading actual pixel values
 but looks dark on screen.
 
-These four assume linear Rec.709/sRGB primaries, so `sRGB` is also the view
-for a linear sRGB plate. For an ACES plate, pick a transform that converts its
+These four assume linear Rec.709/sRGB primaries. For an ACES plate, pick a transform that converts its
 primaries to Rec.709 first and then applies one of the curves above:
 
 | Choice               | Source primaries | Then encodes as |
@@ -65,12 +68,12 @@ output on an sRGB monitor. See [Colour profiles](rendering.md#colour-profiles).
 > either fail with an error naming the replacement.
 >
 > `linear` applied the sRGB transfer function despite its name, making it a
-> confusing spelling of `sRGB`. Use `sRGB` to keep the previous output, or
+> confusing spelling of `sRGB`. Use `Linear sRGB to sRGB` to keep the previous output, or
 > `raw` for genuinely unencoded linear values.
 >
 > `filmic` was a Narkowicz 2015 approximation of the ACES RRT, a term from
 > Blender and real-time rendering rather than VFX. Basic mode now offers only
-> display encodings, matching Nuke's default viewer. Use `sRGB` for a similar
+> display encodings, matching Nuke's default viewer. Use `Linear sRGB to sRGB` for a similar
 > look, or `ocio` mode for a real tone-mapped view transform.
 
 ## Display Window
