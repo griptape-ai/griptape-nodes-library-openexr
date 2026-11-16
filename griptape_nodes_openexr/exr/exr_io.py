@@ -168,7 +168,7 @@ def load_exr_channels(
             unknown ``channel_names``.
         RuntimeError: If the file cannot be opened or read.
     """
-    return _load_parts_channels(file_path, {part_index: channel_names})[part_index]
+    return _decode_parts_channels(file_path, {part_index: channel_names})[part_index]
 
 
 def load_slot_channels(slots: Mapping[str, EXRChannelArtifact]) -> dict[str, np.ndarray]:
@@ -187,27 +187,7 @@ def load_slot_channels(slots: Mapping[str, EXRChannelArtifact]) -> dict[str, np.
         ValueError: As :func:`load_exr_channels`, with the message naming the affected slots.
         RuntimeError: As :func:`load_exr_channels`, with the message naming the affected slots.
     """
-    groups: dict[str, list[str]] = {}
-    for slot, artifact in slots.items():
-        groups.setdefault(artifact.file_path, []).append(slot)
-
-    pixels: dict[str, np.ndarray] = {}
-    for file_path, group in groups.items():
-        requests: dict[int, list[str]] = {}
-        for slot in group:
-            names = requests.setdefault(slots[slot].part_index, [])
-            if slots[slot].channel.name not in names:
-                names.append(slots[slot].channel.name)
-        try:
-            loaded = _load_parts_channels(file_path, requests)
-        except (ValueError, RuntimeError) as e:
-            label = f"{group[0]} channel" if len(group) == 1 else f"{', '.join(group)} channels"
-            msg = f"Failed to load {label}: {e}"
-            raise type(e)(msg) from e
-        for slot in group:
-            pixels[slot] = loaded[slots[slot].part_index][slots[slot].channel.name]
-
-    return {slot: pixels[slot] for slot in slots}
+    return {slot: source.pixels for slot, source in load_slot_sources(slots).items()}
 
 
 @dataclass(frozen=True)
@@ -232,10 +212,9 @@ def load_slot_sources(slots: Mapping[str, EXRChannelArtifact]) -> dict[str, Chan
         groups.setdefault(artifact.file_path, []).append(slot)
     sources: dict[str, ChannelSource] = {}
     for file_path, group in groups.items():
-        requests: dict[int, list[str] | None] = {}
+        requests: dict[int, list[str]] = {}
         for slot in group:
             names = requests.setdefault(slots[slot].part_index, [])
-            assert names is not None
             if slots[slot].channel.name not in names:
                 names.append(slots[slot].channel.name)
         windows: dict[int, tuple[WindowCoordinates, WindowCoordinates]] = {}
@@ -254,14 +233,6 @@ def load_slot_sources(slots: Mapping[str, EXRChannelArtifact]) -> dict[str, Chan
                 loaded[artifact.part_index][artifact.channel.name], data, display, x_sampling, y_sampling
             )
     return {slot: sources[slot] for slot in slots}
-
-
-def _load_parts_channels(
-    file_path: str,
-    requests: Mapping[int, list[str] | None],
-) -> dict[int, dict[str, np.ndarray]]:
-    """Array-only compatibility wrapper for the shared decoder."""
-    return _decode_parts_channels(file_path, requests)
 
 
 def _decode_parts_channels(
