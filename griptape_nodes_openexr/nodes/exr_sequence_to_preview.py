@@ -34,6 +34,7 @@ from griptape_nodes_openexr.exr.display_window import (
     apply_window_mode,
     read_framing,
     select_window_channels,
+    validate_window_mode,
 )
 from griptape_nodes_openexr.exr.exr_io import build_rgb_array, load_exr_channels
 from griptape_nodes_openexr.exr.ocio_helpers import (
@@ -300,7 +301,11 @@ class EXRSequenceToPreview(SuccessFailureNode):
         threads = int(self.get_parameter_value(self._threads_param.name))
         fmt = str(self.get_parameter_value(self._format_param.name))
         missing_frames = str(self.get_parameter_value(self._missing_frames_param.name))
-        window_mode = str(self.get_parameter_value(self._window_mode_param.name) or WINDOW_MODE_DEFAULT)
+        try:
+            window_mode = validate_window_mode(str(self.get_parameter_value(self._window_mode_param.name)))
+        except ValueError as e:
+            self._on_fail(str(e))
+            return
 
         color_params: ColorParamsProtocol | None = None
         if color_mode == COLOR_MODE_OCIO:
@@ -477,6 +482,7 @@ def _convert_frame(  # noqa: PLR0913, PLR0917
         The written PNG, named for frame_index. Pass the frames for ffmpeg
         through `_number_contiguously` before handing it the directory.
     """
+    window_mode = validate_window_mode(window_mode)
     pixels = load_exr_channels(exr_path, part_index)
 
     channel_names = list(pixels.keys())

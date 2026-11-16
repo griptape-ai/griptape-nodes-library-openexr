@@ -13,7 +13,12 @@ import io
 import numpy as np
 from PIL import Image
 
-from griptape_nodes_openexr.exr.display_window import WindowFraming, apply_window_mode, select_window_channels
+from griptape_nodes_openexr.exr.display_window import (
+    WindowFraming,
+    apply_window_mode,
+    select_window_channels,
+    validate_window_mode,
+)
 from griptape_nodes_openexr.exr.exr_io import build_rgb_array, load_exr_channels
 from griptape_nodes_openexr.exr.icc_profiles import profile_for_tone_mapping
 from griptape_nodes_openexr.exr.ocio_helpers import ColorParamsProtocol, apply_color_management
@@ -60,6 +65,8 @@ def render_part_png(  # noqa: PLR0913
         ValueError: If colour management or framing fails (OCIO errors carry
             their own user-facing message).
     """
+    if framing is not None:
+        validate_window_mode(framing.mode)
     channels_to_load = selected + ([alpha_channel] if alpha_channel else [])
 
     try:

@@ -45,6 +45,15 @@ def _normalise_window_mode(mode: str) -> str:
     return _LEGACY_WINDOW_MODES.get(mode, mode)
 
 
+def validate_window_mode(mode: str) -> str:
+    """Normalise saved mode names and reject unknown values before decoding."""
+    mode = _normalise_window_mode(mode)
+    if mode not in WINDOW_MODE_CHOICES:
+        msg = f"Unknown window_mode '{mode}'. Choose one of: {', '.join(WINDOW_MODE_CHOICES)}"
+        raise ValueError(msg)
+    return mode
+
+
 WINDOW_MODE_TOOLTIP = (
     "Which region of the EXR to render. 'Full' shows every stored pixel. "
     "'Crop Overscan' crops to the intended frame, removing overscan and filling frame areas "
@@ -163,9 +172,7 @@ def select_window_channels(
 
 
 def _validate_window_shape(image: np.ndarray, framing: WindowFraming) -> None:
-    if framing.mode not in WINDOW_MODE_CHOICES:
-        msg = f"Unknown window_mode '{framing.mode}'. Choose one of: {', '.join(WINDOW_MODE_CHOICES)}"
-        raise ValueError(msg)
+    validate_window_mode(framing.mode)
     if framing.mode == WINDOW_MODE_DATA:
         return
     expected = (framing.data_window.height, framing.data_window.width)

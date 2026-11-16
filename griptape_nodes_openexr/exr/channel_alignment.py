@@ -8,11 +8,11 @@ from dataclasses import dataclass
 import numpy as np
 
 from griptape_nodes_openexr.exr.display_window import (
-    WINDOW_MODE_CHOICES,
     WINDOW_MODE_DISPLAY,
     WindowFraming,
     WindowIntersection,
     select_window_channels,
+    validate_window_mode,
     window_size,
 )
 from griptape_nodes_openexr.exr.exr_io import ChannelSource
@@ -46,9 +46,7 @@ def resolve_reference(slots: Mapping[str, object], policy: str, reference: str, 
     if reference not in REFERENCE_CHOICES:
         msg = f"Unknown frame_reference '{reference}'. Choose one of: {', '.join(REFERENCE_CHOICES)}"
         raise ValueError(msg)
-    if mode not in WINDOW_MODE_CHOICES:
-        msg = f"Unknown window_mode '{mode}'. Choose one of: {', '.join(WINDOW_MODE_CHOICES)}"
-        raise ValueError(msg)
+    validate_window_mode(mode)
     if not any(slot in slots for slot in "RGB"):
         msg = "At least one RGB channel slot must be connected"
         raise ValueError(msg)
@@ -91,6 +89,7 @@ def assemble_channels(
     window. Full and overlay modes use the union of all connected data windows.
     Pixel-position mode retains the existing equal-shape, reference-origin path.
     """
+    mode = validate_window_mode(mode)
     reference_slot = resolve_reference(sources, policy, reference, mode)
     limit = validate_render_limit(max_pixels)
     source = sources[reference_slot]

@@ -41,9 +41,9 @@ from griptape_nodes_openexr.exr.channel_selection import (
     select_display_channels,
 )
 from griptape_nodes_openexr.exr.display_window import (
-    WINDOW_MODE_DEFAULT,
     WindowFraming,
     add_window_mode_parameter,
+    validate_window_mode,
     window_size,
 )
 from griptape_nodes_openexr.exr.exr_header_artifact import EXRChannelArtifact, EXRPartArtifact
@@ -788,6 +788,11 @@ class ReadEXR(SuccessFailureNode):
 
     def _plan_frame(self, scan: ScanState, *, is_sequence: bool) -> _FramePlan | None:
         """Resolve frame, part and colour settings. Returns None after calling `_on_fail`."""
+        try:
+            window_mode = validate_window_mode(str(self.get_parameter_value(self._window_mode_param.name)))
+        except ValueError as e:
+            self._on_fail(str(e))
+            return None
         exr_data = scan.exr_data
 
         entry, frame_note = self._select_entry(scan.sequence, is_sequence=is_sequence)
@@ -818,7 +823,7 @@ class ReadEXR(SuccessFailureNode):
             part=exr_data.parts[part_index],
             exr_data=exr_data,
             layer=str(self.get_parameter_value(self._layer_param.name) or ""),
-            window_mode=str(self.get_parameter_value(self._window_mode_param.name) or WINDOW_MODE_DEFAULT),
+            window_mode=window_mode,
             exposure_ev=float(self.get_parameter_value(self._exposure_param.name) or 0.0),
             color_mode=color_mode,
             tone_mapping=str(self.get_parameter_value(self._tone_mapping_param.name) or TONE_DEFAULT),

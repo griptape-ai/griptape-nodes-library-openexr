@@ -14,9 +14,9 @@ from griptape_nodes.exe_types.param_types.parameter_float import ParameterFloat
 
 from griptape_nodes_openexr.exr.channel_selection import select_alpha_channel, select_display_channels
 from griptape_nodes_openexr.exr.display_window import (
-    WINDOW_MODE_DEFAULT,
     WindowFraming,
     add_window_mode_parameter,
+    validate_window_mode,
     window_size,
 )
 from griptape_nodes_openexr.exr.exr_header_artifact import EXRPartArtifact
@@ -174,10 +174,9 @@ class DisplayEXRPart(SuccessFailureNode):
                 self._on_fail_handler("OCIO mode requires a connected color_params artifact.")
                 return
 
-        window_mode = str(self.get_parameter_value(self._window_mode_param.name) or WINDOW_MODE_DEFAULT)
-        framing = WindowFraming.for_header(window_mode, part.header)
-
         try:
+            window_mode = validate_window_mode(str(self.get_parameter_value(self._window_mode_param.name)))
+            framing = WindowFraming.for_header(window_mode, part.header)
             png_bytes, tone_mode = render_part_png(
                 file_path=part.file_path,
                 part_index=part.part_index,
