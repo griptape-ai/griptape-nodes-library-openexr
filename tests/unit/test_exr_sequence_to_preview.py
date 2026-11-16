@@ -72,6 +72,21 @@ class TestNodeInit:
         node = _make_node()
         assert node.get_parameter_by_name("sequence") is not None
 
+    def test_sequence_accepts_connections_and_editable_exr_paths(self) -> None:
+        from griptape_nodes.exe_types.core_types import ParameterMode
+
+        node = _make_node()
+        parameter = node.get_parameter_by_name("sequence")
+        assert parameter is not None
+        assert parameter.input_types == ["Sequence", "str"]
+        assert parameter.allowed_modes == {ParameterMode.INPUT, ParameterMode.PROPERTY}
+        assert node.get_parameter_value("sequence") == ""
+        picker = parameter.ui_options["fileSystemPicker"]
+        assert picker["allowFiles"] is True
+        assert picker["allowDirectories"] is False
+        assert picker["allowSequences"] is True
+        assert picker["fileExtensions"] == [".exr"]
+
     def test_frame_rate_default_is_24(self) -> None:
         node = _make_node()
         assert node.get_parameter_value("frame_rate") == 24.0
@@ -285,6 +300,16 @@ class TestAProcessNoInput:
         node = _make_node()
         asyncio.run(node.aprocess())
         assert _was_successful(node) is False
+        assert "No sequence provided" in node.parameter_output_values["result_details"]
+
+    @pytest.mark.parametrize("path", ["missing.####.exr", "invalid.##@@.exr"])
+    def test_unusable_path_reports_failure(self, tmp_path: Path, path: str) -> None:
+        node = _make_node()
+        node.set_parameter_value("sequence", str(tmp_path / path))
+        asyncio.run(node.aprocess())
+        assert _was_successful(node) is False
+        assert str(tmp_path / path) in node.parameter_output_values["result_details"]
+        assert node.parameter_output_values["video"] is None
 
 
 # ---------------------------------------------------------------------------
@@ -305,8 +330,14 @@ def _make_1x1_rgba_pixels() -> dict[str, np.ndarray]:
 class TestAProcessPipeline:
     """Full-pipeline tests with mocked I/O and ffmpeg."""
 
-    def _run_with_sequence(self, paths: list[Path], tmp_path: Path, threads: int = 2):
-        from griptape_nodes.retained_mode.events.os_events import DeleteFileRequest
+    def _run_with_sequence(
+        self, paths: list[Path], tmp_path: Path, threads: int = 2, sequence_value: str | None = None
+    ):
+        from griptape_nodes.retained_mode.events.os_events import (
+            DeleteFileRequest,
+            ScanSequencesRequest,
+            ScanSequencesResultSuccess,
+        )
         from griptape_nodes.retained_mode.griptape_nodes import GriptapeNodes
 
         node = _make_node()
@@ -323,7 +354,13 @@ class TestAProcessPipeline:
         mock_situation_dest = MagicMock()
         mock_situation_dest.resolve.return_value = fake_temp_path / "frame_0000.png"
 
+        real_handle_request = GriptapeNodes.handle_request
+
         def _handle_request(request):
+            if isinstance(request, ScanSequencesRequest):
+                result = real_handle_request(request)
+                assert isinstance(result, ScanSequencesResultSuccess)
+                return result
             if isinstance(request, DeleteFileRequest) and request.path:
                 p = Path(request.path)
                 shutil.rmtree(p, ignore_errors=True) if p.is_dir() else p.unlink(missing_ok=True)
@@ -334,7 +371,9 @@ class TestAProcessPipeline:
         node._output_file.build_file.return_value = fake_dest
 
         # Patch node parameters
-        node.set_parameter_value("sequence", seq_dict)
+        node.set_parameter_value(
+            "sequence", sequence_value if sequence_value is not None else seq_dict, initial_setup=True
+        )
         node.set_parameter_value("threads", threads)
         node.set_parameter_value("frame_rate", 24.0)
         node.set_parameter_value("color_mode", COLOR_MODE_BASIC)
@@ -382,6 +421,27 @@ class TestAProcessPipeline:
         paths = [SINGLE_PART_RGBA, SINGLE_PART_RGBA, SINGLE_PART_RGBA]
         node, _ = self._run_with_sequence(paths, tmp_path)
         assert _was_successful(node) is True
+
+    @pytest.mark.parametrize("pattern", ["frame.####.exr", "frame.%04d.exr", "frame.@@@@.exr"])
+    def test_direct_pattern_encodes_present_frames_after_workflow_restore(self, tmp_path: Path, pattern: str) -> None:
+        # Given a sequence with a gap and a path restored without setter hooks.
+        paths = [tmp_path / f"frame.{number:04d}.exr" for number in (1, 3)]
+        for path in paths:
+            shutil.copyfile(SINGLE_PART_RGBA, path)
+
+        # When the node scans and encodes the path using its existing settings.
+        node, _ = self._run_with_sequence(paths, tmp_path, sequence_value=str(tmp_path / pattern))
+
+        # Then only present frames are encoded; discovery skips missing frame 2.
+        assert _was_successful(node) is True
+        assert node.parameter_output_values["frame_count"] == 2
+        assert node.parameter_output_values["frames_processed"] == 2
+        assert node.parameter_output_values["video"] is not None
+
+    def test_direct_single_file_encodes_one_frame(self, tmp_path: Path) -> None:
+        node, _ = self._run_with_sequence([SINGLE_PART_RGBA], tmp_path, sequence_value=str(SINGLE_PART_RGBA))
+        assert _was_successful(node) is True
+        assert node.parameter_output_values["frame_count"] == 1
 
     def test_frame_count_published_correctly(self, tmp_path: Path) -> None:
         paths = [SINGLE_PART_RGBA] * 5
