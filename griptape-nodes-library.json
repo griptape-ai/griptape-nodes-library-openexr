@@ -122,9 +122,10 @@
   "settings": [
     {
       "category": "openexr",
-      "description": "OpenEXR library settings — controls how the LoadEXR node reads files",
+      "description": "OpenEXR file loading, render canvas limits and external viewer settings",
       "contents": {
         "header_only": true,
+        "max_render_pixels": 67108864,
         "viewer_executable": "",
         "viewer_args": ""
       }

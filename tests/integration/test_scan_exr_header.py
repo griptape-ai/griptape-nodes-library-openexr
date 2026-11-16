@@ -149,7 +149,7 @@ class TestTiled:
 
 # ---------------------------------------------------------------------------
 # overscan.exr - data window extends outside display window (overscan pattern)
-# Display is at origin; data window is -8,-8 to 55,55 (8px overscan on all sides)
+# Equal-sized windows: data extends above/left and leaves display pixels missing below/right.
 # ---------------------------------------------------------------------------
 
 
@@ -164,7 +164,7 @@ class TestOverscan:
         assert header.display_window.ymax == 63
 
     def test_data_window_extends_beyond_display(self) -> None:
-        # 8px overscan on all sides: data starts at -8,-8 and ends at 55,55
+        # The data window is shifted eight pixels above and left of the display window.
         header = scan_exr_header(str(self.FILE)).parts[0].header
         assert header.data_window.xmin == -8
         assert header.data_window.ymin == -8

@@ -9,11 +9,12 @@ import numpy as np
 import pytest
 
 from griptape_nodes_openexr.exr.exr_io import load_slot_channels
+from griptape_nodes_openexr.exr.exr_types import WindowCoordinates
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
-_LOAD = "griptape_nodes_openexr.exr.exr_io._load_parts_channels"
+_LOAD = "griptape_nodes_openexr.exr.exr_io._decode_parts_channels"
 
 
 def _channel(name: str, file_path: str = "/tmp/a.exr", part_index: int = 0) -> MagicMock:
@@ -28,7 +29,19 @@ def _plane(file_path: str, part_index: int, name: str) -> np.ndarray:
     return np.full((2, 2), hash((file_path, part_index, name)) % 100, dtype=np.float32)
 
 
-def _fake_load(file_path: str, requests: Mapping[int, list[str]]) -> dict[int, dict[str, np.ndarray]]:
+_WINDOW = WindowCoordinates(0, 0, 1, 1)
+
+
+def _fake_load(
+    file_path: str,
+    requests: Mapping[int, list[str]],
+    *,
+    windows: dict[int, tuple[WindowCoordinates, WindowCoordinates]],
+    sampling: dict[int, dict[str, tuple[int, int]]],
+) -> dict[int, dict[str, np.ndarray]]:
+    for i, names in requests.items():
+        windows[i] = (_WINDOW, _WINDOW)
+        sampling[i] = dict.fromkeys(names, (1, 1))
     return {i: {name: _plane(file_path, i, name) for name in names} for i, names in requests.items()}
 
 
@@ -37,13 +50,15 @@ class TestGrouping:
         slots = {slot: _channel(slot) for slot in "RGBA"}
         with patch(_LOAD, side_effect=_fake_load) as load:
             load_slot_channels(slots)
-        load.assert_called_once_with("/tmp/a.exr", {0: ["R", "G", "B", "A"]})
+        load.assert_called_once()
+        assert load.call_args.args == ("/tmp/a.exr", {0: ["R", "G", "B", "A"]})
 
     def test_slots_from_different_parts_of_one_file_are_read_in_one_call(self) -> None:
         slots = {"R": _channel("R"), "G": _channel("Z", part_index=1), "B": _channel("B")}
         with patch(_LOAD, side_effect=_fake_load) as load:
             pixels = load_slot_channels(slots)
-        load.assert_called_once_with("/tmp/a.exr", {0: ["R", "B"], 1: ["Z"]})
+        load.assert_called_once()
+        assert load.call_args.args == ("/tmp/a.exr", {0: ["R", "B"], 1: ["Z"]})
         np.testing.assert_array_equal(pixels["G"], _plane("/tmp/a.exr", 1, "Z"))
 
     def test_slots_from_different_files_are_read_separately(self) -> None:
@@ -60,7 +75,8 @@ class TestGrouping:
         slots = {slot: _channel("Y") for slot in "RGB"}
         with patch(_LOAD, side_effect=_fake_load) as load:
             pixels = load_slot_channels(slots)
-        load.assert_called_once_with("/tmp/a.exr", {0: ["Y"]})
+        load.assert_called_once()
+        assert load.call_args.args == ("/tmp/a.exr", {0: ["Y"]})
         assert set(pixels) == {"R", "G", "B"}
 
     def test_result_follows_slot_order(self) -> None:
@@ -74,10 +90,10 @@ class TestErrors:
     def test_single_slot_failure_names_the_slot(self, error: type[Exception]) -> None:
         slots = {"R": _channel("R"), "G": _channel("G", file_path="/tmp/bad.exr")}
 
-        def load(file_path: str, requests: Mapping[int, list[str]]) -> dict[int, dict[str, np.ndarray]]:
+        def load(file_path: str, requests: Mapping[int, list[str]], **kwargs: dict) -> dict[int, dict[str, np.ndarray]]:
             if file_path == "/tmp/bad.exr":
                 raise error("boom")
-            return _fake_load(file_path, requests)
+            return _fake_load(file_path, requests, **kwargs)
 
         with patch(_LOAD, side_effect=load), pytest.raises(error, match=r"^Failed to load G channel: boom$"):
             load_slot_channels(slots)

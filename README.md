@@ -22,6 +22,7 @@ An **Open in external viewer** button opens the source EXR in a configured HDR v
 | `part_name`           | `str`             | Which part to read, as `"0: rgba"`, `"1: depth"`. Populated after the scan, hidden for single-part files.                                |
 | `layer`               | `str`             | Which layer of the part to render. Populated after the scan, hidden when the part has one layer.                                         |
 | `frame`               | `int`             | Absolute frame number, matching the filenames on disk. Hidden for a single file.                                                         |
+| `window_mode`         | `str`             | `Full` (default), `Crop Overscan`, or `Show Overscan Boundary`. See [Display window](#display-window).                                   |
 | `exposure`            | `float`           | Exposure in EV stops applied before tone mapping. Range -10 to +10, default `0.0`. In the Color Management group.                        |
 | `color_mode`          | `str`             | `basic` (local tone mapping) or `ocio` (connected `OCIOColorParamsArtifact`). Default `basic`.                                           |
 | `tone_mapping`        | `str`             | `sRGB`, `rec709`, `rec1886`, or `raw`. Default `sRGB`. See [Display transforms](#display-transforms). Used when `color_mode` is `basic`. |
@@ -30,15 +31,15 @@ An **Open in external viewer** button opens the source EXR in a configured HDR v
 
 **Outputs**
 
-| Parameter                      | Type                       | Description                                                       |
-| ------------------------------ | -------------------------- | ----------------------------------------------------------------- |
-| `image`                        | `ImageUrlArtifact`         | 8-bit PNG (RGB or RGBA) of the current frame                      |
-| `part`                         | `EXRPartArtifact`          | Descriptor for the part that was read, carrying the float data on |
-| `channels`                     | `list[EXRChannelArtifact]` | One descriptor per channel in that part                           |
-| `image_width` / `image_height` | `int`                      | Dimensions from the data window                                   |
-| `part_count` / `channel_count` | `int`                      | Parts in the file, channels in the part that was read             |
-| `first_frame` / `last_frame`   | `int`                      | Sequence bounds; `0` for a single file                            |
-| `frame_count`                  | `int`                      | Frames in the sequence; `1` for a single file                     |
+| Parameter                      | Type                       | Description                                                                                                                                           |
+| ------------------------------ | -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `image`                        | `ImageUrlArtifact`         | 8-bit PNG (RGB or RGBA) of the current frame                                                                                                          |
+| `part`                         | `EXRPartArtifact`          | Descriptor for the part that was read, carrying the float data on                                                                                     |
+| `channels`                     | `list[EXRChannelArtifact]` | One descriptor per channel in that part                                                                                                               |
+| `image_width` / `image_height` | `int`                      | Dimensions of the rendered `image`: the display window in `Crop Overscan` mode, otherwise the data window. `part` keeps the data window's dimensions. |
+| `part_count` / `channel_count` | `int`                      | Parts in the file, channels in the part that was read                                                                                                 |
+| `first_frame` / `last_frame`   | `int`                      | Sequence bounds; `0` for a single file                                                                                                                |
+| `frame_count`                  | `int`                      | Frames in the sequence; `1` for a single file                                                                                                         |
 
 The `image` output is a rendered 8-bit PNG rather than the `.exr` itself, because the standard library's image nodes cannot open an EXR and have no float or greater-than-8-bit path. The float data travels on `part` and `channels` instead, so a downstream **Display EXR Channel** still gets the real pixels.
 
@@ -151,6 +152,7 @@ An **Open in external viewer** button opens the source EXR in a configured HDR v
 | --------------------- | ----------------- | ---------------------------------------------------------------------------------------------------------------- |
 | `part`                | `EXRPartArtifact` | EXR part to render. Assumes scene-linear HDR data; no gamut conversion is applied.                               |
 | `exposure`            | `float`           | Exposure in EV stops applied before tone mapping. Range −10 to +10, default `0.0`.                               |
+| `window_mode`         | `str`             | `Full` (default), `Crop Overscan`, or `Show Overscan Boundary`. See [Display window](#display-window).           |
 | `color_mode`          | `str`             | `basic` (local tone mapping) or `ocio` (connected `OCIOColorParamsArtifact`). Default `basic`.                   |
 | `tone_mapping`        | `str`             | `sRGB`, `rec709`, `rec1886`, or `raw`. Default `sRGB`. See [Display transforms](#display-transforms).            |
 | `embed_color_profile` | `bool`            | Embed an ICC profile describing the display transform. Default `false`. See [Colour profiles](#colour-profiles). |
@@ -201,6 +203,29 @@ output on an sRGB monitor. See [Colour profiles](#colour-profiles).
 > display encodings, matching Nuke's default viewer. Use `sRGB` for a similar
 > look, or `ocio` mode for a real tone-mapped view transform.
 
+#### Display window
+
+Use `window_mode` to choose which region the node displays. Supported by **Read EXR**, **Display EXR Part**, **Display EXR Channel** and **EXR Sequence to Preview**.
+
+<details>
+<summary>Info: EXR data and display windows</summary>
+
+An EXR's _data window_ contains its stored pixels. The _display window_ defines the intended frame. Stored pixels can extend beyond the frame (overscan) or cover only part of it.
+
+</details>
+
+| `window_mode`            | Rendered image                                                                                                                                        |
+| ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Full` (default)         | Every stored pixel, at the data window's size.                                                                                                        |
+| `Crop Overscan`          | The display window's size. Overscan is cropped away, and frame areas with no stored pixels are black, with zero alpha in RGBA output.                 |
+| `Show Overscan Boundary` | Every stored pixel, with a dashed black-and-white outline just inside the display window's edge. Edges that fall outside the data window are clipped. |
+
+Only the rendered PNG or video changes. The `part` and `channels` outputs describe the original EXR and retain its data window, display window and source pixels. Downstream display nodes choose their own `window_mode`; set the same mode and intended frame there to match Read EXR's rendered dimensions. Read EXR's `image_width` and `image_height` describe its rendered image, while dimensions on `part` describe the source data window.
+
+The automatic file-level EXR preview uses the data window and receives no node-specific rendering settings. It can show overscan even when Read EXR renders with `Crop Overscan`. This preview is separate from the node's rendered `image` output.
+
+**Load EXR** and **Load EXR Sequence** report both windows as stored. For a sequence, each frame is framed by its own header, so a changing data window renders at one size in `Crop Overscan` mode when the display window stays constant. Workflows saved before this option existed load with `Full`, so they render as they did.
+
 #### Colour profiles
 
 By default the written PNG carries no colour profile, so viewers read it as
@@ -246,17 +271,20 @@ Combines 1–4 individual `EXRChannelArtifact` inputs into an 8-bit PNG (RGB or 
 
 **Inputs**
 
-| Parameter             | Type                                       | Description                                                                                                      |
-| --------------------- | ------------------------------------------ | ---------------------------------------------------------------------------------------------------------------- |
-| `channel_r`           | `EXRChannelArtifact`                       | Channel mapped to the red plane. Optional.                                                                       |
-| `channel_g`           | `EXRChannelArtifact`                       | Channel mapped to the green plane. Optional.                                                                     |
-| `channel_b`           | `EXRChannelArtifact`                       | Channel mapped to the blue plane. Optional.                                                                      |
-| `channel_a`           | `EXRChannelArtifact`                       | Channel used as alpha. Optional; when connected, output is RGBA.                                                 |
-| `exposure`            | `float`                                    | Exposure in EV stops applied before tone mapping. Range −10 to +10, default `0.0`.                               |
-| `color_mode`          | `str`                                      | `basic` (local tone mapping) or `ocio` (connected `OCIOColorParamsArtifact`). Default `basic`.                   |
-| `tone_mapping`        | `str`                                      | `sRGB`, `rec709`, `rec1886`, or `raw`. Default `sRGB`. See [Display transforms](#display-transforms).            |
-| `embed_color_profile` | `bool`                                     | Embed an ICC profile describing the display transform. Default `false`. See [Colour profiles](#colour-profiles). |
-| `background`          | `ImageArtifact \| ImageUrlArtifact \| str` | Background image for A-over-B compositing. Ignored when no alpha channel is connected.                           |
+| Parameter             | Type                                       | Description                                                                                                                                    |
+| --------------------- | ------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `channel_r`           | `EXRChannelArtifact`                       | Channel mapped to the red plane. Optional.                                                                                                     |
+| `channel_g`           | `EXRChannelArtifact`                       | Channel mapped to the green plane. Optional.                                                                                                   |
+| `channel_b`           | `EXRChannelArtifact`                       | Channel mapped to the blue plane. Optional.                                                                                                    |
+| `channel_a`           | `EXRChannelArtifact`                       | Channel used as alpha. Optional; when connected, output is RGBA.                                                                               |
+| `exposure`            | `float`                                    | Exposure in EV stops applied before tone mapping. Range −10 to +10, default `0.0`.                                                             |
+| `window_mode`         | `str`                                      | `Full` (default), `Crop Overscan`, or `Show Overscan Boundary`. The frame comes from `frame_reference`. See [Display window](#display-window). |
+| `channel_alignment`   | `str`                                      | `Match Pixel Positions` (default), `Match EXR Coordinates`, or `Require Matching Windows`. See below.                                          |
+| `frame_reference`     | `str`                                      | `First Connected RGB` (default), `R`, `G`, `B`, or `A`. Selects the source whose display window defines the intended frame.                    |
+| `color_mode`          | `str`                                      | `basic` (local tone mapping) or `ocio` (connected `OCIOColorParamsArtifact`). Default `basic`.                                                 |
+| `tone_mapping`        | `str`                                      | `sRGB`, `rec709`, `rec1886`, or `raw`. Default `sRGB`. See [Display transforms](#display-transforms).                                          |
+| `embed_color_profile` | `bool`                                     | Embed an ICC profile describing the display transform. Default `false`. See [Colour profiles](#colour-profiles).                               |
+| `background`          | `ImageArtifact \| ImageUrlArtifact \| str` | Background image for A-over-B compositing. Ignored when no alpha channel is connected.                                                         |
 
 **Outputs**
 
@@ -265,7 +293,21 @@ Combines 1–4 individual `EXRChannelArtifact` inputs into an 8-bit PNG (RGB or 
 | `image`       | `ImageUrlArtifact` | 8-bit PNG (RGB or RGBA) for in-canvas display |
 | `output_file` | `str`              | Path to the saved PNG file                    |
 
-At least one RGB slot must be connected. All connected channels must have the same pixel dimensions.
+At least one RGB slot must be connected.
+
+**Channel alignment**
+
+- `Match Pixel Positions` aligns the top-left stored pixels and requires equal array dimensions. It ignores other sources' data-window offsets. The reference source supplies the coordinate origin and intended frame. This default preserves existing saved workflows.
+- `Match EXR Coordinates` places every channel using its own data-window coordinates, supporting different sizes and origins without resizing. Missing samples are zero-filled. `Full` and `Show Overscan Boundary` include the bounding rectangle of all connected data windows, including alpha. `Crop Overscan` renders the reference display window directly.
+- `Require Matching Windows` fails if any connected channel, including alpha, has different data or display windows. The error identifies the affected slot.
+
+Coordinate and strict alignment require channels with one sample per EXR coordinate; subsampled channels fail with a slot-specific error. Source planes are never resampled.
+
+`First Connected RGB` chooses R, then G, then B. An explicitly selected reference slot must be connected. Use `frame_reference=A` when a matte defines the intended frame, or `R` when beauty should define it.
+
+For beauty with a data window starting at `(-8, -8)` and a matte starting at `(0, 0)`, choose `Match EXR Coordinates` to align their EXR positions. Choose `Match Pixel Positions` to align their stored array positions instead. Result details report the alignment policy and effective reference.
+
+Display EXR Channel checks output and intermediate assembly sizes against `openexr.max_render_pixels`. See [Library Settings](#library-settings) for the default and how to raise it.
 
 ______________________________________________________________________
 
@@ -316,18 +358,22 @@ Bakes an EXR frame sequence down to a single MP4/MOV preview video, applying exp
 
 **Inputs**
 
-| Parameter          | Type                      | Description                                                                                           |
-| ------------------ | ------------------------- | ----------------------------------------------------------------------------------------------------- |
-| `sequence`         | `Sequence`                | Frame sequence from **Scan Sequence** / **Scan Split Sequence**                                       |
-| `frame_rate`       | `float`                   | Output frame rate. Default `24.0`.                                                                    |
-| `part_index`       | `int`                     | Part index to read from every frame. Default `0`.                                                     |
-| `exposure`         | `float`                   | Exposure in EV stops applied before tone mapping. Default `0.0`.                                      |
-| `color_mode`       | `str`                     | `basic` or `ocio`. Default `basic`.                                                                   |
-| `tone_mapping`     | `str`                     | `sRGB`, `rec709`, `rec1886`, or `raw`. Default `sRGB`. See [Display transforms](#display-transforms). |
-| `color_params`     | `OCIOColorParamsArtifact` | OCIO colour parameters. Required when `color_mode` is `ocio`.                                         |
-| `format`           | `str`                     | Output container: `mp4` or `mov`. Default `mp4`.                                                      |
-| `processing_speed` | `str`                     | `fast`, `balanced`, or `quality`. Trades encode speed for size/quality.                               |
-| `threads`          | `int`                     | Worker count for per-frame conversion. Range 1-16, default `4`. In the Advanced group.                |
+| Parameter          | Type                      | Description                                                                                                                                   |
+| ------------------ | ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `sequence`         | `Sequence`                | Frame sequence from **Scan Sequence** / **Scan Split Sequence**                                                                               |
+| `frame_rate`       | `float`                   | Output frame rate. Default `24.0`.                                                                                                            |
+| `part_index`       | `int`                     | Part index to read from every frame. Default `0`.                                                                                             |
+| `exposure`         | `float`                   | Exposure in EV stops applied before tone mapping. Default `0.0`.                                                                              |
+| `window_mode`      | `str`                     | `Full` (default), `Crop Overscan`, or `Show Overscan Boundary`, framed by each frame's own windows. See [Display window](#display-window).    |
+| `color_mode`       | `str`                     | `basic` or `ocio`. Default `basic`.                                                                                                           |
+| `tone_mapping`     | `str`                     | `sRGB`, `rec709`, `rec1886`, or `raw`. Default `sRGB`. See [Display transforms](#display-transforms).                                         |
+| `color_params`     | `OCIOColorParamsArtifact` | OCIO colour parameters. Required when `color_mode` is `ocio`.                                                                                 |
+| `format`           | `str`                     | Output container: `mp4` or `mov`. Default `mp4`.                                                                                              |
+| `odd_dimensions`   | `str`                     | `Pad to Even` (default) adds at most one black column/right and row/bottom. `Require Even` rejects an odd encoder canvas.                     |
+| `frame_sizes`      | `str`                     | `Require Matching Sizes` (default) rejects differing rendered dimensions. `Pad to Largest` pads to maximum width and height without resizing. |
+| `missing_frames`   | `str`                     | `skip` (default), `error`, or `black`. Controls failed conversions; canvas-policy failures always stop the run.                               |
+| `processing_speed` | `str`                     | `fast`, `balanced`, or `quality`. Trades encode speed for size/quality.                                                                       |
+| `threads`          | `int`                     | Worker count for per-frame conversion. Range 1-16, default `4`. In the Advanced group.                                                        |
 
 **Outputs**
 
@@ -338,17 +384,32 @@ Bakes an EXR frame sequence down to a single MP4/MOV preview video, applying exp
 | `frames_processed` | `int`              | Frames converted so far, updated live during a run |
 | `output_file`      | `str`              | Workspace path to the written video file           |
 
-Frames that fail to convert are skipped; the run continues and the error count is reported in the result details.
+The default skips failed conversions. Choose `missing_frames=error` to fail the run or `black` to retain sequence timing with black replacements.
+
+### Sequence canvas policies
+
+Both MP4 and MOV use H.264 with `yuv420p`, which requires even width and height. `odd_dimensions=Pad to Even` adds black pixels after colour processing, preserving the rendered image at the top-left. `Require Even` reports the odd dimensions and stops before encoding.
+
+`frame_sizes=Require Matching Sizes` compares successful frames before even padding and reports conflicting source paths and dimensions. Choose `Pad to Largest` to preserve each frame without resizing or cropping. It uses the maximum width and maximum height across successful frames, then applies the odd-dimension policy. Padding is black on the right and bottom. This aligns local rendered canvases; it does not align differing EXR origins. Use `Crop Overscan` with a shared display window to align changing EXR crops by coordinates.
+
+Failed-frame black replacements use the final canvas dimensions. Size-policy failures and renders above `openexr.max_render_pixels` fail the sequence even when `missing_frames=skip` or `black`. Result details report final dimensions, policies and how many successful frames were padded.
+
+The shared [Library Settings](#library-settings) render limit applies to intermediate rendered frames and the final padded canvas. Padding processes one frame at a time, but concurrent EXR conversion workers still require memory for their own buffers.
 
 ## Library Settings
 
 Settings are configured in the engine under the `openexr` category.
 
-| Setting                     | Default | Description                                                                                                                                                                                         |
-| --------------------------- | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `openexr.header_only`       | `true`  | When `true`, **Load EXR** reads only the file header (fast) and labels every channel `half`. Set to `false` to read accurate per-channel pixel types at the cost of loading pixel data into memory. |
-| `openexr.viewer_executable` | `""`    | Full path to an external HDR viewer executable (e.g. `/usr/bin/djv`, `/Applications/Nuke15.0v1/Nuke15.0v1.app/Contents/MacOS/Nuke15.0v1`). When empty, the OS default file association is used.     |
-| `openexr.viewer_args`       | `""`    | Additional command-line arguments passed to the viewer before the file path, e.g. `--hdr --linear`. Parsed with shell-style quoting rules.                                                          |
+| Setting                     | Default    | Description                                                                                                                                                                                              |
+| --------------------------- | ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `openexr.max_render_pixels` | `67108864` | Maximum pixels in Display EXR Channel and EXR Sequence to Preview output and intermediate rendering canvases, including sequence padding. Must be a positive integer. Default supports 8192x8192 images. |
+| `openexr.header_only`       | `true`     | When `true`, **Load EXR** reads only the file header (fast) and labels every channel `half`. Set to `false` to read accurate per-channel pixel types at the cost of loading pixel data into memory.      |
+| `openexr.viewer_executable` | `""`       | Full path to an external HDR viewer executable (e.g. `/usr/bin/djv`, `/Applications/Nuke15.0v1/Nuke15.0v1.app/Contents/MacOS/Nuke15.0v1`). When empty, the OS default file association is used.          |
+| `openexr.viewer_args`       | `""`       | Additional command-line arguments passed to the viewer before the file path, e.g. `--hdr --linear`. Parsed with shell-style quoting rules.                                                               |
+
+Increase `max_render_pixels` in the engine's `openexr` library settings to permit larger canvases. For example, `134217728` allows twice the default pixel count. The setting is read on every execution; oversized renders fail with the required dimensions and setting name. Images are never resized to fit the limit.
+
+The limit applies to Display EXR Channel and EXR Sequence to Preview output and intermediate rendering canvases. Read EXR, Display EXR Part and source EXR decoding are outside this guard: the OpenEXR binding still decodes the full source file. This is a pixel-count limit, with no separate width or height cap. Float32 processing and concurrent buffers require additional memory; one 8192x8192 RGBA float32 buffer occupies 1 GiB.
 
 Only **Load EXR** honours `openexr.header_only`. **Load EXR Sequence** always scans header-only, since its output carries no pixel data and a full scan would only buy slower, discarded reads. **Read EXR** always reads pixels, since decoding the selected part is the whole job.
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import logging
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
@@ -13,10 +14,19 @@ from griptape_nodes.exe_types.node_types import SuccessFailureNode
 from griptape_nodes.exe_types.param_components.project_file_parameter import ProjectFileParameter
 from griptape_nodes.exe_types.param_types.parameter_button import ParameterButton
 from griptape_nodes.exe_types.param_types.parameter_float import ParameterFloat
+from griptape_nodes.exe_types.param_types.parameter_string import ParameterString
+from griptape_nodes.traits.options import Options
 from PIL import Image
 
+from griptape_nodes_openexr.exr import channel_alignment, render_limits
+from griptape_nodes_openexr.exr.display_window import (
+    WINDOW_MODE_DISPLAY,
+    WindowFraming,
+    add_window_mode_parameter,
+    apply_window_mode,
+)
 from griptape_nodes_openexr.exr.exr_header_artifact import EXRChannelArtifact
-from griptape_nodes_openexr.exr.exr_io import load_slot_channels
+from griptape_nodes_openexr.exr.exr_io import load_slot_sources
 from griptape_nodes_openexr.exr.icc_profiles import profile_for_tone_mapping
 from griptape_nodes_openexr.exr.ocio_helpers import (
     COLOR_MODE_BASIC,
@@ -112,6 +122,32 @@ class DisplayEXRChannel(SuccessFailureNode):
         )
         self.add_parameter(self._exposure_param)
 
+        self._window_mode_param = add_window_mode_parameter(self)
+        self._alignment_param = ParameterString(
+            name="channel_alignment",
+            default_value=channel_alignment.ALIGN_PIXELS,
+            tooltip=(
+                f"{channel_alignment.ALIGN_PIXELS} aligns top-left stored pixels and ignores other sources' header offsets; "
+                f"array sizes must match. {channel_alignment.ALIGN_COORDINATES} places each channel using its own data window. "
+                f"{channel_alignment.ALIGN_STRICT} rejects differing data or display windows, including alpha."
+            ),
+            allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
+        )
+        self._alignment_param.add_trait(Options(choices=channel_alignment.ALIGN_CHOICES, allow_custom=True))
+        self.add_parameter(self._alignment_param)
+        self._frame_reference_param = ParameterString(
+            name="frame_reference",
+            default_value=channel_alignment.REFERENCE_DEFAULT,
+            tooltip=(
+                f"Channel whose display window defines the intended frame. {channel_alignment.REFERENCE_DEFAULT} uses R, G, B order. "
+                "Pixel-position alignment also uses this source's data-window origin. "
+                "An explicitly selected slot must be connected."
+            ),
+            allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
+        )
+        self._frame_reference_param.add_trait(Options(choices=channel_alignment.REFERENCE_CHOICES, allow_custom=True))
+        self.add_parameter(self._frame_reference_param)
+
         (
             self._color_mode_param,
             self._tone_mapping_param,
@@ -206,23 +242,24 @@ class DisplayEXRChannel(SuccessFailureNode):
         self._current_exr_path = first_artifact.file_path
 
         all_slots = rgb_slots if channel_a is None else {**rgb_slots, "A": channel_a}
+        window_mode = str(self.get_parameter_value(self._window_mode_param.name))
+        alignment_policy = str(self.get_parameter_value(self._alignment_param.name))
+        frame_reference = str(self.get_parameter_value(self._frame_reference_param.name))
         try:
-            pixels = load_slot_channels(all_slots)
+            channel_alignment.resolve_reference(all_slots, alignment_policy, frame_reference, window_mode)
+            limit = render_limits.get_render_limit()
+            sources = load_slot_sources(all_slots)
+            assembly = channel_alignment.assemble_channels(
+                sources, alignment_policy, frame_reference, window_mode, limit
+            )
         except (ValueError, RuntimeError) as e:
             self._on_fail_handler(str(e))
             return
-        alpha_plane: np.ndarray | None = pixels.pop("A", None)
-
-        all_arrays = list(pixels.values()) + ([alpha_plane] if alpha_plane is not None else [])
-        shapes = [arr.shape for arr in all_arrays]
-        if len(set(shapes)) > 1:
-            shape_detail = {slot: arr.shape for slot, arr in pixels.items()}
-            if alpha_plane is not None:
-                shape_detail["A"] = alpha_plane.shape
-            self._on_fail_handler(f"Channel dimensions do not match: {shape_detail}")
-            return
-
-        height, width = shapes[0]
+        framing = assembly.framing
+        pixels = {slot: plane for slot, plane in assembly.planes.items() if slot != "A"}
+        alpha_plane = assembly.planes.get("A")
+        rgb_coverage = assembly.rgb_coverage
+        height, width = next(iter(pixels.values())).shape
 
         try:
             rgb = _build_rgb(pixels, height, width)
@@ -244,39 +281,17 @@ class DisplayEXRChannel(SuccessFailureNode):
 
         rgb = apply_exposure(rgb, ev)
 
-        alpha_f32 = alpha_plane.reshape(height, width) if alpha_plane is not None else None
-
-        bg_rgb: np.ndarray | None = None
-        if background is not None:
-            if alpha_f32 is None:
-                logger.warning("DisplayEXRChannel '%s': background ignored — no alpha channel connected", self.name)
-            else:
-                try:
-                    bg_rgb = _load_background_rgb(background, width, height)
-                except RuntimeError as e:
-                    self._on_fail_handler(str(e))
-                    return
-
-        # Basic mode blends in linear light, before the display transform encodes the result.
-        # OCIO mode blends after its transform: the background is sRGB, and nothing here can
-        # convert it into the config's source colorspace. OCIO output isn't clamped, so it is
-        # clamped to display range before blending.
-        is_basic_color_mode = color_params is None
+        if background is not None and alpha_plane is None:
+            logger.warning("DisplayEXRChannel '%s': background ignored, no alpha channel connected", self.name)
         try:
-            if is_basic_color_mode:
-                if alpha_f32 is not None and bg_rgb is not None:
-                    rgb = _composite(rgb, alpha_f32, srgb_to_linear(bg_rgb))
-                rgb, tone_mode = apply_color_management(rgb, color_params, tone_mapping)
-            else:
-                rgb, tone_mode = apply_color_management(rgb, color_params, tone_mapping)
-                if alpha_f32 is not None and bg_rgb is not None:
-                    rgb = _composite(np.clip(rgb, 0.0, 1.0), alpha_f32, bg_rgb)
-        except ValueError as e:
+            rendered = _render_channels(rgb, alpha_plane, rgb_coverage, framing, background, color_params, tone_mapping)
+        except (ValueError, RuntimeError) as e:
             self._on_fail_handler(str(e))
             return
-
-        # A composited image is opaque, so alpha is only kept when there was no background.
-        uint8 = _compose_alpha(to_uint8(rgb), alpha_f32 if bg_rgb is None else None)
+        uint8 = rendered.pixels
+        tone_mode = rendered.tone_mode
+        height, width = uint8.shape[:2]
+        is_basic_color_mode = color_params is None
 
         # OCIO output carries no profile: its display/view transform resolves
         # to a config colorspace we cannot describe.
@@ -296,10 +311,88 @@ class DisplayEXRChannel(SuccessFailureNode):
 
         slot_info = ", ".join(f"{slot}={rgb_slots[slot].channel.name}" for slot in sorted(rgb_slots))
         alpha_info = f", A={channel_a.channel.name}" if channel_a else ""
-        bg_info = ", bg=composite" if bg_rgb is not None else ""
-        details = f"Rendered {width}×{height}, channels: [{slot_info}{alpha_info}]{bg_info}, EV={ev:+.1f}, {tone_mode}"
+        bg_info = ", bg=composite" if rendered.composited else ""
+        details = (
+            f"Rendered {width}x{height} ({window_mode}), {alignment_policy}, reference={assembly.reference_slot}, "
+            f"channels: [{slot_info}{alpha_info}]{bg_info}, EV={ev:+.1f}, {tone_mode}"
+        )
         self._set_status_results(was_successful=True, result_details=details)
         logger.info("DisplayEXRChannel '%s': %s", self.name, details)
+
+
+@dataclass(frozen=True)
+class _PreparedFraming:
+    """Colour inputs and the geometry remaining for final placement."""
+
+    rgb: np.ndarray
+    alpha: np.ndarray | None
+    coverage: np.ndarray
+    framing: WindowFraming
+
+
+@dataclass(frozen=True)
+class _RenderedChannels:
+    pixels: np.ndarray
+    tone_mode: str
+    composited: bool
+
+
+def _prepare_framing(
+    rgb: np.ndarray,
+    alpha: np.ndarray | None,
+    coverage: np.ndarray,
+    framing: WindowFraming,
+    has_background: bool,
+) -> _PreparedFraming:
+    """Place inputs before background fitting only when the display canvas is needed."""
+    if framing.mode != WINDOW_MODE_DISPLAY or alpha is None or not has_background:
+        return _PreparedFraming(rgb, alpha, coverage, framing)
+    rgb = apply_window_mode(rgb, framing)
+    alpha = apply_window_mode(alpha[..., np.newaxis], framing)[..., 0]
+    coverage = apply_window_mode(coverage[..., np.newaxis], framing)[..., 0]
+    remaining = WindowFraming(framing.mode, framing.display_window, framing.display_window)
+    return _PreparedFraming(rgb, alpha, coverage, remaining)
+
+
+def _render_channels(  # noqa: PLR0913
+    rgb: np.ndarray,
+    alpha: np.ndarray | None,
+    coverage: np.ndarray,
+    framing: WindowFraming,
+    background: Any,
+    color_params: ColorParamsProtocol | None,
+    tone_mapping: str,
+) -> _RenderedChannels:
+    """Prepare, composite and finish framing through one rendering boundary.
+
+    Raises ValueError or RuntimeError for framing, colour or background failures.
+    Exposure has already been applied by the caller.
+    """
+    prepared = _prepare_framing(rgb, alpha, coverage, framing, background is not None)
+    rgb, alpha, coverage = prepared.rgb, prepared.alpha, prepared.coverage
+    height, width = rgb.shape[:2]
+    bg_rgb = _load_background_rgb(background, width, height) if background is not None and alpha is not None else None
+
+    # Basic mode composites in linear light; OCIO composites its display output
+    # against the sRGB background because its source colourspace is unknown here.
+    if color_params is None:
+        if alpha is not None and bg_rgb is not None:
+            rgb = _composite(rgb, alpha, srgb_to_linear(bg_rgb))
+        rgb, tone_mode = apply_color_management(rgb, color_params, tone_mapping)
+        if alpha is not None and bg_rgb is not None:
+            rgb[~coverage & (alpha >= 1.0)] = 0.0
+    else:
+        rgb, tone_mode = apply_color_management(rgb, color_params, tone_mapping)
+        rgb[~coverage] = 0.0
+        if alpha is not None and bg_rgb is not None:
+            rgb = _composite(np.clip(rgb, 0.0, 1.0), alpha, bg_rgb)
+    if bg_rgb is None:
+        rgb[~coverage] = 0.0
+    uint8 = _compose_alpha(to_uint8(rgb), alpha if bg_rgb is None else None)
+    # Already-placed display canvases validate and return unchanged here.
+    # Other paths receive final padding or their display-encoded boundary overlay.
+    uint8 = apply_window_mode(uint8, prepared.framing)
+    return _RenderedChannels(uint8, tone_mode, bg_rgb is not None)
 
 
 def _output_profile(tone_mapping: str, *, embed: bool, ocio: bool) -> bytes | None:

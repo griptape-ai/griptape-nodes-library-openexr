@@ -163,10 +163,22 @@ def _map_oiio_string(mapping: dict[str, Any], oiio_value: str, label: str) -> An
 
 
 class WindowCoordinates(NamedTuple):
+    """EXR window bounds, with both minimum and maximum coordinates included."""
+
     xmin: int
     ymin: int
     xmax: int
     ymax: int
+
+    @property
+    def width(self) -> int:
+        """Number of pixel columns covered by the inclusive bounds."""
+        return int(self.xmax - self.xmin + 1)
+
+    @property
+    def height(self) -> int:
+        """Number of pixel rows covered by the inclusive bounds."""
+        return int(self.ymax - self.ymin + 1)
 
 
 # --- EXR-specific metadata types ---
