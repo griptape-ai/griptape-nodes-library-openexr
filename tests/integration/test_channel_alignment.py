@@ -272,6 +272,21 @@ def test_disjoint_coordinate_output_still_validates_colour(engine, tmp_path: Pat
     assert "Unsupported tone mapping" in node.parameter_output_values["result_details"]
 
 
+@pytest.mark.parametrize("phase", ["prepare", "finish"])
+def test_framing_failure_clears_node_image(engine, tmp_path: Path, phase: str) -> None:
+    path = _write_windowed(tmp_path / "input.exr", (0, 0, 3, 1), (0, 0, 3, 1))
+    with patch("griptape_nodes_openexr.exr.ocio_helpers.find_colorspace_transform_request_type", return_value=None):
+        node = channel_node.DisplayEXRChannel("framing_failure")
+    node.set_parameter_value("channel_r", _channel(path))
+    node.parameter_output_values["image"] = "previous output"
+    target = "_prepare_framing" if phase == "prepare" else "apply_window_mode"
+    with patch.object(channel_node, target, side_effect=ValueError("framing failed")):
+        asyncio.run(node.aprocess())
+    assert node.parameter_output_values["was_successful"] is False
+    assert node.parameter_output_values["image"] is None
+    assert node.parameter_output_values["result_details"] == "framing failed"
+
+
 @pytest.mark.parametrize("policy", ["Match EXR Coordinates", "Require Matching Windows"])
 def test_real_subsampled_source_is_rejected(engine, tmp_path: Path, policy: str) -> None:
     import OpenEXR

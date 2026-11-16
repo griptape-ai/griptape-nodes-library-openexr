@@ -220,7 +220,11 @@ An EXR's _data window_ contains its stored pixels. The _display window_ defines 
 | `Crop Overscan`          | The display window's size. Overscan is cropped away, and frame areas with no stored pixels are black, with zero alpha in RGBA output.                 |
 | `Show Overscan Boundary` | Every stored pixel, with a dashed black-and-white outline just inside the display window's edge. Edges that fall outside the data window are clipped. |
 
-Only the rendered PNG or video changes. The EXR's channels, header metadata, and the `part` and `channels` outputs keep the data window, and **Load EXR** and **Load EXR Sequence** report both windows as stored. For a sequence, each frame is framed by its own header, so a data window that changes from frame to frame still renders at one size in `Crop Overscan` mode. Workflows saved before this option existed load with `Full`, so they render as they did.
+Only the rendered PNG or video changes. The `part` and `channels` outputs describe the original EXR and retain its data window, display window and source pixels. Downstream display nodes choose their own `window_mode`; set the same mode and intended frame there to match Read EXR's rendered dimensions. Read EXR's `image_width` and `image_height` describe its rendered image, while dimensions on `part` describe the source data window.
+
+The automatic file-level EXR preview uses the data window and receives no node-specific rendering settings. It can show overscan even when Read EXR renders with `Crop Overscan`. This preview is separate from the node's rendered `image` output.
+
+**Load EXR** and **Load EXR Sequence** report both windows as stored. For a sequence, each frame is framed by its own header, so a changing data window renders at one size in `Crop Overscan` mode when the display window stays constant. Workflows saved before this option existed load with `Full`, so they render as they did.
 
 #### Colour profiles
 

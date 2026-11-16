@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import logging
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
@@ -20,6 +21,7 @@ from PIL import Image
 from griptape_nodes_openexr.exr import channel_alignment, render_limits
 from griptape_nodes_openexr.exr.display_window import (
     WINDOW_MODE_DISPLAY,
+    WindowFraming,
     add_window_mode_parameter,
     apply_window_mode,
 )
@@ -258,7 +260,6 @@ class DisplayEXRChannel(SuccessFailureNode):
         alpha_plane = assembly.planes.get("A")
         rgb_coverage = assembly.rgb_coverage
         height, width = next(iter(pixels.values())).shape
-        composite_background = background is not None and alpha_plane is not None
 
         try:
             rgb = _build_rgb(pixels, height, width)
@@ -280,65 +281,17 @@ class DisplayEXRChannel(SuccessFailureNode):
 
         rgb = apply_exposure(rgb, ev)
 
-        alpha_f32 = alpha_plane.reshape(height, width) if alpha_plane is not None else None
-
+        if background is not None and alpha_plane is None:
+            logger.warning("DisplayEXRChannel '%s': background ignored, no alpha channel connected", self.name)
         try:
-            if framing.mode == WINDOW_MODE_DISPLAY and composite_background:
-                # Fit and composite the background over the full display canvas.
-                rgb = apply_window_mode(rgb, framing)
-                rgb_coverage = apply_window_mode(rgb_coverage[..., np.newaxis], framing)[..., 0]
-                if alpha_f32 is not None:
-                    alpha_f32 = apply_window_mode(alpha_f32[..., np.newaxis], framing)[..., 0]
-                height, width = rgb.shape[:2]
+            rendered = _render_channels(rgb, alpha_plane, rgb_coverage, framing, background, color_params, tone_mapping)
         except (ValueError, RuntimeError) as e:
             self._on_fail_handler(str(e))
             return
-
-        bg_rgb: np.ndarray | None = None
-        if background is not None:
-            if alpha_f32 is None:
-                logger.warning("DisplayEXRChannel '%s': background ignored — no alpha channel connected", self.name)
-            else:
-                try:
-                    bg_rgb = _load_background_rgb(background, width, height)
-                except RuntimeError as e:
-                    self._on_fail_handler(str(e))
-                    return
-
-        # Basic mode blends in linear light, before the display transform encodes the result.
-        # OCIO mode blends after its transform: the background is sRGB, and nothing here can
-        # convert it into the config's source colorspace. OCIO output isn't clamped, so it is
-        # clamped to display range before blending.
+        uint8 = rendered.pixels
+        tone_mode = rendered.tone_mode
+        height, width = uint8.shape[:2]
         is_basic_color_mode = color_params is None
-        try:
-            if is_basic_color_mode:
-                if alpha_f32 is not None and bg_rgb is not None:
-                    rgb = _composite(rgb, alpha_f32, srgb_to_linear(bg_rgb))
-                rgb, tone_mode = apply_color_management(rgb, color_params, tone_mapping)
-                if alpha_f32 is not None and bg_rgb is not None:
-                    # Opaque alpha with no RGB source represents black, even when the transform lifts zero.
-                    rgb[~rgb_coverage & (alpha_f32 >= 1.0)] = 0.0
-            else:
-                rgb, tone_mode = apply_color_management(rgb, color_params, tone_mapping)
-                rgb[~rgb_coverage] = 0.0
-                if alpha_f32 is not None and bg_rgb is not None:
-                    rgb = _composite(np.clip(rgb, 0.0, 1.0), alpha_f32, bg_rgb)
-        except ValueError as e:
-            self._on_fail_handler(str(e))
-            return
-
-        # A composited image is opaque, so alpha is only kept when there was no background.
-        if bg_rgb is None:
-            rgb[~rgb_coverage] = 0.0
-        uint8 = _compose_alpha(to_uint8(rgb), alpha_f32 if bg_rgb is None else None)
-
-        if framing.mode != WINDOW_MODE_DISPLAY or not composite_background:
-            try:
-                uint8 = apply_window_mode(uint8, framing)
-                height, width = uint8.shape[:2]
-            except ValueError as e:
-                self._on_fail_handler(str(e))
-                return
 
         # OCIO output carries no profile: its display/view transform resolves
         # to a config colorspace we cannot describe.
@@ -358,13 +311,88 @@ class DisplayEXRChannel(SuccessFailureNode):
 
         slot_info = ", ".join(f"{slot}={rgb_slots[slot].channel.name}" for slot in sorted(rgb_slots))
         alpha_info = f", A={channel_a.channel.name}" if channel_a else ""
-        bg_info = ", bg=composite" if bg_rgb is not None else ""
+        bg_info = ", bg=composite" if rendered.composited else ""
         details = (
             f"Rendered {width}x{height} ({window_mode}), {alignment_policy}, reference={assembly.reference_slot}, "
             f"channels: [{slot_info}{alpha_info}]{bg_info}, EV={ev:+.1f}, {tone_mode}"
         )
         self._set_status_results(was_successful=True, result_details=details)
         logger.info("DisplayEXRChannel '%s': %s", self.name, details)
+
+
+@dataclass(frozen=True)
+class _PreparedFraming:
+    """Colour inputs and the geometry remaining for final placement."""
+
+    rgb: np.ndarray
+    alpha: np.ndarray | None
+    coverage: np.ndarray
+    framing: WindowFraming
+
+
+@dataclass(frozen=True)
+class _RenderedChannels:
+    pixels: np.ndarray
+    tone_mode: str
+    composited: bool
+
+
+def _prepare_framing(
+    rgb: np.ndarray,
+    alpha: np.ndarray | None,
+    coverage: np.ndarray,
+    framing: WindowFraming,
+    has_background: bool,
+) -> _PreparedFraming:
+    """Place inputs before background fitting only when the display canvas is needed."""
+    if framing.mode != WINDOW_MODE_DISPLAY or alpha is None or not has_background:
+        return _PreparedFraming(rgb, alpha, coverage, framing)
+    rgb = apply_window_mode(rgb, framing)
+    alpha = apply_window_mode(alpha[..., np.newaxis], framing)[..., 0]
+    coverage = apply_window_mode(coverage[..., np.newaxis], framing)[..., 0]
+    remaining = WindowFraming(framing.mode, framing.display_window, framing.display_window)
+    return _PreparedFraming(rgb, alpha, coverage, remaining)
+
+
+def _render_channels(  # noqa: PLR0913
+    rgb: np.ndarray,
+    alpha: np.ndarray | None,
+    coverage: np.ndarray,
+    framing: WindowFraming,
+    background: Any,
+    color_params: ColorParamsProtocol | None,
+    tone_mapping: str,
+) -> _RenderedChannels:
+    """Prepare, composite and finish framing through one rendering boundary.
+
+    Raises ValueError or RuntimeError for framing, colour or background failures.
+    Exposure has already been applied by the caller.
+    """
+    prepared = _prepare_framing(rgb, alpha, coverage, framing, background is not None)
+    rgb, alpha, coverage = prepared.rgb, prepared.alpha, prepared.coverage
+    height, width = rgb.shape[:2]
+    bg_rgb = _load_background_rgb(background, width, height) if background is not None and alpha is not None else None
+
+    # Basic mode composites in linear light; OCIO composites its display output
+    # against the sRGB background because its source colourspace is unknown here.
+    if color_params is None:
+        if alpha is not None and bg_rgb is not None:
+            rgb = _composite(rgb, alpha, srgb_to_linear(bg_rgb))
+        rgb, tone_mode = apply_color_management(rgb, color_params, tone_mapping)
+        if alpha is not None and bg_rgb is not None:
+            rgb[~coverage & (alpha >= 1.0)] = 0.0
+    else:
+        rgb, tone_mode = apply_color_management(rgb, color_params, tone_mapping)
+        rgb[~coverage] = 0.0
+        if alpha is not None and bg_rgb is not None:
+            rgb = _composite(np.clip(rgb, 0.0, 1.0), alpha, bg_rgb)
+    if bg_rgb is None:
+        rgb[~coverage] = 0.0
+    uint8 = _compose_alpha(to_uint8(rgb), alpha if bg_rgb is None else None)
+    # Already-placed display canvases validate and return unchanged here.
+    # Other paths receive final padding or their display-encoded boundary overlay.
+    uint8 = apply_window_mode(uint8, prepared.framing)
+    return _RenderedChannels(uint8, tone_mode, bg_rgb is not None)
 
 
 def _output_profile(tone_mapping: str, *, embed: bool, ocio: bool) -> bytes | None:
