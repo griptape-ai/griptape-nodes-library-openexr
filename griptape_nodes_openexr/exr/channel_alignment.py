@@ -17,6 +17,7 @@ from griptape_nodes_openexr.exr.display_window import (
 )
 from griptape_nodes_openexr.exr.exr_io import ChannelSource
 from griptape_nodes_openexr.exr.exr_types import WindowCoordinates
+from griptape_nodes_openexr.exr.render_limits import check_canvas, validate_render_limit
 
 ALIGN_PIXELS = "Match pixel positions"
 ALIGN_COORDINATES = "Match EXR coordinates"
@@ -24,8 +25,6 @@ ALIGN_STRICT = "Require matching windows"
 ALIGN_CHOICES = [ALIGN_PIXELS, ALIGN_COORDINATES, ALIGN_STRICT]
 REFERENCE_DEFAULT = "First connected RGB"
 REFERENCE_CHOICES = [REFERENCE_DEFAULT, "R", "G", "B", "A"]
-MAX_RENDER_PIXELS_DEFAULT = 67108864
-MAX_RENDER_PIXELS_SETTING = "openexr.max_render_pixels"
 
 
 @dataclass(frozen=True)
@@ -56,28 +55,6 @@ def resolve_reference(slots: Mapping[str, object], policy: str, reference: str, 
         msg = f"Frame reference {reference} is not connected. Connect that slot or choose First connected RGB."
         raise ValueError(msg)
     return reference
-
-
-def validate_render_limit(value: object) -> int:
-    """Require a positive integer rather than coercing a malformed setting."""
-    if type(value) is not int or value <= 0:
-        msg = f"{MAX_RENDER_PIXELS_SETTING} must be a positive integer, got {value!r}."
-        raise ValueError(msg)
-    return value
-
-
-def check_canvas(window: WindowCoordinates, limit: int) -> None:
-    """Check geometry before allocating an assembly or output canvas."""
-    if window.width <= 0 or window.height <= 0:
-        msg = f"Invalid render window: {window}"
-        raise ValueError(msg)
-    pixels = window.width * window.height
-    if pixels > limit:
-        msg = (
-            f"Render canvas {window.width}x{window.height} ({pixels} pixels) exceeds "
-            f"{MAX_RENDER_PIXELS_SETTING} ({limit}). Raise this library setting to render this canvas."
-        )
-        raise ValueError(msg)
 
 
 def assemble_channels(

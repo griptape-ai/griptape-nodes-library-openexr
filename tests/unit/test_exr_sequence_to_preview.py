@@ -749,9 +749,9 @@ class TestAProcessPipeline:
         node, pngs_seen_by_ffmpeg, png_pixels = self._run_with_failed_frame(tmp_path, "black")
 
         assert pngs_seen_by_ffmpeg == [f"frame_{i:04d}.png" for i in range(4)]
-        # The black frame sits where frame 1 was, sized like the converted frames.
+        # The black frame sits where frame 1 was, matching the even encoder canvas.
         sizes = {size for size, _ in png_pixels}
-        assert sizes == {(3, 2)}
+        assert sizes == {(4, 2)}
         assert png_pixels[1][1] == (0, 0, 0)
         assert all(pixel != (0, 0, 0) for i, (_, pixel) in enumerate(png_pixels) if i != 1)
         assert _was_successful(node) is True

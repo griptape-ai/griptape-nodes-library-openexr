@@ -14,12 +14,10 @@ from griptape_nodes.exe_types.param_components.project_file_parameter import Pro
 from griptape_nodes.exe_types.param_types.parameter_button import ParameterButton
 from griptape_nodes.exe_types.param_types.parameter_float import ParameterFloat
 from griptape_nodes.exe_types.param_types.parameter_string import ParameterString
-from griptape_nodes.retained_mode.events.config_events import GetConfigValueRequest, GetConfigValueResultSuccess
-from griptape_nodes.retained_mode.griptape_nodes import GriptapeNodes
 from griptape_nodes.traits.options import Options
 from PIL import Image
 
-from griptape_nodes_openexr.exr import channel_alignment
+from griptape_nodes_openexr.exr import channel_alignment, render_limits
 from griptape_nodes_openexr.exr.display_window import (
     WINDOW_MODE_DISPLAY,
     add_window_mode_parameter,
@@ -247,7 +245,7 @@ class DisplayEXRChannel(SuccessFailureNode):
         frame_reference = str(self.get_parameter_value(self._frame_reference_param.name))
         try:
             channel_alignment.resolve_reference(all_slots, alignment_policy, frame_reference, window_mode)
-            limit = _get_render_limit()
+            limit = render_limits.get_render_limit()
             sources = load_slot_sources(all_slots)
             assembly = channel_alignment.assemble_channels(
                 sources, alignment_policy, frame_reference, window_mode, limit
@@ -367,19 +365,6 @@ class DisplayEXRChannel(SuccessFailureNode):
         )
         self._set_status_results(was_successful=True, result_details=details)
         logger.info("DisplayEXRChannel '%s': %s", self.name, details)
-
-
-def _get_render_limit() -> int:
-    """Read the library setting on every execution, falling back when absent."""
-    result = GriptapeNodes.handle_request(
-        GetConfigValueRequest(category_and_key=channel_alignment.MAX_RENDER_PIXELS_SETTING)
-    )
-    if result.failed():
-        return channel_alignment.MAX_RENDER_PIXELS_DEFAULT
-    if not isinstance(result, GetConfigValueResultSuccess):
-        msg = f"Unexpected response reading {channel_alignment.MAX_RENDER_PIXELS_SETTING}"
-        raise RuntimeError(msg)
-    return channel_alignment.validate_render_limit(result.value)
 
 
 def _output_profile(tone_mapping: str, *, embed: bool, ocio: bool) -> bytes | None:

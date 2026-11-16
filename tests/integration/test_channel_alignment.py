@@ -291,7 +291,7 @@ def test_real_subsampled_source_is_rejected(engine, tmp_path: Path, policy: str)
 def test_manifest_registers_documented_default() -> None:
     import json
 
-    from griptape_nodes_openexr.exr.channel_alignment import MAX_RENDER_PIXELS_DEFAULT
+    from griptape_nodes_openexr.exr.render_limits import MAX_RENDER_PIXELS_DEFAULT
 
     manifest = json.loads((Path(__file__).parents[2] / "griptape-nodes-library.json").read_text())
     settings = next(item for item in manifest["settings"] if item["category"] == "openexr")

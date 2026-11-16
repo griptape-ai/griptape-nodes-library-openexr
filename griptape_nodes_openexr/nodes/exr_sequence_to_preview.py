@@ -26,6 +26,7 @@ from PIL import Image
 # static_ffmpeg is dynamically installed by the library loader at runtime
 from static_ffmpeg import run  # type: ignore[import-untyped]
 
+from griptape_nodes_openexr.exr import render_limits, sequence_canvas
 from griptape_nodes_openexr.exr.channel_selection import select_display_channels
 from griptape_nodes_openexr.exr.display_window import (
     WINDOW_MODE_DATA,
@@ -35,8 +36,10 @@ from griptape_nodes_openexr.exr.display_window import (
     read_framing,
     select_window_channels,
     validate_window_mode,
+    window_size,
 )
 from griptape_nodes_openexr.exr.exr_io import build_rgb_array, load_exr_channels
+from griptape_nodes_openexr.exr.exr_types import WindowCoordinates
 from griptape_nodes_openexr.exr.ocio_helpers import (
     COLOR_MODE_OCIO,
     ColorParamsProtocol,
@@ -143,6 +146,26 @@ class EXRSequenceToPreview(SuccessFailureNode):
         self.add_parameter(self._part_index_param)
 
         self._window_mode_param = add_window_mode_parameter(self)
+        self._odd_dimensions_param = ParameterString(
+            name="odd_dimensions",
+            default_value=sequence_canvas.ODD_PAD,
+            tooltip="Pad to even adds at most one black column/right and row/bottom. Require even rejects odd encoder dimensions.",
+            allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
+        )
+        self._odd_dimensions_param.add_trait(Options(choices=sequence_canvas.ODD_CHOICES, allow_custom=True))
+        self.add_parameter(self._odd_dimensions_param)
+        self._frame_sizes_param = ParameterString(
+            name="frame_sizes",
+            default_value=sequence_canvas.SIZES_REQUIRE,
+            tooltip=(
+                "Require matching sizes rejects differing rendered dimensions. Pad to largest preserves pixels "
+                "at the top-left and fills right/bottom with black, without resizing. This aligns rendered images, "
+                "not EXR origins. A larger canvas needs more memory; openexr.max_render_pixels limits its size."
+            ),
+            allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
+        )
+        self._frame_sizes_param.add_trait(Options(choices=sequence_canvas.SIZES_CHOICES, allow_custom=True))
+        self.add_parameter(self._frame_sizes_param)
 
         self._exposure_param = ParameterFloat(
             name="exposure",
@@ -301,9 +324,13 @@ class EXRSequenceToPreview(SuccessFailureNode):
         threads = int(self.get_parameter_value(self._threads_param.name))
         fmt = str(self.get_parameter_value(self._format_param.name))
         missing_frames = str(self.get_parameter_value(self._missing_frames_param.name))
+        odd_dimensions = str(self.get_parameter_value(self._odd_dimensions_param.name))
+        frame_sizes = str(self.get_parameter_value(self._frame_sizes_param.name))
         try:
             window_mode = validate_window_mode(str(self.get_parameter_value(self._window_mode_param.name)))
-        except ValueError as e:
+            sequence_canvas.validate_policies(odd_dimensions, frame_sizes)
+            max_pixels = render_limits.get_render_limit()
+        except (ValueError, RuntimeError) as e:
             self._on_fail(str(e))
             return
 
@@ -323,8 +350,24 @@ class EXRSequenceToPreview(SuccessFailureNode):
         try:
             log_step = max(1, total * _LOG_INTERVAL_PCT // 100)
 
+            limit_errors: list[str] = []
+
             def _convert(i: int, entry: SequenceEntry) -> Path:
-                return _convert_frame(entry.path, i, temp_path, part_index, ev, color_params, tone_mapping, window_mode)
+                try:
+                    return _convert_frame(
+                        entry.path,
+                        i,
+                        temp_path,
+                        part_index,
+                        ev,
+                        color_params,
+                        tone_mapping,
+                        window_mode,
+                        max_pixels=max_pixels,
+                    )
+                except render_limits.RenderLimitError as e:
+                    limit_errors.append(f"Frame '{entry.path}': {e}")
+                    raise
 
             def _on_frame_done(frames_done: int) -> None:
                 self.parameter_output_values[self._frames_processed_param.name] = frames_done
@@ -336,6 +379,10 @@ class EXRSequenceToPreview(SuccessFailureNode):
             results, errors = await run_over_sequence(
                 entries, threads=threads, work=_convert, on_completed=_on_frame_done
             )
+
+            if limit_errors:
+                self._on_fail(limit_errors[0])
+                return
 
             if errors:
                 logger.warning("%s: %d frame(s) failed conversion: %s", self.name, len(errors), "; ".join(errors))
@@ -355,12 +402,17 @@ class EXRSequenceToPreview(SuccessFailureNode):
             # so a failed frame mid-sequence would silently drop every frame
             # after it. Number the frames handed to ffmpeg without gaps.
             try:
-                if missing_frames == MISSING_FRAMES_BLACK:
-                    frames = _fill_with_black(results, temp_path)
-                else:
-                    frames = [path for path in results if path is not None]
-                encoded = _number_contiguously(frames, temp_path)
-            except OSError as e:
+                prepared = sequence_canvas.prepare_frames(
+                    results,
+                    [entry.path for entry in entries],
+                    temp_path,
+                    odd_dimensions,
+                    frame_sizes,
+                    missing_frames == MISSING_FRAMES_BLACK,
+                    max_pixels,
+                )
+                encoded = _number_contiguously(prepared.frames, temp_path)
+            except (OSError, ValueError) as e:
                 self._on_fail(f"Failed to stage frames for ffmpeg: {e}")
                 return
 
@@ -458,6 +510,10 @@ class EXRSequenceToPreview(SuccessFailureNode):
             )
         else:
             details = f"Encoded {total} frames at {frame_rate} fps → {fmt}"
+        details += (
+            f"; {prepared.size[0]}x{prepared.size[1]}, {frame_sizes}, {odd_dimensions}; "
+            f"{prepared.padded_frames} frame(s) padded"
+        )
         self._set_status_results(was_successful=True, result_details=details)
         logger.info("%s: %s", self.name, details)
 
@@ -471,6 +527,8 @@ def _convert_frame(  # noqa: PLR0913, PLR0917
     color_params: ColorParamsProtocol | None,
     tone_mapping: str,
     window_mode: str = WINDOW_MODE_DEFAULT,
+    *,
+    max_pixels: int = render_limits.MAX_RENDER_PIXELS_DEFAULT,
 ) -> Path:
     """Load one EXR frame, apply colour management, and write a PNG to temp_dir.
 
@@ -498,6 +556,11 @@ def _convert_frame(  # noqa: PLR0913, PLR0917
         # Restrict validation and processing to the channels actually being rendered.
         pixels, framing = select_window_channels({name: pixels[name] for name in selected}, framing)
 
+    if framing is not None:
+        width, height = window_size(framing)
+        render_limits.check_canvas(WindowCoordinates(0, 0, width - 1, height - 1), max_pixels)
+    height, width = pixels[selected[0]].shape
+    render_limits.check_canvas(WindowCoordinates(0, 0, width - 1, height - 1), max_pixels)
     rgb = build_rgb_array(pixels, selected)
     rgb = apply_exposure(rgb, ev)
     rgb, _ = apply_color_management(rgb, color_params, tone_mapping)
@@ -509,31 +572,6 @@ def _convert_frame(  # noqa: PLR0913, PLR0917
     out_path = temp_dir / f"converted_{frame_index:04d}.png"
     Image.fromarray(uint8_rgb, "RGB").save(out_path)
     return out_path
-
-
-def _fill_with_black(results: list[Path | None], temp_dir: Path) -> list[Path]:
-    """Write a black PNG for each failed frame, sized to match the first converted frame.
-
-    Args:
-        results: One slot per sequence entry, `None` where conversion failed.
-            At least one slot must hold a path.
-        temp_dir: Directory the black frames are written to.
-
-    Returns:
-        One path per entry, in sequence order, with no `None` slots.
-    """
-    with Image.open(next(path for path in results if path is not None)) as first:
-        size = first.size
-    black = Image.new("RGB", size)
-    frames: list[Path] = []
-    for i, converted in enumerate(results):
-        if converted is None:
-            filled = temp_dir / f"black_{i:04d}.png"
-            black.save(filled)
-            frames.append(filled)
-        else:
-            frames.append(converted)
-    return frames
 
 
 def _number_contiguously(frames: list[Path], temp_dir: Path) -> int:

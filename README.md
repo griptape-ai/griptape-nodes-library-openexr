@@ -354,19 +354,22 @@ Bakes an EXR frame sequence down to a single MP4/MOV preview video, applying exp
 
 **Inputs**
 
-| Parameter          | Type                      | Description                                                                                                                                |
-| ------------------ | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| `sequence`         | `Sequence`                | Frame sequence from **Scan Sequence** / **Scan Split Sequence**                                                                            |
-| `frame_rate`       | `float`                   | Output frame rate. Default `24.0`.                                                                                                         |
-| `part_index`       | `int`                     | Part index to read from every frame. Default `0`.                                                                                          |
-| `exposure`         | `float`                   | Exposure in EV stops applied before tone mapping. Default `0.0`.                                                                           |
-| `window_mode`      | `str`                     | `Full` (default), `Crop Overscan`, or `Show Overscan Boundary`, framed by each frame's own windows. See [Display window](#display-window). |
-| `color_mode`       | `str`                     | `basic` or `ocio`. Default `basic`.                                                                                                        |
-| `tone_mapping`     | `str`                     | `sRGB`, `rec709`, `rec1886`, or `raw`. Default `sRGB`. See [Display transforms](#display-transforms).                                      |
-| `color_params`     | `OCIOColorParamsArtifact` | OCIO colour parameters. Required when `color_mode` is `ocio`.                                                                              |
-| `format`           | `str`                     | Output container: `mp4` or `mov`. Default `mp4`.                                                                                           |
-| `processing_speed` | `str`                     | `fast`, `balanced`, or `quality`. Trades encode speed for size/quality.                                                                    |
-| `threads`          | `int`                     | Worker count for per-frame conversion. Range 1-16, default `4`. In the Advanced group.                                                     |
+| Parameter          | Type                      | Description                                                                                                                                   |
+| ------------------ | ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `sequence`         | `Sequence`                | Frame sequence from **Scan Sequence** / **Scan Split Sequence**                                                                               |
+| `frame_rate`       | `float`                   | Output frame rate. Default `24.0`.                                                                                                            |
+| `part_index`       | `int`                     | Part index to read from every frame. Default `0`.                                                                                             |
+| `exposure`         | `float`                   | Exposure in EV stops applied before tone mapping. Default `0.0`.                                                                              |
+| `window_mode`      | `str`                     | `Full` (default), `Crop Overscan`, or `Show Overscan Boundary`, framed by each frame's own windows. See [Display window](#display-window).    |
+| `color_mode`       | `str`                     | `basic` or `ocio`. Default `basic`.                                                                                                           |
+| `tone_mapping`     | `str`                     | `sRGB`, `rec709`, `rec1886`, or `raw`. Default `sRGB`. See [Display transforms](#display-transforms).                                         |
+| `color_params`     | `OCIOColorParamsArtifact` | OCIO colour parameters. Required when `color_mode` is `ocio`.                                                                                 |
+| `format`           | `str`                     | Output container: `mp4` or `mov`. Default `mp4`.                                                                                              |
+| `odd_dimensions`   | `str`                     | `Pad to even` (default) adds at most one black column/right and row/bottom. `Require even` rejects an odd encoder canvas.                     |
+| `frame_sizes`      | `str`                     | `Require matching sizes` (default) rejects differing rendered dimensions. `Pad to largest` pads to maximum width and height without resizing. |
+| `missing_frames`   | `str`                     | `skip` (default), `error`, or `black`. Controls failed conversions; canvas-policy failures always stop the run.                               |
+| `processing_speed` | `str`                     | `fast`, `balanced`, or `quality`. Trades encode speed for size/quality.                                                                       |
+| `threads`          | `int`                     | Worker count for per-frame conversion. Range 1-16, default `4`. In the Advanced group.                                                        |
 
 **Outputs**
 
@@ -377,22 +380,32 @@ Bakes an EXR frame sequence down to a single MP4/MOV preview video, applying exp
 | `frames_processed` | `int`              | Frames converted so far, updated live during a run |
 | `output_file`      | `str`              | Workspace path to the written video file           |
 
-Frames that fail to convert are skipped; the run continues and the error count is reported in the result details.
+The default skips failed conversions. Choose `missing_frames=error` to fail the run or `black` to retain sequence timing with black replacements.
+
+### Sequence canvas policies
+
+Both MP4 and MOV use H.264 with `yuv420p`, which requires even width and height. `odd_dimensions=Pad to even` adds black pixels after colour processing, preserving the rendered image at the top-left. `Require even` reports the odd dimensions and stops before encoding.
+
+`frame_sizes=Require matching sizes` compares successful frames before even padding and reports conflicting source paths and dimensions. Choose `Pad to largest` to preserve each frame without resizing or cropping. It uses the maximum width and maximum height across successful frames, then applies the odd-dimension policy. Padding is black on the right and bottom. This aligns local rendered canvases; it does not align differing EXR origins. Use `Crop Overscan` with a shared display window to align changing EXR crops by coordinates.
+
+Failed-frame black replacements use the final canvas dimensions. Size-policy failures and renders above `openexr.max_render_pixels` fail the sequence even when `missing_frames=skip` or `black`. Result details report final dimensions, policies and how many successful frames were padded.
+
+The shared [Library Settings](#library-settings) render limit applies to intermediate rendered frames and the final padded canvas. Padding processes one frame at a time, but concurrent EXR conversion workers still require memory for their own buffers.
 
 ## Library Settings
 
 Settings are configured in the engine under the `openexr` category.
 
-| Setting                     | Default    | Description                                                                                                                                                                                         |
-| --------------------------- | ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `openexr.max_render_pixels` | `67108864` | Maximum pixels in Display EXR Channel output and intermediate assembly canvases, across all alignment modes. Must be a positive integer. Default supports 8192x8192 images.                         |
-| `openexr.header_only`       | `true`     | When `true`, **Load EXR** reads only the file header (fast) and labels every channel `half`. Set to `false` to read accurate per-channel pixel types at the cost of loading pixel data into memory. |
-| `openexr.viewer_executable` | `""`       | Full path to an external HDR viewer executable (e.g. `/usr/bin/djv`, `/Applications/Nuke15.0v1/Nuke15.0v1.app/Contents/MacOS/Nuke15.0v1`). When empty, the OS default file association is used.     |
-| `openexr.viewer_args`       | `""`       | Additional command-line arguments passed to the viewer before the file path, e.g. `--hdr --linear`. Parsed with shell-style quoting rules.                                                          |
+| Setting                     | Default    | Description                                                                                                                                                                                              |
+| --------------------------- | ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `openexr.max_render_pixels` | `67108864` | Maximum pixels in Display EXR Channel and EXR Sequence to Preview output and intermediate rendering canvases, including sequence padding. Must be a positive integer. Default supports 8192x8192 images. |
+| `openexr.header_only`       | `true`     | When `true`, **Load EXR** reads only the file header (fast) and labels every channel `half`. Set to `false` to read accurate per-channel pixel types at the cost of loading pixel data into memory.      |
+| `openexr.viewer_executable` | `""`       | Full path to an external HDR viewer executable (e.g. `/usr/bin/djv`, `/Applications/Nuke15.0v1/Nuke15.0v1.app/Contents/MacOS/Nuke15.0v1`). When empty, the OS default file association is used.          |
+| `openexr.viewer_args`       | `""`       | Additional command-line arguments passed to the viewer before the file path, e.g. `--hdr --linear`. Parsed with shell-style quoting rules.                                                               |
 
 Increase `max_render_pixels` in the engine's `openexr` library settings to permit larger canvases. For example, `134217728` allows twice the default pixel count. The setting is read on every execution; oversized renders fail with the required dimensions and setting name. Images are never resized to fit the limit.
 
-The limit applies to Display EXR Channel's output and intermediate assembly canvases. Other rendering nodes and source EXR decoding are outside this guard: the OpenEXR binding still decodes the full source file. This is a pixel-count limit, with no separate width or height cap. Float32 processing and concurrent buffers require additional memory; one 8192x8192 RGBA float32 buffer occupies 1 GiB.
+The limit applies to Display EXR Channel and EXR Sequence to Preview output and intermediate rendering canvases. Read EXR, Display EXR Part and source EXR decoding are outside this guard: the OpenEXR binding still decodes the full source file. This is a pixel-count limit, with no separate width or height cap. Float32 processing and concurrent buffers require additional memory; one 8192x8192 RGBA float32 buffer occupies 1 GiB.
 
 Only **Load EXR** honours `openexr.header_only`. **Load EXR Sequence** always scans header-only, since its output carries no pixel data and a full scan would only buy slower, discarded reads. **Read EXR** always reads pixels, since decoding the selected part is the whole job.
 
