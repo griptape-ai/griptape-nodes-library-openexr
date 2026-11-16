@@ -12,6 +12,9 @@ from griptape_nodes.node_library.workflow_registry import (
     WorkflowMetadata,
 )
 from griptape_nodes.retained_mode.engine import Engine
+from griptape_nodes.retained_mode.managers.fitness_problems.libraries.deprecated_node_warning_problem import (
+    DeprecatedNodeWarningProblem,
+)
 from griptape_nodes.retained_mode.managers.fitness_problems.workflows.deprecated_node_in_workflow_problem import (
     DeprecatedNodeInWorkflowProblem,
 )
@@ -78,10 +81,18 @@ def test_library_and_saved_workflow_receive_warnings(library_schema: LibrarySche
 
         # When compatibility checks resolve the retained node registrations.
         manager = engine.version_compatibility_manager
-        library_issues = manager._check_library_for_deprecated_nodes(library_schema)
-        workflow_issues = asyncio.run(
-            manager._check_workflow_for_deprecated_nodes(workflow, registered_libraries=[library_schema.name])
-        )
+        library_issues = [
+            issue
+            for issue in manager.check_library_version_compatibility(library_schema)
+            if isinstance(issue.problem, DeprecatedNodeWarningProblem)
+        ]
+        workflow_issues = [
+            issue
+            for issue in asyncio.run(
+                manager.check_workflow_version_compatibility(workflow, registered_libraries=[library_schema.name])
+            )
+            if isinstance(issue.problem, DeprecatedNodeInWorkflowProblem)
+        ]
 
         # Then both nodes produce warnings with migration guidance, without a removal release.
         assert len(library_issues) == len(LEGACY_NODES)
@@ -90,7 +101,6 @@ def test_library_and_saved_workflow_receive_warnings(library_schema: LibrarySche
             assert issue.severity.name == "FLAWED"
             assert issue.problem.removal_version is None
             assert "Read EXR" in issue.problem.deprecation_message
-        assert all(isinstance(issue.problem, DeprecatedNodeInWorkflowProblem) for issue in workflow_issues)
     finally:
         LibraryRegistry._libraries.clear()
         LibraryRegistry._libraries.update(previous)
