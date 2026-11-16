@@ -220,7 +220,7 @@ An EXR's _data window_ contains its stored pixels. The _display window_ defines 
 | `Crop Overscan`          | The display window's size. Overscan is cropped away, and frame areas with no stored pixels are black, with zero alpha in RGBA output.                 |
 | `Show Overscan Boundary` | Every stored pixel, with a dashed black-and-white outline just inside the display window's edge. Edges that fall outside the data window are clipped. |
 
-Only the rendered PNG or video changes. The EXR's channels, header metadata, and the `part` and `channels` outputs keep the data window, and **Load EXR** and **Load EXR Sequence** report both windows as stored. For a sequence, each frame is framed by its own header, so a data window that changes from frame to frame still renders at one size in `Crop Overscan` mode. Workflows saved before this option existed load with `Full`, so they render as they did. Saved values using the earlier names (`data window`, `display window`, and `data window with display overlay`) remain supported and use the new labels when loaded.
+Only the rendered PNG or video changes. The EXR's channels, header metadata, and the `part` and `channels` outputs keep the data window, and **Load EXR** and **Load EXR Sequence** report both windows as stored. For a sequence, each frame is framed by its own header, so a data window that changes from frame to frame still renders at one size in `Crop Overscan` mode. Workflows saved before this option existed load with `Full`, so they render as they did.
 
 #### Colour profiles
 
@@ -275,8 +275,8 @@ Combines 1–4 individual `EXRChannelArtifact` inputs into an 8-bit PNG (RGB or 
 | `channel_a`           | `EXRChannelArtifact`                       | Channel used as alpha. Optional; when connected, output is RGBA.                                                                               |
 | `exposure`            | `float`                                    | Exposure in EV stops applied before tone mapping. Range −10 to +10, default `0.0`.                                                             |
 | `window_mode`         | `str`                                      | `Full` (default), `Crop Overscan`, or `Show Overscan Boundary`. The frame comes from `frame_reference`. See [Display window](#display-window). |
-| `channel_alignment`   | `str`                                      | `Match pixel positions` (default), `Match EXR coordinates`, or `Require matching windows`. See below.                                          |
-| `frame_reference`     | `str`                                      | `First connected RGB` (default), `R`, `G`, `B`, or `A`. Selects the source whose display window defines the intended frame.                    |
+| `channel_alignment`   | `str`                                      | `Match Pixel Positions` (default), `Match EXR Coordinates`, or `Require Matching Windows`. See below.                                          |
+| `frame_reference`     | `str`                                      | `First Connected RGB` (default), `R`, `G`, `B`, or `A`. Selects the source whose display window defines the intended frame.                    |
 | `color_mode`          | `str`                                      | `basic` (local tone mapping) or `ocio` (connected `OCIOColorParamsArtifact`). Default `basic`.                                                 |
 | `tone_mapping`        | `str`                                      | `sRGB`, `rec709`, `rec1886`, or `raw`. Default `sRGB`. See [Display transforms](#display-transforms).                                          |
 | `embed_color_profile` | `bool`                                     | Embed an ICC profile describing the display transform. Default `false`. See [Colour profiles](#colour-profiles).                               |
@@ -293,15 +293,15 @@ At least one RGB slot must be connected.
 
 **Channel alignment**
 
-- `Match pixel positions` aligns the top-left stored pixels and requires equal array dimensions. It ignores other sources' data-window offsets. The reference source supplies the coordinate origin and intended frame. This default preserves existing saved workflows.
-- `Match EXR coordinates` places every channel using its own data-window coordinates, supporting different sizes and origins without resizing. Missing samples are zero-filled. `Full` and `Show Overscan Boundary` include the bounding rectangle of all connected data windows, including alpha. `Crop Overscan` renders the reference display window directly.
-- `Require matching windows` fails if any connected channel, including alpha, has different data or display windows. The error identifies the affected slot.
+- `Match Pixel Positions` aligns the top-left stored pixels and requires equal array dimensions. It ignores other sources' data-window offsets. The reference source supplies the coordinate origin and intended frame. This default preserves existing saved workflows.
+- `Match EXR Coordinates` places every channel using its own data-window coordinates, supporting different sizes and origins without resizing. Missing samples are zero-filled. `Full` and `Show Overscan Boundary` include the bounding rectangle of all connected data windows, including alpha. `Crop Overscan` renders the reference display window directly.
+- `Require Matching Windows` fails if any connected channel, including alpha, has different data or display windows. The error identifies the affected slot.
 
 Coordinate and strict alignment require channels with one sample per EXR coordinate; subsampled channels fail with a slot-specific error. Source planes are never resampled.
 
-`First connected RGB` chooses R, then G, then B. An explicitly selected reference slot must be connected. Use `frame_reference=A` when a matte defines the intended frame, or `R` when beauty should define it.
+`First Connected RGB` chooses R, then G, then B. An explicitly selected reference slot must be connected. Use `frame_reference=A` when a matte defines the intended frame, or `R` when beauty should define it.
 
-For beauty with a data window starting at `(-8, -8)` and a matte starting at `(0, 0)`, choose `Match EXR coordinates` to align their EXR positions. Choose `Match pixel positions` to align their stored array positions instead. Result details report the alignment policy and effective reference.
+For beauty with a data window starting at `(-8, -8)` and a matte starting at `(0, 0)`, choose `Match EXR Coordinates` to align their EXR positions. Choose `Match Pixel Positions` to align their stored array positions instead. Result details report the alignment policy and effective reference.
 
 Display EXR Channel checks output and intermediate assembly sizes against `openexr.max_render_pixels`. See [Library Settings](#library-settings) for the default and how to raise it.
 
@@ -365,8 +365,8 @@ Bakes an EXR frame sequence down to a single MP4/MOV preview video, applying exp
 | `tone_mapping`     | `str`                     | `sRGB`, `rec709`, `rec1886`, or `raw`. Default `sRGB`. See [Display transforms](#display-transforms).                                         |
 | `color_params`     | `OCIOColorParamsArtifact` | OCIO colour parameters. Required when `color_mode` is `ocio`.                                                                                 |
 | `format`           | `str`                     | Output container: `mp4` or `mov`. Default `mp4`.                                                                                              |
-| `odd_dimensions`   | `str`                     | `Pad to even` (default) adds at most one black column/right and row/bottom. `Require even` rejects an odd encoder canvas.                     |
-| `frame_sizes`      | `str`                     | `Require matching sizes` (default) rejects differing rendered dimensions. `Pad to largest` pads to maximum width and height without resizing. |
+| `odd_dimensions`   | `str`                     | `Pad to Even` (default) adds at most one black column/right and row/bottom. `Require Even` rejects an odd encoder canvas.                     |
+| `frame_sizes`      | `str`                     | `Require Matching Sizes` (default) rejects differing rendered dimensions. `Pad to Largest` pads to maximum width and height without resizing. |
 | `missing_frames`   | `str`                     | `skip` (default), `error`, or `black`. Controls failed conversions; canvas-policy failures always stop the run.                               |
 | `processing_speed` | `str`                     | `fast`, `balanced`, or `quality`. Trades encode speed for size/quality.                                                                       |
 | `threads`          | `int`                     | Worker count for per-frame conversion. Range 1-16, default `4`. In the Advanced group.                                                        |
@@ -384,9 +384,9 @@ The default skips failed conversions. Choose `missing_frames=error` to fail the 
 
 ### Sequence canvas policies
 
-Both MP4 and MOV use H.264 with `yuv420p`, which requires even width and height. `odd_dimensions=Pad to even` adds black pixels after colour processing, preserving the rendered image at the top-left. `Require even` reports the odd dimensions and stops before encoding.
+Both MP4 and MOV use H.264 with `yuv420p`, which requires even width and height. `odd_dimensions=Pad to Even` adds black pixels after colour processing, preserving the rendered image at the top-left. `Require Even` reports the odd dimensions and stops before encoding.
 
-`frame_sizes=Require matching sizes` compares successful frames before even padding and reports conflicting source paths and dimensions. Choose `Pad to largest` to preserve each frame without resizing or cropping. It uses the maximum width and maximum height across successful frames, then applies the odd-dimension policy. Padding is black on the right and bottom. This aligns local rendered canvases; it does not align differing EXR origins. Use `Crop Overscan` with a shared display window to align changing EXR crops by coordinates.
+`frame_sizes=Require Matching Sizes` compares successful frames before even padding and reports conflicting source paths and dimensions. Choose `Pad to Largest` to preserve each frame without resizing or cropping. It uses the maximum width and maximum height across successful frames, then applies the odd-dimension policy. Padding is black on the right and bottom. This aligns local rendered canvases; it does not align differing EXR origins. Use `Crop Overscan` with a shared display window to align changing EXR crops by coordinates.
 
 Failed-frame black replacements use the final canvas dimensions. Size-policy failures and renders above `openexr.max_render_pixels` fail the sequence even when `missing_frames=skip` or `black`. Result details report final dimensions, policies and how many successful frames were padded.
 

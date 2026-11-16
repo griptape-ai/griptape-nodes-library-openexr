@@ -37,7 +37,7 @@ def test_shifted_channels_use_their_own_coordinates(engine, tmp_path: Path, alph
         **{other_slot: _channel(matte)},
         tone_mapping="raw",
         window_mode="Crop Overscan",
-        channel_alignment="Match EXR coordinates",
+        channel_alignment="Match EXR Coordinates",
     )
     # Then the same EXR coordinate selects a different array column per source.
     np.testing.assert_array_equal(image[0, :, 0], [96, 128, 159, 191])
@@ -68,7 +68,7 @@ def test_reference_alpha_selects_its_frame(engine, tmp_path: Path) -> None:
         channel_a=_channel(second, "A"),
         tone_mapping="raw",
         window_mode="Crop Overscan",
-        channel_alignment="Match EXR coordinates",
+        channel_alignment="Match EXR Coordinates",
         frame_reference="A",
     )
     assert image.shape == (4, 6, 4)
@@ -102,7 +102,7 @@ def test_uncovered_coordinate_regions_stay_black_after_lifting_transform(
             channel_node.DisplayEXRChannel,
             tmp_path,
             **values,
-            channel_alignment="Match EXR coordinates",
+            channel_alignment="Match EXR Coordinates",
             window_mode="Crop Overscan",
         )
     if background:
@@ -192,7 +192,7 @@ def test_same_file_different_parts_align_without_a_second_open(engine, tmp_path:
             channel_node.DisplayEXRChannel,
             tmp_path,
             **slots,
-            channel_alignment="Match EXR coordinates",
+            channel_alignment="Match EXR Coordinates",
             window_mode="Crop Overscan",
             tone_mapping="raw",
         )
@@ -202,7 +202,7 @@ def test_same_file_different_parts_align_without_a_second_open(engine, tmp_path:
 
 
 @pytest.mark.parametrize("mode", ["Full", "Crop Overscan", "Show Overscan Boundary"])
-@pytest.mark.parametrize("policy", ["Match pixel positions", "Match EXR coordinates", "Require matching windows"])
+@pytest.mark.parametrize("policy", ["Match Pixel Positions", "Match EXR Coordinates", "Require Matching Windows"])
 def test_matching_sources_preserve_rendering(engine, tmp_path: Path, mode: str, policy: str) -> None:
     path = _write_windowed(tmp_path / "matching.exr", (-2, -1, 5, 3), (0, 0, 3, 1), alpha=0.5)
     slots = {f"channel_{slot.lower()}": _channel(path, slot) for slot in "RGBA"}
@@ -224,7 +224,7 @@ def test_alpha_only_extent_does_not_create_rgb_coverage(engine, tmp_path: Path, 
         values["channel_g"] = _channel(matte)
     with patch.object(channel_node, "apply_color_management", side_effect=lambda rgb, *_: (rgb + 0.25, "lift")):
         image = _render_with_display_node(
-            channel_node.DisplayEXRChannel, tmp_path, **values, channel_alignment="Match EXR coordinates"
+            channel_node.DisplayEXRChannel, tmp_path, **values, channel_alignment="Match EXR Coordinates"
         )
     assert image.shape[:2] == (2, 6)
     assert not image[:, 2:4, :3].any()
@@ -253,7 +253,7 @@ def test_opaque_alpha_without_rgb_coverage_stays_black_over_background(engine, t
             channel_node.DisplayEXRChannel,
             tmp_path,
             **values,
-            channel_alignment="Match EXR coordinates",
+            channel_alignment="Match EXR Coordinates",
             window_mode="Crop Overscan",
         )
     assert not image[:, 4:].any()
@@ -265,14 +265,14 @@ def test_disjoint_coordinate_output_still_validates_colour(engine, tmp_path: Pat
     with patch("griptape_nodes_openexr.exr.ocio_helpers.find_colorspace_transform_request_type", return_value=None):
         node = channel_node.DisplayEXRChannel("disjoint")
     node.set_parameter_value("channel_r", _channel(path))
-    node.set_parameter_value("channel_alignment", "Match EXR coordinates")
+    node.set_parameter_value("channel_alignment", "Match EXR Coordinates")
     node.set_parameter_value("window_mode", "Crop Overscan")
     node.set_parameter_value("tone_mapping", "invalid")
     asyncio.run(node.aprocess())
     assert "Unsupported tone mapping" in node.parameter_output_values["result_details"]
 
 
-@pytest.mark.parametrize("policy", ["Match EXR coordinates", "Require matching windows"])
+@pytest.mark.parametrize("policy", ["Match EXR Coordinates", "Require Matching Windows"])
 def test_real_subsampled_source_is_rejected(engine, tmp_path: Path, policy: str) -> None:
     import OpenEXR
 

@@ -32,7 +32,7 @@ def test_selection_returns_views_and_updated_coordinates(
     display: tuple[int, int, int, int], expected_shape: tuple[int, int], origin: tuple[int, int]
 ) -> None:
     planes = _planes()
-    selected, framing = select_window_channels(planes, _framing("display window", display))
+    selected, framing = select_window_channels(planes, _framing("Crop Overscan", display))
     for name, plane in selected.items():
         assert plane.shape == expected_shape
         assert np.shares_memory(plane, planes[name])
@@ -44,11 +44,11 @@ def test_selection_returns_views_and_updated_coordinates(
 @pytest.mark.parametrize(
     ("mode", "display", "processed_shape"),
     [
-        ("display window", (0, 0, 3, 2), (3, 4, 3)),
-        ("display window", (2, 2, 9, 7), (3, 4, 3)),
-        ("display window", (-4, -3, 7, 6), (6, 8, 3)),
-        ("data window", (0, 0, 3, 2), (6, 8, 3)),
-        ("data window with display overlay", (0, 0, 3, 2), (6, 8, 3)),
+        ("Crop Overscan", (0, 0, 3, 2), (3, 4, 3)),
+        ("Crop Overscan", (2, 2, 9, 7), (3, 4, 3)),
+        ("Crop Overscan", (-4, -3, 7, 6), (6, 8, 3)),
+        ("Full", (0, 0, 3, 2), (6, 8, 3)),
+        ("Show Overscan Boundary", (0, 0, 3, 2), (6, 8, 3)),
     ],
 )
 def test_only_retained_pixels_are_processed(
@@ -92,7 +92,7 @@ def test_only_retained_pixels_are_processed(
     assert colour_shapes == [processed_shape]
     with Image.open(BytesIO(png)) as image:
         pixels = np.array(image)
-    if mode == "display window" and display == (-4, -3, 7, 6):
+    if mode == "Crop Overscan" and display == (-4, -3, 7, 6):
         assert not pixels[:2].any(), "padding must bypass a transform that changes black"
         assert (pixels[2:8, 2:10, :3] == 128).all()
 
@@ -100,7 +100,7 @@ def test_only_retained_pixels_are_processed(
 @pytest.mark.parametrize("consumer", ["part", "sequence"])
 def test_disjoint_windows_preserve_colour_errors(tmp_path: Path, consumer: str) -> None:
     module = rendering if consumer == "part" else sequence
-    framing = _framing("display window", (10, 10, 13, 12))
+    framing = _framing("Crop Overscan", (10, 10, 13, 12))
     with (
         patch.object(module, "load_exr_channels", return_value=_planes()),
         patch.object(sequence, "read_framing", return_value=framing),
@@ -122,7 +122,7 @@ def test_disjoint_windows_preserve_colour_errors(tmp_path: Path, consumer: str) 
 @pytest.mark.parametrize("consumer", ["part", "sequence"])
 def test_subsampled_planes_fail_before_slicing(tmp_path: Path, consumer: str) -> None:
     module = rendering if consumer == "part" else sequence
-    framing = _framing("display window", (0, 0, 3, 2))
+    framing = _framing("Crop Overscan", (0, 0, 3, 2))
     planes = {name: plane[::2, ::2] for name, plane in _planes().items()}
     with (
         patch.object(module, "load_exr_channels", return_value=planes),

@@ -149,7 +149,10 @@ class EXRSequenceToPreview(SuccessFailureNode):
         self._odd_dimensions_param = ParameterString(
             name="odd_dimensions",
             default_value=sequence_canvas.ODD_PAD,
-            tooltip="Pad to even adds at most one black column/right and row/bottom. Require even rejects odd encoder dimensions.",
+            tooltip=(
+                f"{sequence_canvas.ODD_PAD} adds at most one black column/right and row/bottom. "
+                f"{sequence_canvas.ODD_REQUIRE} rejects odd encoder dimensions."
+            ),
             allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
         )
         self._odd_dimensions_param.add_trait(Options(choices=sequence_canvas.ODD_CHOICES, allow_custom=True))
@@ -158,7 +161,7 @@ class EXRSequenceToPreview(SuccessFailureNode):
             name="frame_sizes",
             default_value=sequence_canvas.SIZES_REQUIRE,
             tooltip=(
-                "Require matching sizes rejects differing rendered dimensions. Pad to largest preserves pixels "
+                f"{sequence_canvas.SIZES_REQUIRE} rejects differing rendered dimensions. {sequence_canvas.SIZES_PAD} preserves pixels "
                 "at the top-left and fills right/bottom with black, without resizing. This aligns rendered images, "
                 "not EXR origins. A larger canvas needs more memory; openexr.max_render_pixels limits its size."
             ),

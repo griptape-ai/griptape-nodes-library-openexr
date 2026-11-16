@@ -129,7 +129,7 @@ def test_bundled_encoder_accepts_padded_sizes(tmp_path: Path, container: str) ->
         Image.new("RGB", size, (100, 50, 25)).save(path)
         paths.append(path)
     prepared = sequence_canvas.prepare_frames(
-        paths, ["wide.exr", "tall.exr"], tmp_path, "Pad to even", "Pad to largest", False, 100
+        paths, ["wide.exr", "tall.exr"], tmp_path, "Pad to Even", "Pad to Largest", False, 100
     )
     sequence._number_contiguously(prepared.frames, tmp_path)
     executable, probe = sequence.run.get_or_fetch_platform_executables_else_raise()

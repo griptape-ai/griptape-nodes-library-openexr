@@ -8,14 +8,15 @@ from pathlib import Path
 
 from PIL import Image
 
+from griptape_nodes_openexr.exr.display_window import WINDOW_MODE_DISPLAY
 from griptape_nodes_openexr.exr.exr_types import WindowCoordinates
 from griptape_nodes_openexr.exr.render_limits import check_canvas
 
-ODD_PAD = "Pad to even"
-ODD_REQUIRE = "Require even"
+ODD_PAD = "Pad to Even"
+ODD_REQUIRE = "Require Even"
 ODD_CHOICES = [ODD_PAD, ODD_REQUIRE]
-SIZES_REQUIRE = "Require matching sizes"
-SIZES_PAD = "Pad to largest"
+SIZES_REQUIRE = "Require Matching Sizes"
+SIZES_PAD = "Pad to Largest"
 SIZES_CHOICES = [SIZES_REQUIRE, SIZES_PAD]
 
 
@@ -71,13 +72,13 @@ def prepare_frames(  # noqa: PLR0913
                 msg = (
                     f"frame_sizes requires matching sizes: frame {first_index} '{source_paths[first_index]}' "
                     f"is {first_size[0]}x{first_size[1]}, frame {index} '{source_paths[index]}' "
-                    f"is {size[0]}x{size[1]}. Choose Pad to largest or Crop Overscan with a shared display window."
+                    f"is {size[0]}x{size[1]}. Choose {SIZES_PAD} or {WINDOW_MODE_DISPLAY} with a shared display window."
                 )
                 raise ValueError(msg)
     width = max(size[0] for size in sizes.values())
     height = max(size[1] for size in sizes.values())
     if odd_dimensions == ODD_REQUIRE and (width % 2 or height % 2):
-        msg = f"Encoder canvas {width}x{height} must have even dimensions. Choose Pad to even."
+        msg = f"Encoder canvas {width}x{height} must have even dimensions. Choose {ODD_PAD}."
         raise ValueError(msg)
     if odd_dimensions == ODD_PAD:
         width += width % 2

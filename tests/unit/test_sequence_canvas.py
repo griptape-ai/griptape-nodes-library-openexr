@@ -19,7 +19,7 @@ def _png(path: Path, size: tuple[int, int]) -> Path:
 def test_odd_frames_pad_right_and_bottom(tmp_path: Path, size: tuple[int, int]) -> None:
     path = _png(tmp_path / "input.png", size)
     result = sequence_canvas.prepare_frames(
-        [path], ["input.exr"], tmp_path, "Pad to even", "Require matching sizes", False, 100
+        [path], ["input.exr"], tmp_path, "Pad to Even", "Require Matching Sizes", False, 100
     )
     with Image.open(result.frames[0]) as image:
         pixels = np.array(image)
@@ -36,7 +36,7 @@ def test_even_matching_images_are_not_rewritten(tmp_path: Path) -> None:
     path = _png(tmp_path / "input.png", (4, 2))
     content = path.read_bytes()
     result = sequence_canvas.prepare_frames(
-        [path], ["input.exr"], tmp_path, "Require even", "Require matching sizes", False, 8
+        [path], ["input.exr"], tmp_path, "Require Even", "Require Matching Sizes", False, 8
     )
     assert result.frames == [path]
     assert result.size == (4, 2)
@@ -53,8 +53,8 @@ def test_padding_to_largest_resolves_maxima_from_different_frames_and_fills_miss
         [None, first, second],
         ["missing.exr", "wide.exr", "tall.exr"],
         tmp_path,
-        "Pad to even",
-        "Pad to largest",
+        "Pad to Even",
+        "Pad to Largest",
         True,
         36,
     )
@@ -75,7 +75,7 @@ def test_matching_policy_reports_source_frames_before_writing(tmp_path: Path) ->
         pytest.raises(ValueError, match="first.exr.*4x2.*second.exr.*2x4"),
     ):
         sequence_canvas.prepare_frames(
-            paths, ["first.exr", "second.exr"], tmp_path, "Pad to even", "Require matching sizes", False, 100
+            paths, ["first.exr", "second.exr"], tmp_path, "Pad to Even", "Require Matching Sizes", False, 100
         )
     allocate.assert_not_called()
 
@@ -84,15 +84,15 @@ def test_matching_policy_compares_original_sizes_before_even_padding(tmp_path: P
     paths = [_png(tmp_path / "one.png", (3, 2)), _png(tmp_path / "two.png", (4, 2))]
     with pytest.raises(ValueError, match="frame_sizes"):
         sequence_canvas.prepare_frames(
-            paths, ["one.exr", "two.exr"], tmp_path, "Pad to even", "Require matching sizes", False, 100
+            paths, ["one.exr", "two.exr"], tmp_path, "Pad to Even", "Require Matching Sizes", False, 100
         )
 
 
 def test_require_even_reports_actionable_error(tmp_path: Path) -> None:
     path = _png(tmp_path / "odd.png", (3, 2))
-    with pytest.raises(ValueError, match="3x2.*Pad to even"):
+    with pytest.raises(ValueError, match="3x2.*Pad to Even"):
         sequence_canvas.prepare_frames(
-            [path], ["odd.exr"], tmp_path, "Require even", "Require matching sizes", False, 100
+            [path], ["odd.exr"], tmp_path, "Require Even", "Require Matching Sizes", False, 100
         )
 
 
@@ -102,20 +102,20 @@ def test_limit_includes_even_padding_and_union_canvas(tmp_path: Path) -> None:
         patch.object(sequence_canvas.Image, "new") as allocate,
         pytest.raises(ValueError, match="openexr.max_render_pixels"),
     ):
-        sequence_canvas.prepare_frames([path], ["odd.exr"], tmp_path, "Pad to even", "Require matching sizes", True, 9)
+        sequence_canvas.prepare_frames([path], ["odd.exr"], tmp_path, "Pad to Even", "Require Matching Sizes", True, 9)
     allocate.assert_not_called()
 
 
 def test_failed_frames_are_skipped_when_black_replacement_is_off(tmp_path: Path) -> None:
     path = _png(tmp_path / "good.png", (4, 2))
     result = sequence_canvas.prepare_frames(
-        [None, path], ["missing.exr", "good.exr"], tmp_path, "Pad to even", "Require matching sizes", False, 8
+        [None, path], ["missing.exr", "good.exr"], tmp_path, "Pad to Even", "Require Matching Sizes", False, 8
     )
     assert result.frames == [path]
 
 
 @pytest.mark.parametrize(
-    ("odd", "sizes", "message"), [("typo", "Pad to largest", "odd_dimensions"), ("Pad to even", "typo", "frame_sizes")]
+    ("odd", "sizes", "message"), [("typo", "Pad to Largest", "odd_dimensions"), ("Pad to Even", "typo", "frame_sizes")]
 )
 def test_unknown_policies_are_rejected(odd: str, sizes: str, message: str) -> None:
     with pytest.raises(ValueError, match=message):

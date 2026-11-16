@@ -125,9 +125,9 @@ class DisplayEXRChannel(SuccessFailureNode):
             name="channel_alignment",
             default_value=channel_alignment.ALIGN_PIXELS,
             tooltip=(
-                "Match pixel positions aligns top-left stored pixels and ignores other sources' header offsets; "
-                "array sizes must match. Match EXR coordinates places each channel using its own data window. "
-                "Require matching windows rejects differing data or display windows, including alpha."
+                f"{channel_alignment.ALIGN_PIXELS} aligns top-left stored pixels and ignores other sources' header offsets; "
+                f"array sizes must match. {channel_alignment.ALIGN_COORDINATES} places each channel using its own data window. "
+                f"{channel_alignment.ALIGN_STRICT} rejects differing data or display windows, including alpha."
             ),
             allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
         )
@@ -137,7 +137,7 @@ class DisplayEXRChannel(SuccessFailureNode):
             name="frame_reference",
             default_value=channel_alignment.REFERENCE_DEFAULT,
             tooltip=(
-                "Channel whose display window defines the intended frame. First connected RGB uses R, G, B order. "
+                f"Channel whose display window defines the intended frame. {channel_alignment.REFERENCE_DEFAULT} uses R, G, B order. "
                 "Pixel-position alignment also uses this source's data-window origin. "
                 "An explicitly selected slot must be connected."
             ),

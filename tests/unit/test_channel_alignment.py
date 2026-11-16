@@ -23,7 +23,7 @@ def test_coordinate_union_includes_alpha_and_leaves_gaps_uncovered(mode: str) ->
     # Given three disjoint windows, including alpha outside the RGB extent.
     sources = {"R": _source((-2, -1, -1, 0)), "G": _source((1, 0, 2, 1), 0.5), "A": _source((4, 0, 4, 1))}
     # When assembled in EXR coordinates.
-    result = alignment.assemble_channels(sources, alignment.ALIGN_COORDINATES, "First connected RGB", mode, 100)
+    result = alignment.assemble_channels(sources, alignment.ALIGN_COORDINATES, "First Connected RGB", mode, 100)
     # Then positions and zero-coverage gaps follow the source coordinates.
     assert result.framing.data_window == (-2, -1, 4, 1)
     assert result.planes["R"].shape == (3, 7)
@@ -50,7 +50,7 @@ def test_coordinate_crop_avoids_allocating_distant_union() -> None:
     assert not result.planes["G"].any()
 
 
-@pytest.mark.parametrize("policy", ["Match pixel positions", "Match EXR coordinates", "Require matching windows"])
+@pytest.mark.parametrize("policy", ["Match Pixel Positions", "Match EXR Coordinates", "Require Matching Windows"])
 def test_output_limit_checked_before_allocating(policy: str) -> None:
     sources = {"R": _source((0, 0, 3, 1))}
     with patch.object(alignment.np, "zeros") as allocate, pytest.raises(ValueError, match="openexr.max_render_pixels"):
@@ -74,7 +74,7 @@ def test_pixel_mode_rejects_different_shapes() -> None:
         )
 
 
-@pytest.mark.parametrize("policy", ["Match EXR coordinates", "Require matching windows"])
+@pytest.mark.parametrize("policy", ["Match EXR Coordinates", "Require Matching Windows"])
 def test_subsampled_source_reports_slot(policy: str) -> None:
     source = _source((0, 0, 3, 1))
     source.pixels.resize((1, 4))
@@ -116,7 +116,7 @@ def test_automatic_reference_uses_rgb_order() -> None:
     result = alignment.assemble_channels(
         {"B": _source((0, 0, 3, 1)), "G": _source((0, 0, 3, 1))},
         alignment.ALIGN_PIXELS,
-        "First connected RGB",
+        "First Connected RGB",
         WINDOW_MODE_DATA,
         8,
     )
@@ -142,9 +142,9 @@ def test_explicit_reference_uses_its_display_window(reference: str) -> None:
     ("policy", "reference", "mode", "message"),
     [
         ("unknown", "R", WINDOW_MODE_DATA, "Unknown channel_alignment"),
-        ("Match pixel positions", "unknown", WINDOW_MODE_DATA, "Unknown frame_reference"),
-        ("Match pixel positions", "A", WINDOW_MODE_DISPLAY, "A.*not connected"),
-        ("Match pixel positions", "R", "unknown", "Unknown window_mode"),
+        ("Match Pixel Positions", "unknown", WINDOW_MODE_DATA, "Unknown frame_reference"),
+        ("Match Pixel Positions", "A", WINDOW_MODE_DISPLAY, "A.*not connected"),
+        ("Match Pixel Positions", "R", "unknown", "Unknown window_mode"),
     ],
 )
 def test_invalid_choices(policy: str, reference: str, mode: str, message: str) -> None:

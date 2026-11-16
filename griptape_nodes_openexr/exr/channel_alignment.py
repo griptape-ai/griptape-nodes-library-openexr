@@ -19,11 +19,11 @@ from griptape_nodes_openexr.exr.exr_io import ChannelSource
 from griptape_nodes_openexr.exr.exr_types import WindowCoordinates
 from griptape_nodes_openexr.exr.render_limits import check_canvas, validate_render_limit
 
-ALIGN_PIXELS = "Match pixel positions"
-ALIGN_COORDINATES = "Match EXR coordinates"
-ALIGN_STRICT = "Require matching windows"
+ALIGN_PIXELS = "Match Pixel Positions"
+ALIGN_COORDINATES = "Match EXR Coordinates"
+ALIGN_STRICT = "Require Matching Windows"
 ALIGN_CHOICES = [ALIGN_PIXELS, ALIGN_COORDINATES, ALIGN_STRICT]
-REFERENCE_DEFAULT = "First connected RGB"
+REFERENCE_DEFAULT = "First Connected RGB"
 REFERENCE_CHOICES = [REFERENCE_DEFAULT, "R", "G", "B", "A"]
 
 
@@ -52,7 +52,7 @@ def resolve_reference(slots: Mapping[str, object], policy: str, reference: str, 
     if reference == REFERENCE_DEFAULT:
         return next(slot for slot in "RGB" if slot in slots)
     if reference not in slots:
-        msg = f"Frame reference {reference} is not connected. Connect that slot or choose First connected RGB."
+        msg = f"Frame reference {reference} is not connected. Connect that slot or choose {REFERENCE_DEFAULT}."
         raise ValueError(msg)
     return reference
 

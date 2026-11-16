@@ -1,3 +1,4 @@
-- Display EXR Channel has `channel_alignment` options to match stored pixel positions, align each
-  channel by EXR coordinates, or require matching data and display windows. `frame_reference` selects
-  which channel defines the intended frame. The default preserves pixel-position alignment.
+- Display EXR Channel has `channel_alignment` options: `Match Pixel Positions`,
+  `Match EXR Coordinates`, and `Require Matching Windows`. `frame_reference` selects which channel
+  defines the intended frame, defaulting to `First Connected RGB`. The default alignment preserves
+  stored pixel positions.
