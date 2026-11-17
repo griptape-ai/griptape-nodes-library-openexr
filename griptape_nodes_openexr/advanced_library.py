@@ -6,6 +6,8 @@ from typing import TYPE_CHECKING
 
 from griptape_nodes.node_library.advanced_node_library import AdvancedNodeLibrary
 
+from griptape_nodes_openexr.exr.metadata_service import shutdown_metadata_service
+
 if TYPE_CHECKING:
     from griptape_nodes.node_library.library_registry import Library, LibrarySchema
 
@@ -14,7 +16,6 @@ class OpenEXRLibrary(AdvancedNodeLibrary):
     """Registers EXR artifact provider and preview generator with the engine."""
 
     def before_library_unregistered(self, library_data: LibrarySchema, library: Library) -> None:
-        from griptape_nodes_openexr.exr.metadata_service import shutdown_metadata_service
 
         shutdown_metadata_service()
 
