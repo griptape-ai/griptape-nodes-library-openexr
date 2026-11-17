@@ -312,6 +312,13 @@ def _single_file(tmp_path: Path) -> Path:
 
 
 class TestHeaderMetadata:
+    def test_tooltips_match_shared_definitions(self, harness: _Harness) -> None:
+        from griptape_nodes_openexr.exr.header_metadata import HEADER_METADATA_DEFINITIONS
+
+        node = _make_node()
+        for name, definition in HEADER_METADATA_DEFINITIONS.items():
+            assert _param(node, name).tooltip == definition.tooltip
+
     def test_declares_typed_outputs(self, harness: _Harness) -> None:
         from griptape_nodes_openexr.exr.header_metadata import HEADER_METADATA_DEFAULTS
 

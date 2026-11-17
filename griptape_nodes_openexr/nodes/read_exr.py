@@ -392,7 +392,7 @@ class ReadEXR(SuccessFailureNode):
                 else:
                     raise ValueError(f"Unsupported metadata output type: {definition.type}")
                 parameter.display_name = definition.display_name
-                parameter.tooltip = definition.tooltip + " Describes the selected part of the selected frame."
+                parameter.tooltip = definition.tooltip
         self.add_node_element(info_group)
         # Cleared together on failure; see _on_fail.
         self._info_params = (
