@@ -5,7 +5,10 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from dataclasses import dataclass, replace
+from concurrent.futures import Future
+from contextvars import ContextVar
+from copy import deepcopy
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, NamedTuple
 
 from griptape.artifacts import ImageUrlArtifact
@@ -42,8 +45,17 @@ from griptape_nodes_openexr.exr.display_window import (
     window_size,
 )
 from griptape_nodes_openexr.exr.exr_header_artifact import EXRChannelArtifact, EXRPartArtifact
-from griptape_nodes_openexr.exr.exr_io import scan_exr_header
-from griptape_nodes_openexr.exr.header_metadata import HEADER_METADATA_DEFAULTS, header_metadata_outputs
+from griptape_nodes_openexr.exr.header_metadata import (
+    HEADER_METADATA_DEFAULTS,
+    HEADER_METADATA_DEFINITIONS,
+    header_metadata_outputs,
+)
+from griptape_nodes_openexr.exr.metadata_reader import read_metadata
+from griptape_nodes_openexr.exr.metadata_service import (
+    MetadataServiceClosed,
+    MetadataSuperseded,
+    get_metadata_service,
+)
 from griptape_nodes_openexr.exr.ocio_helpers import (
     COLOR_MODE_BASIC,
     COLOR_MODE_OCIO,
@@ -59,9 +71,10 @@ from griptape_nodes_openexr.exr.viewer_launcher import handle_viewer_button_clic
 if TYPE_CHECKING:
     from griptape_nodes.traits.button import Button, ButtonDetailsMessagePayload
 
-    from griptape_nodes_openexr.exr.exr_types import EXRData, EXRHeader, EXRPart
+    from griptape_nodes_openexr.exr.exr_types import EXRData, EXRPart
 
 logger = logging.getLogger("griptape_nodes")
+_execution_generation: ContextVar[int | None] = ContextVar("read_exr_execution_generation", default=None)
 
 # The provider's friendly name, matched case-insensitively by the artifact manager.
 _EXR_PROVIDER_NAME = "EXR"
@@ -105,17 +118,9 @@ class ScanState:
     sequence: Sequence
     exr_data: EXRData
     source_stamp: tuple[int, int] | None
-
-
-class _Unchanged:
-    """Sentinel: the cached scan still describes the path, so there is nothing to adopt.
-
-    Distinct from None, which means the path resolved to nothing and whatever is
-    cached belongs to a file the node is no longer pointing at.
-    """
-
-
-UNCHANGED = _Unchanged()
+    entry: SequenceEntry
+    frame_note: str
+    part_index: int
 
 
 @dataclass(frozen=True)
@@ -146,7 +151,7 @@ class _FramePlan:
 
 @dataclass(frozen=True)
 class RenderState:
-    """A completed render: its cache key, the outputs it published, and its source file.
+    """A completed render: its cache key, output values, and source file.
 
     The outputs are held alongside the key because the engine clears
     parameter_output_values whenever it marks the node unresolved, so a cache hit
@@ -180,9 +185,16 @@ class ReadEXR(SuccessFailureNode):
         self._scan: ScanState | None = None
         self._render: RenderState | None = None
         # The after_value_set scan runs as a background task so the setter can return.
-        self._pending_scan: asyncio.Task | None = None
-        self._pending_metadata: asyncio.Task | None = None
-        self._metadata_revision = 0
+        self._metadata_owner = object()
+        self._control_selection: tuple[str, int] | None = None
+        self._deleted = False
+        self._metadata_generation = 0
+        self._applied_generation = -1
+        self._request: Future[ScanState] | None = None
+        self._request_loop: asyncio.AbstractEventLoop | None = None
+        self._service = get_metadata_service()
+        self._adjusting_selection = False
+        self._request_preview = False
 
         self._path_param = sequence_path_parameter("path")
         self.add_parameter(self._path_param)
@@ -366,29 +378,19 @@ class ReadEXR(SuccessFailureNode):
                 tooltip="Number of frames in the sequence; 1 for a single file",
                 allowed_modes={ParameterMode.OUTPUT},
             )
-        formats = {
-            "compression": "Compression enum name, e.g. ZIP_COMPRESSION. Empty when cleared.",
-            "storage_type": "Storage mode: scanlineimage, tiledimage, deepscanline or deeptiled.",
-            "pixel_aspect_ratio": "Source pixel width/height ratio; defaults to 1.0.",
-            "data_window": "Source pixel bounds as xmin,ymin - xmax,ymax.",
-            "display_window": "Source display bounds as xmin,ymin - xmax,ymax.",
-            "time_code": "Source timecode text; empty if absent.",
-            "software": "Authoring application; empty if absent.",
-            "owner": "Asset owner; empty if absent.",
-            "chromaticities": "Colour primaries as JSON with red_x/y, green_x/y, blue_x/y and white_x/y; empty if absent.",
-            "custom_attributes": "Non-standard header attributes as JSON; {} if absent.",
-        }
         with info_group:
-            for output_name, default in HEADER_METADATA_DEFAULTS.items():
+            for output_name, definition in HEADER_METADATA_DEFINITIONS.items():
                 parameter = (
-                    ParameterFloat(name=output_name, default_value=float(default), allowed_modes={ParameterMode.OUTPUT})
-                    if output_name == "pixel_aspect_ratio"
+                    ParameterFloat(
+                        name=output_name, default_value=float(definition.default), allowed_modes={ParameterMode.OUTPUT}
+                    )
+                    if definition.type == "float"
                     else ParameterString(
-                        name=output_name, default_value=str(default), allowed_modes={ParameterMode.OUTPUT}
+                        name=output_name, default_value=str(definition.default), allowed_modes={ParameterMode.OUTPUT}
                     )
                 )
-                parameter.display_name = output_name.replace("_", " ").title()
-                parameter.tooltip = f"{formats[output_name]} Describes the selected part of the selected frame."
+                parameter.display_name = definition.display_name
+                parameter.tooltip = definition.tooltip + " Describes the selected part of the selected frame."
         self.add_node_element(info_group)
         # Cleared together on failure; see _on_fail.
         self._info_params = (
@@ -430,228 +432,154 @@ class ReadEXR(SuccessFailureNode):
             )
             return
 
-        if parameter.name == self._part_name_param.name:
-            # Layers belong to a part, so the dropdown has to follow the part selection.
-            # No rescan: the cached header already describes every part in the file.
-            if self._scan is not None:
-                self._apply_layer_choices(self._scan.exr_data, str(value or ""))
-            self._refresh_metadata()
+        if self._adjusting_selection:
             return
+        if parameter.name in {self._path_param.name, self._frame_param.name, self._part_name_param.name}:
+            if parameter.name == self._path_param.name:
+                self._render = None
+                self._control_selection = None
+            self._submit_metadata(preview=parameter.name == self._path_param.name)
 
-        if parameter.name == self._frame_param.name:
-            self._refresh_metadata()
-            return
-
-        if parameter.name == self._path_param.name:
-            self._clear_metadata()
-            # A live-preview optimisation only. after_value_set is skipped on workflow
-            # load and unreliable under parallel execution, so aprocess scans on a miss
-            # rather than relying on this having run.
-            #
-            # The handler for SetParameterValueRequest is synchronous, so whatever happens
-            # here happens on the engine's event loop. Scanning a 4K header takes about
-            # 1.8s and the preview request blocks until the provider returns, so both go
-            # to a worker thread and the setter returns immediately. The scan result is
-            # adopted back on the loop in between, so node state is only written there.
-            if _running_loop() is None:
-                # Bootstrap and worker threads have no loop to protect. Scanning inline
-                # keeps the dropdowns populated for callers that set values that way.
-                self._scan_and_preview(value)
-                return
-            previous = self._pending_scan
-            if previous is not None and not previous.done():
-                # Superseded. Cancelling stops it adopting; the scan already on a worker
-                # thread runs to completion and its result is dropped.
-                previous.cancel()
-            self._pending_scan = asyncio.ensure_future(self._ascan_and_preview(value))
-
-    async def wait_for_pending_scan(self) -> None:
-        """Await outstanding source and metadata refreshes started by value hooks.
-
-        Exists for tests and for callers that need refreshed dropdowns and metadata.
-        Execution resolves its own headers without relying on value hooks.
-        """
-        task = self._pending_scan
-        if task is not None:
-            self._pending_scan = None
-            await asyncio.shield(task)
-        metadata_task = self._pending_metadata
-        if metadata_task is not None:
-            self._pending_metadata = None
-            await asyncio.shield(metadata_task)
-
-    def _clear_metadata(self) -> None:
-        self._metadata_revision += 1
-        previous = self._pending_metadata
-        self._pending_metadata = None
-        if previous is not None and not previous.done():
-            previous.cancel()
-        self.parameter_output_values.update(HEADER_METADATA_DEFAULTS)
-
-    def _metadata_header(self, scan: ScanState, frame: Any, part_choice: str) -> EXRHeader:
-        """Read a selection's header without requiring render or colour settings."""
-        entry, reason = _select_sequence_entry(scan.sequence, frame, is_sequence=len(scan.sequence.entries) > 1)
-        if entry is None:
-            raise ValueError(reason)
-        index = _part_index_for(scan.exr_data, part_choice)
-        if index is None:
-            raise ValueError(f"Part '{part_choice}' is not in this file")
-        data = scan.exr_data
-        stamp = _file_stamp(entry.path)
-        if stamp is None:
-            raise ValueError(f"Cannot read '{entry.path}'")
-        if entry.path != scan.sequence.entries[0].path or stamp != scan.source_stamp:
-            data = scan_exr_header(entry.path, header_only=True)
-            if index >= len(data.parts) or data.parts[index].header.name != scan.exr_data.parts[index].header.name:
-                raise ValueError(f"Part '{part_choice}' is not in{reason}")
-        return data.parts[index].header
-
-    def _refresh_metadata(self) -> None:
-        self._clear_metadata()
-        scan = self._scan
-        if scan is None or scan.key != _scan_key_for(self.get_parameter_value(self._path_param.name)):
-            return
-        revision = self._metadata_revision
+    def _submit_metadata(self, *, preview: bool = False) -> Future[ScanState]:
+        """Capture selection and enqueue work; disk reading never runs in the setter."""
+        raw_path = deepcopy(self.get_parameter_value(self._path_param.name))
         frame = self.get_parameter_value(self._frame_param.name)
         part_choice = str(self.get_parameter_value(self._part_name_param.name) or "")
-        if _running_loop() is None:
-            try:
-                header = self._metadata_header(scan, frame, part_choice)
-            except (ValueError, RuntimeError, OSError):
-                return
-            self.parameter_output_values.update(header_metadata_outputs(header))
-        else:
-            self._pending_metadata = asyncio.ensure_future(self._arefresh_metadata(scan, frame, part_choice, revision))
-
-    async def _arefresh_metadata(self, scan: ScanState, frame: Any, part_choice: str, revision: int) -> None:
-        try:
-            header = await to_thread(self._metadata_header, scan, frame, part_choice)
-        except (ValueError, RuntimeError, OSError):
-            return
-        if revision == self._metadata_revision and scan is self._scan:
-            self.parameter_output_values.update(header_metadata_outputs(header))
-
-    async def _ascan_and_preview(self, raw_path: Any) -> None:
-        """Scan and request a canvas preview, with only the blocking calls off the loop.
-
-        Swallows its own failures: a bad path must not break the value being set.
-        """
-        try:
-            scanned = await to_thread(self._scan_blocking, raw_path)
-        except Exception:
-            logger.warning("ReadEXR '%s': failed to scan '%s'", self.name, raw_path, exc_info=True)
-            if _scan_key_for(raw_path) == _scan_key_for(self.get_parameter_value(self._path_param.name)):
-                self._clear_scan()
-            return
-        if not self._adopt_if_current(raw_path, scanned):
-            if isinstance(scanned, _Unchanged):
-                self._refresh_metadata()
-            return
-        await to_thread(self._request_canvas_preview)
-
-    def _scan_and_preview(self, raw_path: Any) -> None:
-        """Scan and request a canvas preview inline, for callers with no event loop.
-
-        Swallows its own failures: a bad path must not break the value being set.
-        """
-        try:
-            scanned = self._scan_blocking(raw_path)
-        except Exception:
-            logger.warning("ReadEXR '%s': failed to scan '%s'", self.name, raw_path, exc_info=True)
-            self._clear_scan()
-            return
-        if not self._adopt_if_current(raw_path, scanned):
-            if isinstance(scanned, _Unchanged):
-                self._refresh_metadata()
-            return
-        self._request_canvas_preview()
-
-    def _adopt_if_current(self, raw_path: Any, scanned: ScanState | _Unchanged | str | None) -> bool:
-        """Install a scan result, unless `path` has moved on since the scan started.
-
-        Clicking through the file picker starts a scan per click, and they finish in
-        whatever order the files take to read. Without this check a slow earlier scan
-        lands after a fast later one and leaves the node describing a file the user has
-        already navigated away from.
-        """
-        wanted = _scan_key_for(self.get_parameter_value(self._path_param.name))
-        if _scan_key_for(raw_path) != wanted:
-            logger.debug("ReadEXR '%s': discarding a superseded scan of '%s'", self.name, raw_path)
-            return False
-        if isinstance(scanned, _Unchanged):
-            return False
-        if scanned is None or isinstance(scanned, str):
-            # Nothing resolved for the path the node is currently pointing at, so any
-            # cached scan and render describe a file it has navigated away from.
-            self._clear_scan()
-            return False
-        self._adopt_scan(scanned)
-        return True
-
-    # ------------------------------------------------------------------
-    # Scanning
-    # ------------------------------------------------------------------
-
-    def _clear_scan(self) -> None:
-        self._clear_metadata()
+        self._metadata_generation += 1
+        generation = self._metadata_generation
         self._scan = None
-        self._render = None
+        self.parameter_output_values.update(HEADER_METADATA_DEFAULTS)
+        self._request_preview = preview
+        # The engine loop owns node changes even when a setter is called on another
+        # thread. Standalone callers apply results when explicitly awaiting them.
+        engine_loop = self.engine.event_manager.event_loop
+        loop = engine_loop if engine_loop is not None and engine_loop.is_running() else _running_loop()
+        self._request_loop = loop
+        selection = (_scan_key_for(raw_path), frame, part_choice)
+        reset_part = self._control_selection is None
+        future = self._service.submit(
+            self._metadata_owner,
+            selection,
+            lambda: self._read_selection(raw_path, frame, part_choice, reset_part=reset_part),
+        )
+        self._request = future
+        if loop is not None:
 
-    def _scan_blocking(self, raw_path: Any) -> ScanState | _Unchanged | str | None:
-        """Resolve `raw_path` and read its first entry's header.
+            def completed(result: Future[ScanState]) -> None:
+                if not loop.is_closed():
+                    loop.call_soon_threadsafe(self._complete_metadata, result, generation)
 
-        Returns `UNCHANGED` when the cached scan already covers the path, `None`
-        for an empty path, or a diagnostic string when resolution fails. Callers
-        drop cached state when the current path cannot be resolved.
+            future.add_done_callback(completed)
+        return future
 
-        Synchronous and slow (a 4K multi-part header is ~1.8s), so callers on the event
-        loop run it through `to_thread`. Reads `self._scan` to skip a redundant scan
-        but writes nothing: every mutation belongs to `_adopt_scan` or `_clear_scan` on
-        the loop, which is what makes this safe to call from a worker thread.
-        """
-        scan = self._scan
-        key = _scan_key_for(raw_path)
-        if not key:
-            return None
-        if scan is not None and key == scan.key:
-            # An artist re-rendering in place keeps the filenames, so the key alone
-            # cannot see the change. An unreadable file rescans rather than comparing
-            # two Nones and keeping a stale header.
-            stamp = _file_stamp(scan.sequence.entries[0].path)
-            if stamp is not None and stamp == scan.source_stamp:
-                return UNCHANGED
-
+    @staticmethod
+    def _read_selection(raw_path: Any, frame: Any, part_choice: str, *, reset_part: bool) -> ScanState:
+        """Resolve and read exactly the selected file, retaining no completed cache."""
+        if not _scan_key_for(raw_path):
+            raise ValueError("No path provided")
         sequence = resolve_sequence_path(raw_path)
         if isinstance(sequence, str):
-            return sequence
+            raise ValueError(sequence)
+        entry, note = _select_sequence_entry(sequence, frame, is_sequence=len(sequence.entries) > 1)
+        if entry is None:
+            raise ValueError(note)
+        stamp = _file_stamp(entry.path)
+        if stamp is None:
+            raise ValueError(f"Cannot read{note}: '{entry.path}' is missing or unreadable")
+        data = read_metadata(entry.path)
+        index = _part_index_for(data, part_choice)
+        if reset_part and (index is None or (part_choice and part_choice != _part_choices_for(data)[index])):
+            index = 0
+            part_choice = ""
+        if index is None:
+            raise ValueError(f"Part '{part_choice}' is not in{note or ' this file'}")
+        if part_choice and part_choice != _part_choices_for(data)[index]:
+            raise ValueError(f"Part '{part_choice}' is not in{note or ' this file'}")
+        return ScanState(_scan_key_for(raw_path), sequence, data, stamp, entry, note, index)
 
-        # Stamped before the read, never after. A write landing in this window then
-        # pairs an old stamp with a new header, costing one redundant rescan later.
-        # The other order pins the stale header for good.
-        source_stamp = _file_stamp(sequence.entries[0].path)
-        return ScanState(
-            key=key,
-            sequence=sequence,
-            exr_data=scan_exr_header(sequence.entries[0].path, header_only=True),
-            source_stamp=source_stamp,
-        )
+    def _complete_metadata(self, future: Future[ScanState], generation: int) -> None:
+        if (
+            self._deleted
+            or generation != self._metadata_generation
+            or self._applied_generation == generation
+            or self._service.closed
+        ):
+            return
+        self._applied_generation = generation
+        try:
+            scan = future.result()
+        except (MetadataSuperseded, MetadataServiceClosed):
+            return
+        except Exception:
+            self._scan = None
+            self._render = None
+            self.parameter_output_values.update(HEADER_METADATA_DEFAULTS)
+            return
+        self._adopt_scan(scan)
+        if self._request_preview:
+            # Preview generation has its own engine policy. It never supplies this
+            # node's metadata and remains outside the metadata reader service.
+            if _running_loop() is not None:
+                asyncio.create_task(to_thread(self._request_canvas_preview))
+            else:
+                self._request_canvas_preview()
+
+    async def wait_for_pending_scan(self) -> None:
+        """Await the latest metadata request and apply it in the owning context."""
+        while self._request is not None:
+            future = self._request
+            generation = self._metadata_generation
+            try:
+                await asyncio.shield(asyncio.wrap_future(future))
+            except (MetadataSuperseded, MetadataServiceClosed):
+                if future is not self._request:
+                    continue
+            except Exception:
+                pass
+            if future is not self._request:
+                continue
+            loop = self._request_loop
+            if loop is None or loop is _running_loop() or not loop.is_running():
+                self._complete_metadata(future, generation)
+            else:
+                applied: Future[None] = Future()
+
+                def apply(
+                    result: Future[ScanState] = future,
+                    revision: int = generation,
+                    completion: Future[None] = applied,
+                ) -> None:
+                    try:
+                        self._complete_metadata(result, revision)
+                    except Exception as error:
+                        completion.set_exception(error)
+                    else:
+                        completion.set_result(None)
+
+                loop.call_soon_threadsafe(apply)
+                await asyncio.shield(asyncio.wrap_future(applied))
+            return
+
+    def _clear_metadata(self) -> None:
+        self._metadata_generation += 1
+        self._service.close_owner(self._metadata_owner)
+        self._request = None
+        self.parameter_output_values.update(HEADER_METADATA_DEFAULTS)
 
     def _adopt_scan(self, scan: ScanState) -> None:
-        """Install a completed scan and refresh the UI from it."""
+        """Update node controls and outputs from the current request only."""
         self._scan = scan
-        # Any cached render belongs to the file that just went away.
-        self._render = None
+        control_selection = (scan.key, scan.part_index)
+        reset_layer = self._control_selection != control_selection
+        self._control_selection = control_selection
+        self._adjusting_selection = True
+        try:
+            self._apply_scan_to_ui(scan.sequence, scan.exr_data, reset_layer=reset_layer)
+        finally:
+            self._adjusting_selection = False
+        self.parameter_output_values.update(header_metadata_outputs(scan.exr_data.parts[scan.part_index].header))
 
-        self._apply_scan_to_ui(scan.sequence, scan.exr_data)
-        self._refresh_metadata()
-
-    async def _arefresh_scan(self, raw_path: Any) -> str | None:
-        """Scan off the event loop, adopt the result and return any diagnostic."""
-        scanned = await to_thread(self._scan_blocking, raw_path)
-        self._adopt_if_current(raw_path, scanned)
-        return scanned if isinstance(scanned, str) else None
-
-    def _apply_scan_to_ui(self, sequence: Sequence, exr_data: EXRData) -> None:
+    def _apply_scan_to_ui(self, sequence: Sequence, exr_data: EXRData, *, reset_layer: bool = True) -> None:
         """Populate the dropdowns and the frame slider range from a fresh scan."""
         part_choices = _part_choices_for(exr_data)
         _set_choices(self._part_name_param, part_choices)
@@ -660,7 +588,9 @@ class ReadEXR(SuccessFailureNode):
             self.set_parameter_value(self._part_name_param.name, part_choices[0], emit_change=False)
         self._set_hidden(self._part_name_param, hidden=len(part_choices) <= 1)
 
-        self._apply_layer_choices(exr_data, str(self.get_parameter_value(self._part_name_param.name) or ""))
+        self._apply_layer_choices(
+            exr_data, str(self.get_parameter_value(self._part_name_param.name) or ""), reset_layer=reset_layer
+        )
 
         is_sequence = len(sequence.entries) > 1
         self._set_hidden(self._frame_param, hidden=not is_sequence)
@@ -682,13 +612,13 @@ class ReadEXR(SuccessFailureNode):
         # the run.
         self._frame_param.soft_limits = True
 
-    def _apply_layer_choices(self, exr_data: EXRData, part_choice: str) -> None:
+    def _apply_layer_choices(self, exr_data: EXRData, part_choice: str, *, reset_layer: bool = True) -> None:
         """Repopulate the layer dropdown for the currently selected part."""
         channel_names = [channel.name for channel in _part_for(exr_data, part_choice).channels]
         layer_choices = list_layers(channel_names)
         _set_choices(self._layer_param, layer_choices)
         current_layer = self.get_parameter_value(self._layer_param.name)
-        if current_layer not in layer_choices:
+        if current_layer not in layer_choices and (reset_layer or not current_layer):
             fallback = default_layer(channel_names) or (layer_choices[0] if layer_choices else "")
             self.set_parameter_value(self._layer_param.name, fallback, emit_change=False)
         self._set_hidden(self._layer_param, hidden=len(layer_choices) <= 1)
@@ -755,7 +685,15 @@ class ReadEXR(SuccessFailureNode):
         render = self._render
         return handle_viewer_button_click(self.name, render.source_path if render is not None else None)
 
+    def after_node_deleted(self) -> None:
+        self._deleted = True
+        self._clear_metadata()
+        super().after_node_deleted()
+
     def _on_fail(self, details: str) -> None:
+        executing_generation = _execution_generation.get()
+        if executing_generation is not None and executing_generation != self._metadata_generation:
+            return
         self._clear_metadata()
         self._render = None
         self.parameter_output_values[self._image_param.name] = None
@@ -773,23 +711,24 @@ class ReadEXR(SuccessFailureNode):
     # ------------------------------------------------------------------
 
     async def aprocess(self) -> None:
+        token = _execution_generation.set(None)
+        try:
+            await self._aprocess_current()
+        finally:
+            _execution_generation.reset(token)
+
+    async def _aprocess_current(self) -> None:
         """Resolve the parameters to one frame, render it, and publish the outputs.
 
         Each step below returns `None` when it has already called `_on_fail`, so the
         spine stays a flat sequence of guards.
         """
         self._clear_execution_status()
-        # Execution owns publication from here. An edit-time scan completing later
-        # must not republish metadata after execution has failed.
-        pending_scan = self._pending_scan
-        self._pending_scan = None
-        if pending_scan is not None and not pending_scan.done():
-            pending_scan.cancel()
-        self._clear_metadata()
-
         scan = await self._aresolve_scan()
         if scan is None:
             return
+        generation = self._metadata_generation
+        _execution_generation.set(generation)
 
         is_sequence = self._publish_sequence_info(scan)
 
@@ -802,14 +741,21 @@ class ReadEXR(SuccessFailureNode):
             return
 
         cached = self._render
-        if cached is not None and render_key == cached.key:
-            self._emit_render(cached.outputs)
+        cached_part = cached.outputs[self._part_param.name] if cached is not None else None
+        if (
+            cached is not None
+            and render_key == cached.key
+            and cached_part is not None
+            and (
+                cached_part.header.data_window == plan.part.header.data_window
+                and cached_part.header.display_window == plan.part.header.display_window
+                and cached_part.channels == plan.part.channels
+            )
+        ):
+            outputs = self._build_outputs(plan, cached.outputs[self._image_param.name])
+            self._emit_render(outputs)
             details = f"Reused cached render of {_part_label(plan.part, plan.part_index)}{plan.frame_note}"
             self._set_status_results(was_successful=True, result_details=details)
-            return
-
-        plan = await self._aread_frame_header(scan, plan)
-        if plan is None:
             return
 
         channels = self._select_channels(plan)
@@ -819,6 +765,8 @@ class ReadEXR(SuccessFailureNode):
 
         rendered = await self._arender_png(plan, selected, alpha_channel)
         if rendered is None:
+            return
+        if self._deleted or self._service.closed or generation != self._metadata_generation:
             return
         png_bytes, tone_mode = rendered
 
@@ -840,27 +788,20 @@ class ReadEXR(SuccessFailureNode):
         logger.info("ReadEXR '%s': %s", self.name, details)
 
     async def _aresolve_scan(self) -> ScanState | None:
-        """Refresh the scan for the current path. Returns None after calling `_on_fail`."""
-        raw_path = self.get_parameter_value(self._path_param.name)
-        if not _scan_key_for(raw_path):
-            self._on_fail("No path provided")
+        """Join an active selection read or request fresh headers for execution."""
+        request = self._request
+        if request is None or request.done():
+            request = self._submit_metadata()
+        generation = self._metadata_generation
+        await self.wait_for_pending_scan()
+        if self._deleted or self._service.closed or generation != self._metadata_generation:
             return None
-
-        # LoadEXR hard-fails on a cache miss here. Scanning instead is what makes the
-        # node work cold after a workflow reload, and in a worker that never saw the
-        # after_value_set hook.
         try:
-            diagnostic = await self._arefresh_scan(raw_path)
-        except (ValueError, RuntimeError) as e:
-            self._on_fail(f"Failed to scan EXR header: {e}")
+            scan = request.result()
+        except (MetadataSuperseded, MetadataServiceClosed):
             return None
-
-        if diagnostic is not None:
-            self._on_fail(diagnostic)
-            return None
-        scan = self._scan
-        if scan is None:
-            self._on_fail(f"No EXR found at '{_describe_path(raw_path)}'")
+        except Exception as error:
+            self._on_fail(str(error))
             return None
         return scan
 
@@ -882,16 +823,10 @@ class ReadEXR(SuccessFailureNode):
             return None
         exr_data = scan.exr_data
 
-        entry, frame_note = self._select_entry(scan.sequence, is_sequence=is_sequence)
-        if entry is None:
-            self._on_fail(frame_note)
-            return None
+        entry, frame_note = scan.entry, scan.frame_note
 
         part_name = str(self.get_parameter_value(self._part_name_param.name) or "")
-        part_index = _part_index_for(exr_data, part_name)
-        if part_index is None:
-            self._on_fail(f"Part '{part_name}' is not in this file")
-            return None
+        part_index = scan.part_index
 
         color_mode = str(self.get_parameter_value(self._color_mode_param.name) or COLOR_MODE_BASIC)
         color_params: ColorParamsProtocol | None = None
@@ -945,37 +880,12 @@ class ReadEXR(SuccessFailureNode):
             color_params=_color_params_key(plan.color_params),
         )
 
-    async def _aread_frame_header(self, scan: ScanState, plan: _FramePlan) -> _FramePlan | None:
-        """Re-read the header of a frame that is not frame 1, and re-aim the plan at it.
-
-        The cached scan is frame 1's header, which drives the dropdowns. Each frame
-        carries its own data window and channel list, so the frame being read supplies
-        its own. Returns None after calling `_on_fail`.
-        """
-        if plan.entry.path == scan.sequence.entries[0].path:
-            return plan
-
-        try:
-            frame_data = await to_thread(scan_exr_header, plan.entry.path, header_only=True)
-        except (ValueError, RuntimeError) as e:
-            self._on_fail(f"Failed to read the header of{plan.frame_note}: {e}")
-            return None
-
-        # Matched by name as well as index: a frame that drops a part shifts the ones
-        # after it, and reading by index alone would render the wrong one.
-        part_index = plan.part_index
-        if part_index >= len(frame_data.parts) or frame_data.parts[part_index].header.name != plan.part.header.name:
-            self._on_fail(f"Part '{plan.part_name}' is not in{plan.frame_note}")
-            return None
-
-        return replace(plan, exr_data=frame_data, part=frame_data.parts[part_index])
-
     def _select_channels(self, plan: _FramePlan) -> tuple[list[str], str | None] | None:
         """Pick the channels to display. Returns None after calling `_on_fail`."""
         channel_names = [channel.name for channel in plan.part.channels]
         candidates = channels_in_layer(channel_names, plan.layer) if plan.layer else channel_names
         if not candidates:
-            # The layer dropdown is built from frame 1, so a later frame can lack it.
+            # Preserve the selected layer across frames so a missing layer fails clearly.
             self._on_fail(f"Layer '{plan.layer}' is not in {_part_label(plan.part, plan.part_index)}{plan.frame_note}")
             return None
 
@@ -1025,7 +935,7 @@ class ReadEXR(SuccessFailureNode):
         return ImageUrlArtifact(saved.location)
 
     def _build_outputs(self, plan: _FramePlan, artifact: ImageUrlArtifact) -> dict[str, Any]:
-        """Assemble the published outputs for a completed render."""
+        """Assemble the node outputs for a completed render."""
         part = plan.part
         width, height = window_size(plan.framing)
         part_artifact = EXRPartArtifact(
@@ -1086,7 +996,7 @@ class ReadEXR(SuccessFailureNode):
         )
 
     def _emit_render(self, outputs: dict[str, Any]) -> None:
-        """Publish a render's outputs, whether it was just computed or came from the cache."""
+        """Update the node outputs from a fresh or cached render."""
         for name, value in outputs.items():
             self.parameter_output_values[name] = value
         self.publish_update_to_parameter(self._image_param.name, outputs[self._image_param.name])
@@ -1177,18 +1087,16 @@ def _file_stamp(path: str) -> tuple[int, int] | None:
 
 
 def _sequence_scan_key(directory: str, pattern: str, entries: list[Any]) -> str:
-    """A cache key covering everything that identifies a connected Sequence's content.
-
-    The pattern alone (e.g. "render.####.exr") is shared by every version of a shot,
-    so a re-scan that picks up newly rendered frames, or a switch from one render
-    directory to another with the same filenames, must still produce a different key.
-    """
-    numbers = ",".join(str(e.number if isinstance(e, SequenceEntry) else e.get("number")) for e in entries)
-    return f"{directory}|{pattern}|{numbers}"
+    """Identify a sequence's explicit frame-to-file mapping for in-flight sharing."""
+    mapping = tuple(
+        (entry.number, entry.path) if isinstance(entry, SequenceEntry) else (entry.get("number"), entry.get("path"))
+        for entry in entries
+    )
+    return repr((directory, pattern, mapping))
 
 
 def _scan_key_for(raw_path: Any) -> str:
-    """A stable cache key for a path parameter value, empty when there is nothing to read."""
+    """A stable selection identity, empty when there is nothing to read."""
     if raw_path is None:
         return ""
     if isinstance(raw_path, Sequence):

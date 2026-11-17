@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import json
+from dataclasses import FrozenInstanceError
 from unittest.mock import patch
 
 import numpy as np
@@ -21,7 +22,12 @@ from griptape_nodes_openexr.exr.exr_types import (
     StorageType,
     WindowCoordinates,
 )
-from griptape_nodes_openexr.exr.header_metadata import HEADER_METADATA_DEFAULTS, header_metadata_outputs
+from griptape_nodes_openexr.exr.header_metadata import (
+    HEADER_METADATA_DEFAULTS,
+    HEADER_METADATA_DEFINITIONS,
+    MetadataOutputDefinition,
+    header_metadata_outputs,
+)
 from griptape_nodes_openexr.nodes.load_exr import LoadEXR
 
 
@@ -62,6 +68,41 @@ def test_defaults_match_existing_empty_outputs() -> None:
         "chromaticities": "",
         "custom_attributes": "{}",
     }
+
+
+def test_definitions_preserve_explicit_types_labels_and_tooltips() -> None:
+    formats = {
+        "compression": "Compression enum name, e.g. ZIP_COMPRESSION. Empty when cleared.",
+        "storage_type": "Storage mode: scanlineimage, tiledimage, deepscanline or deeptiled.",
+        "pixel_aspect_ratio": "Source pixel width/height ratio; defaults to 1.0.",
+        "data_window": "Source pixel bounds as xmin,ymin - xmax,ymax.",
+        "display_window": "Source display bounds as xmin,ymin - xmax,ymax.",
+        "time_code": "Source timecode text; empty if absent.",
+        "software": "Authoring application; empty if absent.",
+        "owner": "Asset owner; empty if absent.",
+        "chromaticities": "Colour primaries as JSON with red_x/y, green_x/y, blue_x/y and white_x/y; empty if absent.",
+        "custom_attributes": "Non-standard header attributes as JSON; {} if absent.",
+    }
+    assert list(HEADER_METADATA_DEFINITIONS) == list(HEADER_METADATA_DEFAULTS)
+    for name, definition in HEADER_METADATA_DEFINITIONS.items():
+        assert isinstance(definition, MetadataOutputDefinition)
+        assert definition.type == ("float" if name == "pixel_aspect_ratio" else "str")
+        assert type(definition.default) is (float if definition.type == "float" else str)
+        assert definition.default == HEADER_METADATA_DEFAULTS[name]
+        assert definition.display_name == name.replace("_", " ").title()
+        assert definition.tooltip == f"{formats[name]} Describes the selected part of the selected frame."
+
+
+def test_defaults_are_derived_from_definitions() -> None:
+    assert HEADER_METADATA_DEFAULTS == {
+        name: definition.default for name, definition in HEADER_METADATA_DEFINITIONS.items()
+    }
+
+
+def test_definition_is_frozen() -> None:
+    definition = MetadataOutputDefinition(type="str", default="", display_name="Owner", tooltip="Asset owner")
+    with pytest.raises(FrozenInstanceError):
+        definition.default = "changed"  # pyright: ignore[reportAttributeAccessIssue]
 
 
 def test_formats_required_fields_and_absent_metadata(header: EXRHeader) -> None:

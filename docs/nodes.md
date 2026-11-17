@@ -51,11 +51,19 @@ The `image` output is a rendered 8-bit PNG rather than the `.exr` itself, becaus
 
 ### Header Metadata
 
-The ten metadata outputs describe the selected `part_name` in the selected `frame`. They refresh without decoding pixels when `path`, `frame`,
-or `part_name` changes. On the engine's event loop, this header-only refresh runs in the
-background. Running the node publishes metadata for the frame and part actually rendered.
+The ten metadata outputs describe the selected `part_name` in the selected `frame`. They refresh without decoding pixels when `path`, `frame`, or `part_name` changes.
+Setters enqueue a header read and return before the metadata is available. A shared reader
+handles one request at a time and keeps only the latest pending selection for each node.
+Execution waits for the same request if it is still running, otherwise it reads fresh headers.
+Completed headers are never cached, including when the rendered PNG is reused.
+Python callers can await `wait_for_pending_scan()` to inspect refreshed metadata.
+Running the node updates metadata for the frame and part actually rendered.
 A failed execution clears all ten outputs to the defaults in the table, so metadata from a
 previous successful read does not survive a failed run.
+
+Header reads currently run in a thread in the hosting process. OpenEXR holds the GIL during
+file opening, so slow storage can still stall Python execution in that host. Process isolation
+and reader cleanup are tracked in [#119](https://github.com/griptape-ai/griptape-nodes-library-openexr/issues/119).
 
 `data_window` and `display_window` retain the source coordinates regardless of `window_mode`.
 They do not replace `image_width` and `image_height`, which still describe the rendered PNG.

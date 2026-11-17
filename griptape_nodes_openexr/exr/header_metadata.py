@@ -3,24 +3,94 @@
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Literal
 
 from griptape_nodes_openexr.exr.exr_types import _convert_attribute_value
 
 if TYPE_CHECKING:
     from griptape_nodes_openexr.exr.exr_types import EXRHeader
 
+
+@dataclass(frozen=True)
+class MetadataOutputDefinition:
+    """Scalar output schema shared by metadata formatting and node parameters."""
+
+    type: Literal["str", "float"]
+    default: str | float
+    display_name: str
+    tooltip: str
+
+
+HEADER_METADATA_DEFINITIONS: dict[str, MetadataOutputDefinition] = {
+    "compression": MetadataOutputDefinition(
+        type="str",
+        default="",
+        display_name="Compression",
+        tooltip="Compression enum name, e.g. ZIP_COMPRESSION. Empty when cleared. "
+        "Describes the selected part of the selected frame.",
+    ),
+    "storage_type": MetadataOutputDefinition(
+        type="str",
+        default="",
+        display_name="Storage Type",
+        tooltip="Storage mode: scanlineimage, tiledimage, deepscanline or deeptiled. "
+        "Describes the selected part of the selected frame.",
+    ),
+    "pixel_aspect_ratio": MetadataOutputDefinition(
+        type="float",
+        default=1.0,
+        display_name="Pixel Aspect Ratio",
+        tooltip="Source pixel width/height ratio; defaults to 1.0. Describes the selected part of the selected frame.",
+    ),
+    "data_window": MetadataOutputDefinition(
+        type="str",
+        default="",
+        display_name="Data Window",
+        tooltip="Source pixel bounds as xmin,ymin - xmax,ymax. Describes the selected part of the selected frame.",
+    ),
+    "display_window": MetadataOutputDefinition(
+        type="str",
+        default="",
+        display_name="Display Window",
+        tooltip="Source display bounds as xmin,ymin - xmax,ymax. Describes the selected part of the selected frame.",
+    ),
+    "time_code": MetadataOutputDefinition(
+        type="str",
+        default="",
+        display_name="Time Code",
+        tooltip="Source timecode text; empty if absent. Describes the selected part of the selected frame.",
+    ),
+    "software": MetadataOutputDefinition(
+        type="str",
+        default="",
+        display_name="Software",
+        tooltip="Authoring application; empty if absent. Describes the selected part of the selected frame.",
+    ),
+    "owner": MetadataOutputDefinition(
+        type="str",
+        default="",
+        display_name="Owner",
+        tooltip="Asset owner; empty if absent. Describes the selected part of the selected frame.",
+    ),
+    "chromaticities": MetadataOutputDefinition(
+        type="str",
+        default="",
+        display_name="Chromaticities",
+        tooltip="Colour primaries as JSON with red_x/y, green_x/y, blue_x/y and white_x/y; empty if absent. "
+        "Describes the selected part of the selected frame.",
+    ),
+    "custom_attributes": MetadataOutputDefinition(
+        type="str",
+        default="{}",
+        display_name="Custom Attributes",
+        tooltip="Non-standard header attributes as JSON; {} if absent. "
+        "Describes the selected part of the selected frame.",
+    ),
+}
+
 HEADER_METADATA_DEFAULTS: dict[str, str | float] = {
-    "compression": "",
-    "storage_type": "",
-    "pixel_aspect_ratio": 1.0,
-    "data_window": "",
-    "display_window": "",
-    "time_code": "",
-    "software": "",
-    "owner": "",
-    "chromaticities": "",
-    "custom_attributes": "{}",
+    name: definition.default for name, definition in HEADER_METADATA_DEFINITIONS.items()
 }
 
 

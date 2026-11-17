@@ -13,6 +13,11 @@ if TYPE_CHECKING:
 class OpenEXRLibrary(AdvancedNodeLibrary):
     """Registers EXR artifact provider and preview generator with the engine."""
 
+    def before_library_unregistered(self, library_data: LibrarySchema, library: Library) -> None:
+        from griptape_nodes_openexr.exr.metadata_service import shutdown_metadata_service
+
+        shutdown_metadata_service()
+
     def after_library_nodes_loaded(self, library_data: LibrarySchema, library: Library) -> None:
         from griptape_nodes.retained_mode.events.artifact_events import (
             RegisterArtifactProviderRequest,
