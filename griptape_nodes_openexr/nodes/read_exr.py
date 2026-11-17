@@ -21,6 +21,7 @@ from griptape_nodes.exe_types.param_types.parameter_button import ParameterButto
 from griptape_nodes.exe_types.param_types.parameter_float import ParameterFloat
 from griptape_nodes.exe_types.param_types.parameter_int import ParameterInt
 from griptape_nodes.exe_types.param_types.parameter_string import ParameterString
+from griptape_nodes.files.file import File
 from griptape_nodes.retained_mode.events.artifact_events import (
     GetPreviewForArtifactRequest,
     PreviewGenerationPolicy,
@@ -380,15 +381,16 @@ class ReadEXR(SuccessFailureNode):
             )
         with info_group:
             for output_name, definition in HEADER_METADATA_DEFINITIONS.items():
-                parameter = (
-                    ParameterFloat(
+                if definition.type == "float":
+                    parameter = ParameterFloat(
                         name=output_name, default_value=float(definition.default), allowed_modes={ParameterMode.OUTPUT}
                     )
-                    if definition.type == "float"
-                    else ParameterString(
+                elif definition.type == "str":
+                    parameter = ParameterString(
                         name=output_name, default_value=str(definition.default), allowed_modes={ParameterMode.OUTPUT}
                     )
-                )
+                else:
+                    raise ValueError(f"Unsupported metadata output type: {definition.type}")
                 parameter.display_name = definition.display_name
                 parameter.tooltip = definition.tooltip + " Describes the selected part of the selected frame."
         self.add_node_element(info_group)
@@ -483,6 +485,7 @@ class ReadEXR(SuccessFailureNode):
         entry, note = _select_sequence_entry(sequence, frame, is_sequence=len(sequence.entries) > 1)
         if entry is None:
             raise ValueError(note)
+        entry = entry.model_copy(update={"path": File(entry.path).resolve()})
         stamp = _file_stamp(entry.path)
         if stamp is None:
             raise ValueError(f"Cannot read{note}: '{entry.path}' is missing or unreadable")

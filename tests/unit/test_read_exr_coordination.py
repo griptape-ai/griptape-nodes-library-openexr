@@ -51,6 +51,32 @@ def test_sync_setter_returns_before_disk_read(harness, tmp_path: Path) -> None:
     assert node.parameter_output_values["compression"] != ""
 
 
+@pytest.mark.parametrize("raw_path", ["{{workspace}}/shot.exr", "shot.exr"])
+def test_connected_entry_is_resolved_with_engine_file(harness, tmp_path: Path, raw_path: str) -> None:
+    from tests.unit.test_read_exr import _make_sequence
+
+    resolved = _single_file(tmp_path)
+    sequence = _make_sequence([resolved], start=1001)
+    sequence["entries"][0]["path"] = raw_path
+    node = _make_node()
+    with patch("griptape_nodes.files.file.File.resolve", return_value=str(resolved)) as resolve:
+        node.set_parameter_value("path", sequence)
+        asyncio.run(node.aprocess())
+    assert resolve.called
+    assert harness.scan_calls == [str(resolved)]
+    assert node.parameter_output_values["was_successful"] is True
+    assert node.parameter_output_values["part"].file_path == str(resolved)
+
+
+def test_unsupported_metadata_type_fails_explicitly(harness) -> None:
+    from types import SimpleNamespace
+
+    definition = SimpleNamespace(type="bool", default=False, display_name="Unsupported", tooltip="Unsupported")
+    with patch(f"{_NODE_MODULE}.HEADER_METADATA_DEFINITIONS", {"unsupported": definition}):
+        with pytest.raises(ValueError, match="Unsupported metadata output type"):
+            _make_node()
+
+
 def test_sequence_identity_includes_entry_paths() -> None:
     from griptape_nodes_openexr.nodes.read_exr import _scan_key_for
     from tests.unit.test_read_exr import _make_sequence

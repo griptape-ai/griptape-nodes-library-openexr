@@ -1,9 +1,14 @@
-"""Bounded, process-local scheduling for metadata reads.
+"""Share and queue metadata reads across nodes in this process.
 
-The service owns no node state. Future callbacks run on the completing thread;
-callers must dispatch updates to their host loop and check their own generation.
-Async callers should shield wrapped futures so cancelling one waiter does not
-cancel a pending read shared with another consumer.
+One background thread runs reads in order. Each node can have one pending
+selection; newer edits replace it. Calls for the same node and active selection
+share a Future. Completed results are never reused for another read.
+
+Call get_metadata_service().submit(owner, selection, read) to enqueue work.
+Await asyncio.shield(asyncio.wrap_future(future)) to get its result without
+cancelling a read another caller is waiting for. Before updating a node, check
+that its selection is still current and apply the result on its engine loop.
+Callbacks may run on the reader thread or the thread that submitted the request.
 """
 
 from __future__ import annotations
