@@ -21,6 +21,7 @@ from griptape_nodes.files.project_file import ProjectFileDestination
 from griptape_nodes.retained_mode.events.os_events import DeleteFileRequest, DeleteFileResultFailure
 from griptape_nodes.retained_mode.griptape_nodes import GriptapeNodes
 from griptape_nodes.traits.options import Options
+from griptape_nodes.utils.async_utils import to_thread
 from PIL import Image
 
 # static_ffmpeg is dynamically installed by the library loader at runtime
@@ -47,7 +48,11 @@ from griptape_nodes_openexr.exr.ocio_helpers import (
     apply_color_management,
     handle_color_mode_change,
 )
-from griptape_nodes_openexr.exr.sequence_helpers import resolve_sequence, run_over_sequence
+from griptape_nodes_openexr.exr.sequence_helpers import (
+    resolve_sequence_path,
+    run_over_sequence,
+    sequence_path_parameter,
+)
 from griptape_nodes_openexr.exr.tone_mapping import (
     EV_MAX,
     EV_MIN,
@@ -120,13 +125,7 @@ class EXRSequenceToPreview(SuccessFailureNode):
     def __init__(self, name: str, metadata: dict[Any, Any] | None = None) -> None:
         super().__init__(name, metadata)
 
-        self._sequence_param = Parameter(
-            name="sequence",
-            input_types=["Sequence"],
-            type="Sequence",
-            tooltip="EXR frame sequence from ScanSequenceNode.",
-            allowed_modes={ParameterMode.INPUT},
-        )
+        self._sequence_param = sequence_path_parameter("sequence")
         self.add_parameter(self._sequence_param)
 
         self._frame_rate_param = ParameterFloat(
@@ -306,7 +305,7 @@ class EXRSequenceToPreview(SuccessFailureNode):
 
         # --- Resolve sequence ---
         raw = self.get_parameter_value(self._sequence_param.name)
-        resolved = resolve_sequence(raw)
+        resolved = await to_thread(resolve_sequence_path, raw)
         if isinstance(resolved, str):
             self._on_fail(resolved)
             return

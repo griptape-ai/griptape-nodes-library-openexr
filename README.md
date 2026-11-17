@@ -373,13 +373,13 @@ ______________________________________________________________________
 
 ### EXR Sequence to Preview
 
-Bakes an EXR frame sequence down to a single MP4/MOV preview video, applying exposure and color management per frame. Accepts a `Sequence` (from **Scan Sequence**/**Scan Split Sequence**) and loads pixels eagerly, since it has to encode a video. Use **Read EXR** for new per-frame reading workflows. Keep the deprecated **Load EXR Sequence** where you need its batch descriptor list, mismatch validation or parallel header-only scans during migration.
+Bakes an EXR frame sequence down to a single MP4/MOV preview video, applying exposure and color management per frame. Enter an EXR file path or frame pattern in `sequence`, select one with the file picker, or connect a `Sequence` from **Scan Sequence**/**Scan Split Sequence**. A connected Sequence takes precedence over a local path and keeps its existing entries and missing-frame policy. The node loads pixels eagerly to encode the video. Use **Read EXR** for new per-frame reading workflows. Keep the deprecated **Load EXR Sequence** where you need its batch descriptor list, mismatch validation or parallel header-only scans during migration.
 
 **Inputs**
 
 | Parameter          | Type                      | Description                                                                                                                                   |
 | ------------------ | ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| `sequence`         | `Sequence`                | Frame sequence from **Scan Sequence** / **Scan Split Sequence**                                                                               |
+| `sequence`         | `Sequence` or `str`       | EXR path or frame pattern, or a connected **Scan Sequence** / **Scan Split Sequence** output.                                                 |
 | `frame_rate`       | `float`                   | Output frame rate. Default `24.0`.                                                                                                            |
 | `part_index`       | `int`                     | Part index to read from every frame. Default `0`.                                                                                             |
 | `exposure`         | `float`                   | Exposure in EV stops applied before tone mapping. Default `0.0`.                                                                              |
@@ -403,7 +403,9 @@ Bakes an EXR frame sequence down to a single MP4/MOV preview video, applying exp
 | `frames_processed` | `int`              | Frames converted so far, updated live during a run |
 | `output_file`      | `str`              | Workspace path to the written video file           |
 
-The default skips failed conversions. Choose `missing_frames=error` to fail the run or `black` to retain sequence timing with black replacements.
+For example, set `sequence` to `/renders/shot/beauty.####.exr`, `frame_rate` to `24`, and `format` to `mp4`, then run the node. It discovers the frames and writes a preview using the current exposure and colour settings. The path supports the same syntax as **Read EXR**, including `####`, `%04d`, and `@@@@`. A bare file path produces a one-frame video. Invalid patterns and paths with no matching frames report a failure in `result_details`.
+
+Path discovery skips absent frame numbers, so gaps shorten the video. To preserve gaps with a different discovery policy, connect a Sequence from **Scan Sequence**. The `missing_frames` setting applies to entries that fail conversion after discovery: `skip` (default) omits them, `error` fails the run, and `black` inserts black replacements to retain their timing. Existing saved workflows with connected Sequences keep working.
 
 ### Sequence canvas policies
 
