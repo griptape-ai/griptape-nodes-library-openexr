@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 from griptape_nodes_openexr.exr.channel_selection import (
+    RGBA_LAYER,
     ROOT_LAYER,
+    ROOT_OTHER_LAYER,
+    ROOT_RGBA_LAYER,
     channels_in_layer,
     default_layer,
     list_layers,
@@ -172,8 +175,28 @@ class TestOrderChannelsForDisplay:
 
 
 class TestListLayers:
-    def test_undotted_channels_are_one_root_layer(self) -> None:
-        assert list_layers(["R", "G", "B", "A"]) == [ROOT_LAYER]
+    def test_undotted_rgba_is_the_rgba_layer(self) -> None:
+        assert list_layers(["A", "B", "G", "R"]) == [RGBA_LAYER]
+
+    def test_undotted_rgb_is_the_rgba_layer(self) -> None:
+        assert list_layers(["B", "G", "R"]) == [RGBA_LAYER]
+
+    def test_undotted_lowercase_rgb_is_the_rgba_layer(self) -> None:
+        assert list_layers(["b", "g", "r"]) == [RGBA_LAYER]
+
+    def test_undotted_non_colour_channels_stay_root(self) -> None:
+        assert list_layers(["Z"]) == [ROOT_LAYER]
+        assert list_layers(["R", "G", "Z"]) == [ROOT_LAYER]
+
+    def test_undotted_non_colour_beside_rgb_is_other(self) -> None:
+        assert list_layers(["A", "B", "G", "R", "Z"]) == [RGBA_LAYER, ROOT_OTHER_LAYER]
+
+    def test_undotted_rgb_beside_explicit_rgba_layer_stays_distinct(self) -> None:
+        channels = ["B", "G", "R", "rgba.B", "rgba.G", "rgba.R"]
+        assert list_layers(channels) == [ROOT_RGBA_LAYER, RGBA_LAYER]
+
+    def test_explicit_rgba_layer_keeps_its_name(self) -> None:
+        assert list_layers(["rgba.R", "rgba.G", "rgba.B", "depth.Z"]) == [RGBA_LAYER, "depth"]
 
     def test_dotted_prefixes_become_layers(self) -> None:
         channels = ["beauty.R", "beauty.G", "beauty.B", "depth.Z"]
@@ -184,7 +207,7 @@ class TestListLayers:
         assert list_layers(channels) == ["diffuse", "beauty"]
 
     def test_root_and_named_layers_coexist(self) -> None:
-        assert list_layers(["R", "G", "B", "depth.Z"]) == [ROOT_LAYER, "depth"]
+        assert list_layers(["R", "G", "B", "depth.Z"]) == [RGBA_LAYER, "depth"]
 
     def test_nested_prefix_is_one_layer(self) -> None:
         assert list_layers(["char.beauty.R", "char.beauty.G"]) == ["char.beauty"]
@@ -194,9 +217,30 @@ class TestListLayers:
 
 
 class TestChannelsInLayer:
-    def test_root_layer_returns_undotted_only(self) -> None:
+    def test_rgba_layer_returns_undotted_only(self) -> None:
         channels = ["R", "G", "B", "depth.Z"]
-        assert channels_in_layer(channels, ROOT_LAYER) == ["R", "G", "B"]
+        assert channels_in_layer(channels, RGBA_LAYER) == ["R", "G", "B"]
+
+    def test_rgba_layer_returns_the_original_channel_names(self) -> None:
+        channels = ["a", "b ", "g", "r", "Z"]
+        assert channels_in_layer(channels, RGBA_LAYER) == ["a", "b ", "g", "r"]
+
+    def test_other_layer_returns_undotted_non_colour(self) -> None:
+        channels = ["A", "B", "G", "R", "Z", "depth.Z"]
+        assert channels_in_layer(channels, ROOT_OTHER_LAYER) == ["Z"]
+
+    def test_root_layer_without_rgb_returns_all_undotted(self) -> None:
+        assert channels_in_layer(["R", "Z", "depth.Z"], ROOT_LAYER) == ["R", "Z"]
+
+    def test_undotted_and_explicit_rgba_are_separate_groups(self) -> None:
+        channels = ["B", "G", "R", "rgba.B", "rgba.G", "rgba.R"]
+        assert channels_in_layer(channels, ROOT_RGBA_LAYER) == ["B", "G", "R"]
+        assert channels_in_layer(channels, RGBA_LAYER) == ["rgba.B", "rgba.G", "rgba.R"]
+
+    def test_saved_root_layer_selects_the_undotted_colour_channels(self) -> None:
+        assert channels_in_layer(["A", "B", "G", "R", "Z"], ROOT_LAYER) == ["A", "B", "G", "R"]
+        channels = ["B", "G", "R", "rgba.B", "rgba.G", "rgba.R"]
+        assert channels_in_layer(channels, ROOT_LAYER) == ["B", "G", "R"]
 
     def test_named_layer_returns_its_channels(self) -> None:
         channels = ["beauty.R", "beauty.G", "beauty.B", "depth.Z"]
@@ -211,8 +255,14 @@ class TestChannelsInLayer:
 
 
 class TestDefaultLayer:
-    def test_exact_rgb_defaults_to_root(self) -> None:
-        assert default_layer(["R", "G", "B", "A"]) == ROOT_LAYER
+    def test_exact_rgb_defaults_to_rgba(self) -> None:
+        assert default_layer(["R", "G", "B", "A"]) == RGBA_LAYER
+
+    def test_undotted_rgb_beside_explicit_rgba_defaults_to_undotted(self) -> None:
+        assert default_layer(["B", "G", "R", "rgba.B", "rgba.G", "rgba.R"]) == ROOT_RGBA_LAYER
+
+    def test_undotted_first_three_fallback_defaults_to_root(self) -> None:
+        assert default_layer(["X", "Y", "Z"]) == ROOT_LAYER
 
     def test_matches_select_display_channels_choice(self) -> None:
         channels = ["beauty.R", "beauty.G", "beauty.B", "depth.Z"]
