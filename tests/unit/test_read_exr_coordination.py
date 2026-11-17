@@ -61,6 +61,9 @@ def test_connected_entry_is_resolved_with_engine_file(harness, tmp_path: Path, r
     node = _make_node()
     with patch("griptape_nodes.files.file.File.resolve", return_value=str(resolved)) as resolve:
         node.set_parameter_value("path", sequence)
+        asyncio.run(node.wait_for_pending_scan())
+        assert harness.scan_calls == [str(resolved)]
+        harness.scan_calls.clear()
         asyncio.run(node.aprocess())
     assert resolve.called
     assert harness.scan_calls == [str(resolved)]
