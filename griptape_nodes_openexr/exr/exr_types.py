@@ -10,6 +10,7 @@ import math
 import re
 from dataclasses import dataclass
 from enum import StrEnum
+from pathlib import Path
 from typing import Any, NamedTuple
 
 import OpenEXR
@@ -70,8 +71,40 @@ class LevelRoundingModeType(StrEnum):
 # drops fails at import, and tests/unit/test_exr_enum_maps.py fails on a binding value
 # no member covers.
 
+# The OpenEXR pin in pyproject.toml; tests/unit/test_exr_enum_maps.py checks they agree.
+OPENEXR_MIN_VERSION = (3, 5, 3)
+OPENEXR_REQUIREMENT = f"openexr>={'.'.join(map(str, OPENEXR_MIN_VERSION))}"
+
+
+def _version_tuple(version: str) -> tuple[int, ...]:
+    return tuple(int(part) for part in re.findall(r"\d+", version)[:3])
+
+
+def _missing_members_message(binding_enum: Any, missing: list[str]) -> str:
+    version = str(getattr(OpenEXR, "__version__", "unknown"))
+    problem = (
+        f"The loaded OpenEXR binding is version {version} and has no "
+        f"OpenEXR.{binding_enum.__name__} value {', '.join(missing)}."
+    )
+    if _version_tuple(version) >= OPENEXR_MIN_VERSION:
+        return f"{problem} This library does not support OpenEXR {version} yet; update the library."
+    # The compiled binding can be older than its package metadata, for instance when an
+    # update on Windows couldn't replace the file while the engine held it open.
+    binding_file = getattr(OpenEXR, "__file__", None)
+    parents = Path(binding_file).parents if binding_file else []
+    venv = next((p for p in parents if (p / "pyvenv.cfg").is_file()), None)
+    target = f' --python "{venv}"' if venv else ""
+    return (
+        f"{problem} This library needs {OPENEXR_REQUIREMENT}. Stop Griptape Nodes, then reinstall "
+        "OpenEXR in this library's virtual environment: "
+        f'uv pip install{target} --force-reinstall "{OPENEXR_REQUIREMENT}"'
+    )
+
 
 def _map_by_name[E: StrEnum](binding_enum: Any, supported: type[E]) -> dict[Any, E]:
+    missing = [member.name for member in supported if member.name not in binding_enum.__members__]
+    if missing:
+        raise ImportError(_missing_members_message(binding_enum, missing))
     return {binding_enum.__members__[member.name]: member for member in supported}
 
 
