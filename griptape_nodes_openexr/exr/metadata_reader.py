@@ -2,8 +2,27 @@
 
 from __future__ import annotations
 
+from weakref import WeakSet
+
 from griptape_nodes_openexr.exr.exr_io import scan_exr_header_from_path
 from griptape_nodes_openexr.exr.exr_types import EXRData
+
+
+class MetadataReadLifetime:
+    """Invalidate a node's reads when its library is unloaded."""
+
+    def __init__(self) -> None:
+        self.active = True
+        _lifetimes.add(self)
+
+
+_lifetimes: WeakSet[MetadataReadLifetime] = WeakSet()
+
+
+def invalidate_metadata_reads() -> None:
+    """Prevent in-flight node reads from updating an unloaded library."""
+    for lifetime in list(_lifetimes):
+        lifetime.active = False
 
 
 def read_metadata(path: str) -> EXRData:

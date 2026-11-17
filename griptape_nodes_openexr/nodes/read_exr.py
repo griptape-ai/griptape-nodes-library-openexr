@@ -51,12 +51,7 @@ from griptape_nodes_openexr.exr.header_metadata import (
     HEADER_METADATA_DEFINITIONS,
     header_metadata_outputs,
 )
-from griptape_nodes_openexr.exr.metadata_reader import read_metadata
-from griptape_nodes_openexr.exr.metadata_service import (
-    MetadataServiceClosed,
-    MetadataSuperseded,
-    get_metadata_service,
-)
+from griptape_nodes_openexr.exr.metadata_reader import MetadataReadLifetime, read_metadata
 from griptape_nodes_openexr.exr.ocio_helpers import (
     COLOR_MODE_BASIC,
     COLOR_MODE_OCIO,
@@ -186,14 +181,13 @@ class ReadEXR(SuccessFailureNode):
         self._scan: ScanState | None = None
         self._render: RenderState | None = None
         # The after_value_set scan runs as a background task so the setter can return.
-        self._metadata_owner = object()
+        self._metadata_lifetime = MetadataReadLifetime()
+        self._pending_loop: asyncio.AbstractEventLoop | None = None
         self._control_selection: tuple[str, int] | None = None
         self._deleted = False
         self._metadata_generation = 0
-        self._applied_generation = -1
-        self._request: Future[ScanState] | None = None
-        self._request_loop: asyncio.AbstractEventLoop | None = None
-        self._service = get_metadata_service()
+        self._pending_metadata: asyncio.Task[None] | Future[None] | None = None
+        self._metadata_dirty = False
         self._adjusting_selection = False
         self._request_preview = False
 
@@ -442,37 +436,52 @@ class ReadEXR(SuccessFailureNode):
                 self._control_selection = None
             self._submit_metadata(preview=parameter.name == self._path_param.name)
 
-    def _submit_metadata(self, *, preview: bool = False) -> Future[ScanState]:
-        """Capture selection and enqueue work; disk reading never runs in the setter."""
+    def _submit_metadata(self, *, preview: bool = False) -> None:
+        """Refresh on the host loop, or defer until an explicit async call."""
+        self._clear_metadata()
+        self._metadata_dirty = True
+        self._request_preview = preview
+        engine_loop = self.engine.event_manager.event_loop
+        loop = engine_loop if engine_loop is not None and engine_loop.is_running() else _running_loop()
+        self._pending_loop = loop
+        if loop is None:
+            return
+        coroutine = self._refresh_metadata(self._metadata_generation, preview=preview)
+        if loop is _running_loop():
+            self._pending_metadata = loop.create_task(coroutine)
+        else:
+            self._pending_metadata = asyncio.run_coroutine_threadsafe(coroutine, loop)
+
+    async def _read_current_selection(self) -> ScanState:
         raw_path = deepcopy(self.get_parameter_value(self._path_param.name))
         frame = self.get_parameter_value(self._frame_param.name)
         part_choice = str(self.get_parameter_value(self._part_name_param.name) or "")
-        self._metadata_generation += 1
-        generation = self._metadata_generation
-        self._scan = None
-        self.parameter_output_values.update(HEADER_METADATA_DEFAULTS)
-        self._request_preview = preview
-        # The engine loop owns node changes even when a setter is called on another
-        # thread. Standalone callers apply results when explicitly awaiting them.
-        engine_loop = self.engine.event_manager.event_loop
-        loop = engine_loop if engine_loop is not None and engine_loop.is_running() else _running_loop()
-        self._request_loop = loop
-        selection = (_scan_key_for(raw_path), frame, part_choice)
-        reset_part = self._control_selection is None
-        future = self._service.submit(
-            self._metadata_owner,
-            selection,
-            lambda: self._read_selection(raw_path, frame, part_choice, reset_part=reset_part),
+        return await asyncio.to_thread(
+            self._read_selection,
+            raw_path,
+            frame,
+            part_choice,
+            reset_part=self._control_selection is None,
         )
-        self._request = future
-        if loop is not None:
 
-            def completed(result: Future[ScanState]) -> None:
-                if not loop.is_closed():
-                    loop.call_soon_threadsafe(self._complete_metadata, result, generation)
-
-            future.add_done_callback(completed)
-        return future
+    async def _refresh_metadata(self, generation: int, *, preview: bool) -> None:
+        if self._deleted or not self._metadata_lifetime.active or generation != self._metadata_generation:
+            return
+        try:
+            scan = await self._read_current_selection()
+        except Exception:
+            if not self._deleted and generation == self._metadata_generation:
+                self._scan = None
+                self._render = None
+                self.parameter_output_values.update(HEADER_METADATA_DEFAULTS)
+                self._metadata_dirty = False
+            return
+        if self._deleted or not self._metadata_lifetime.active or generation != self._metadata_generation:
+            return
+        self._adopt_scan(scan)
+        self._metadata_dirty = False
+        if preview:
+            await asyncio.to_thread(self._request_canvas_preview)
 
     @staticmethod
     def _read_selection(raw_path: Any, frame: Any, part_choice: str, *, reset_part: bool) -> ScanState:
@@ -500,73 +509,40 @@ class ReadEXR(SuccessFailureNode):
             raise ValueError(f"Part '{part_choice}' is not in{note or ' this file'}")
         return ScanState(_scan_key_for(raw_path), sequence, data, stamp, entry, note, index)
 
-    def _complete_metadata(self, future: Future[ScanState], generation: int) -> None:
-        if (
-            self._deleted
-            or generation != self._metadata_generation
-            or self._applied_generation == generation
-            or self._service.closed
-        ):
-            return
-        self._applied_generation = generation
-        try:
-            scan = future.result()
-        except (MetadataSuperseded, MetadataServiceClosed):
-            return
-        except Exception:
-            self._scan = None
-            self._render = None
-            self.parameter_output_values.update(HEADER_METADATA_DEFAULTS)
-            return
-        self._adopt_scan(scan)
-        if self._request_preview:
-            # Preview generation has its own engine policy. It never supplies this
-            # node's metadata and remains outside the metadata reader service.
-            if _running_loop() is not None:
-                asyncio.create_task(to_thread(self._request_canvas_preview))
-            else:
-                self._request_canvas_preview()
-
     async def wait_for_pending_scan(self) -> None:
-        """Await the latest metadata request and apply it in the owning context."""
-        while self._request is not None:
-            future = self._request
-            generation = self._metadata_generation
+        """Await the latest edit read on its host loop, or start deferred work."""
+        loop = self._pending_loop
+        if loop is not None and loop.is_running() and loop is not _running_loop():
+            future = asyncio.run_coroutine_threadsafe(self._wait_for_metadata(), loop)
+            await asyncio.shield(asyncio.wrap_future(future))
+        else:
+            await self._wait_for_metadata()
+
+    async def _wait_for_metadata(self) -> None:
+        while self._metadata_dirty and self._metadata_lifetime.active and not self._deleted:
+            pending = self._pending_metadata
+            if pending is None or pending.cancelled():
+                pending = asyncio.create_task(
+                    self._refresh_metadata(self._metadata_generation, preview=self._request_preview)
+                )
+                self._pending_metadata = pending
+                self._pending_loop = _running_loop()
             try:
-                await asyncio.shield(asyncio.wrap_future(future))
-            except (MetadataSuperseded, MetadataServiceClosed):
-                if future is not self._request:
+                await asyncio.shield(asyncio.wrap_future(pending) if isinstance(pending, Future) else pending)
+            except asyncio.CancelledError:
+                if pending.cancelled():
+                    self._pending_metadata = None
                     continue
-            except Exception:
-                pass
-            if future is not self._request:
-                continue
-            loop = self._request_loop
-            if loop is None or loop is _running_loop() or not loop.is_running():
-                self._complete_metadata(future, generation)
-            else:
-                applied: Future[None] = Future()
-
-                def apply(
-                    result: Future[ScanState] = future,
-                    revision: int = generation,
-                    completion: Future[None] = applied,
-                ) -> None:
-                    try:
-                        self._complete_metadata(result, revision)
-                    except Exception as error:
-                        completion.set_exception(error)
-                    else:
-                        completion.set_result(None)
-
-                loop.call_soon_threadsafe(apply)
-                await asyncio.shield(asyncio.wrap_future(applied))
-            return
+                raise
+            if pending is self._pending_metadata:
+                return
 
     def _clear_metadata(self) -> None:
         self._metadata_generation += 1
-        self._service.close_owner(self._metadata_owner)
-        self._request = None
+        # Running native reads finish independently. Their generation check
+        # prevents obsolete results and failures from changing this node.
+        self._pending_metadata = None
+        self._metadata_dirty = False
         self.parameter_output_values.update(HEADER_METADATA_DEFAULTS)
 
     def _adopt_scan(self, scan: ScanState) -> None:
@@ -769,7 +745,7 @@ class ReadEXR(SuccessFailureNode):
         rendered = await self._arender_png(plan, selected, alpha_channel)
         if rendered is None:
             return
-        if self._deleted or self._service.closed or generation != self._metadata_generation:
+        if self._deleted or not self._metadata_lifetime.active or generation != self._metadata_generation:
             return
         png_bytes, tone_mode = rendered
 
@@ -791,21 +767,18 @@ class ReadEXR(SuccessFailureNode):
         logger.info("ReadEXR '%s': %s", self.name, details)
 
     async def _aresolve_scan(self) -> ScanState | None:
-        """Join an active selection read or request fresh headers for execution."""
-        request = self._request
-        if request is None or request.done():
-            request = self._submit_metadata()
+        """Read fresh headers for execution independently of edit-time reads."""
+        self._clear_metadata()
         generation = self._metadata_generation
-        await self.wait_for_pending_scan()
-        if self._deleted or self._service.closed or generation != self._metadata_generation:
-            return None
         try:
-            scan = request.result()
-        except (MetadataSuperseded, MetadataServiceClosed):
-            return None
+            scan = await self._read_current_selection()
         except Exception as error:
-            self._on_fail(str(error))
+            if not self._deleted and generation == self._metadata_generation:
+                self._on_fail(str(error))
             return None
+        if self._deleted or not self._metadata_lifetime.active or generation != self._metadata_generation:
+            return None
+        self._adopt_scan(scan)
         return scan
 
     def _publish_sequence_info(self, scan: ScanState) -> bool:

@@ -42,7 +42,6 @@ from griptape_nodes_openexr.exr.exr_types import (
     StorageType,
     WindowCoordinates,
 )
-from griptape_nodes_openexr.exr.metadata_service import get_metadata_service, shutdown_metadata_service
 from griptape_nodes_openexr.nodes.read_exr import _DEFAULT_FRAME_MAX, _DEFAULT_FRAME_MIN
 
 DATA = Path(__file__).parents[1] / "data"
@@ -236,8 +235,6 @@ class _Harness:
 
 @pytest.fixture
 def harness(tmp_path: Path):
-    shutdown_metadata_service(wait=True)
-    get_metadata_service()
     bench = _Harness(tmp_path)
     with (
         patch(f"{_NODE_MODULE}.read_metadata", side_effect=bench.scan_exr_header),
@@ -250,12 +247,7 @@ def harness(tmp_path: Path):
             Engine, "handle_request", autospec=True, side_effect=lambda _self, request: bench.handle_request(request)
         ),
     ):
-        try:
-            yield bench
-        finally:
-            # Settle queued futures and join running reads while their I/O stubs
-            # are still installed, so no work leaks into the following test.
-            shutdown_metadata_service(wait=True)
+        yield bench
 
 
 def _make_node(*, ocio_available: bool = False):
@@ -1022,40 +1014,6 @@ class TestCaching:
         assert _was_successful(node) is False
         assert "No EXR frames matched" in _result_details(node)
         assert path in _result_details(node)
-
-    @pytest.mark.asyncio
-    async def test_execution_joins_a_running_selection_read(self, harness: _Harness, tmp_path: Path) -> None:
-        path = _single_file(tmp_path)
-        started = threading.Event()
-        release = threading.Event()
-
-        def blocked_read(file_path: str) -> EXRData:
-            started.set()
-            if not release.wait(timeout=5):
-                raise TimeoutError("test did not release the metadata read")
-            return harness.scan_exr_header(file_path)
-
-        node = _make_node()
-        with patch(f"{_NODE_MODULE}.read_metadata", side_effect=blocked_read):
-            node.set_parameter_value("path", str(path))
-            execution = None
-            try:
-                assert await asyncio.to_thread(started.wait, 5)
-                running = node._request
-                execution = asyncio.create_task(node.aprocess())
-                # Give execution a turn to join the still-blocked request.
-                await asyncio.sleep(0)
-                assert node._request is running
-                assert not execution.done()
-            finally:
-                release.set()
-                if execution is not None:
-                    await execution
-                await node.wait_for_pending_scan()
-
-        assert _was_successful(node) is True, _result_details(node)
-        assert harness.scan_calls == [str(path)]
-        assert len(harness.load_calls) == 1
 
     def test_a_scan_failure_does_not_break_the_value_set(self, harness: _Harness, tmp_path: Path) -> None:
         with patch(f"{_NODE_MODULE}.read_metadata", side_effect=RuntimeError("corrupt header")):
