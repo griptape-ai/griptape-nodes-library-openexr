@@ -43,6 +43,7 @@ from griptape_nodes_openexr.exr.tone_mapping import (
     convert_gamut,
     inverse_gamut_matrix,
     srgb_to_linear,
+    srgb_uint8_to_linear,
     to_uint8,
     validate_tone_mapping,
 )
@@ -395,7 +396,8 @@ def _render_channels(  # noqa: PLR0913
         rgb, tone_mode = apply_color_management(rgb, color_params, tone_mapping)
         rgb[~coverage] = 0.0
         if alpha is not None and bg_rgb is not None:
-            rgb = _composite(np.clip(rgb, 0.0, 1.0), alpha, bg_rgb)
+            bg_encoded = _UINT8_TO_UNIT[bg_rgb] if bg_rgb.dtype == np.uint8 else bg_rgb
+            rgb = _composite(np.clip(rgb, 0.0, 1.0), alpha, bg_encoded)
     if bg_rgb is None:
         rgb[~coverage] = 0.0
     uint8 = _compose_alpha(to_uint8(rgb), alpha if bg_rgb is None else None)
@@ -425,9 +427,13 @@ def _build_rgb(pixels: dict[str, np.ndarray], height: int, width: int) -> np.nda
     return np.stack([r, g, b], axis=-1)
 
 
+_UINT8_TO_UNIT = np.arange(256, dtype=np.float32) / np.float32(255.0)
+_UINT8_TO_UNIT.flags.writeable = False
+
+
 def _background_in_source_primaries(bg_rgb: np.ndarray, tone_mapping: str) -> np.ndarray:
     """Decode an sRGB background to linear light in the primaries `tone_mapping` expects."""
-    linear = srgb_to_linear(bg_rgb)
+    linear = srgb_uint8_to_linear(bg_rgb) if bg_rgb.dtype == np.uint8 else srgb_to_linear(bg_rgb)
     inverse = inverse_gamut_matrix(tone_mapping)
     if inverse is None:
         return linear
@@ -450,7 +456,7 @@ def _load_background_rgb(artifact: Any, width: int, height: int) -> np.ndarray:
             raise RuntimeError(msg)
         img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
         img = img.resize((width, height), Image.Resampling.LANCZOS)
-        return np.asarray(img, dtype=np.float32) / 255.0
+        return np.asarray(img, dtype=np.uint8)
     except (RuntimeError, FileLoadError):
         raise
     except Exception as e:

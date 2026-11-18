@@ -32,6 +32,8 @@ from griptape_nodes_openexr.exr.tone_mapping import (
     linear_to_rec709,
     linear_to_rec1886,
     linear_to_srgb,
+    srgb_to_linear,
+    srgb_uint8_to_linear,
     to_uint8,
     validate_tone_mapping,
 )
@@ -680,3 +682,22 @@ class TestNonFinitePixels:
             warnings.simplefilter("error", RuntimeWarning)
             result = to_uint8(arr)
         np.testing.assert_array_equal(result, [0, 0, 255])
+
+
+class TestSrgbUint8ToLinear:
+    def test_matches_float_srgb_to_linear_across_all_256_levels(self) -> None:
+        levels = np.arange(256, dtype=np.uint8)
+        expected = srgb_to_linear(levels.astype(np.float32) / np.float32(255.0))
+        actual = srgb_uint8_to_linear(levels)
+        assert actual.dtype == np.float32
+        np.testing.assert_array_equal(actual, expected)
+
+    def test_preserves_image_shape(self) -> None:
+        img = np.array([[[0, 128, 255], [10, 60, 200]]], dtype=np.uint8)
+        out = srgb_uint8_to_linear(img)
+        assert out.shape == (1, 2, 3)
+        assert out.dtype == np.float32
+
+    def test_rejects_non_uint8_input(self) -> None:
+        with pytest.raises(ValueError, match="uint8"):
+            srgb_uint8_to_linear(np.array([0.5], dtype=np.float32))

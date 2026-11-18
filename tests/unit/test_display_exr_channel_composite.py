@@ -144,6 +144,11 @@ class TestCompositeInLinearLight:
         out = _render(1.0, 0.0, _background((128, 128, 128)), tone_mapping="raw")
         assert np.all(out == 55)
 
+    def test_background_decode_uses_lookup_table_without_runtime_power(self) -> None:
+        with patch("griptape_nodes_openexr.exr.tone_mapping.np.power", side_effect=AssertionError("no runtime pow")):
+            out = _render(1.0, 0.0, _background((128, 128, 128)), tone_mapping="raw")
+        assert np.all(out == 55)
+
     def test_bright_scene_values_brighten_soft_edges(self) -> None:
         # Scene values above 1.0 still contribute before the display transform clips them.
         assert _render(4.0, 0.25, _background((0, 0, 0)))[0, 0, 0] == 255

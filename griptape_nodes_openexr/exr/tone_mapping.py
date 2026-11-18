@@ -187,6 +187,18 @@ def srgb_to_linear(arr: np.ndarray) -> np.ndarray:
     return linear
 
 
+_SRGB_UINT8_TO_LINEAR = srgb_to_linear(np.arange(256, dtype=np.float32) / np.float32(255.0))
+_SRGB_UINT8_TO_LINEAR.flags.writeable = False
+
+
+def srgb_uint8_to_linear(arr: np.ndarray) -> np.ndarray:
+    """Decode uint8 sRGB code values in [0, 255] to float32 linear light via a 256-entry LUT."""
+    if arr.dtype != np.uint8:
+        msg = f"srgb_uint8_to_linear expects a uint8 array, got {arr.dtype}."
+        raise ValueError(msg)
+    return _SRGB_UINT8_TO_LINEAR[arr]
+
+
 def linear_to_rec709(arr: np.ndarray) -> np.ndarray:
     """Encode display-linear values with the BT.709 OETF (ITU-R BT.709).
 
