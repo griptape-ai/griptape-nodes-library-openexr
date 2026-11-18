@@ -11,6 +11,8 @@ from griptape_nodes_openexr.exr.tone_mapping import (
     ACES2065_TO_REC709,
     ACESCG_TO_REC709,
     REC709_CUTOFF,
+    REC709_TO_ACES2065,
+    REC709_TO_ACESCG,
     SRGB_LINEAR_CUTOFF,
     TONE_ACES2065_SRGB,
     TONE_ACESCG_REC709,
@@ -25,6 +27,8 @@ from griptape_nodes_openexr.exr.tone_mapping import (
     canonical_tone_mapping,
     convert_gamut,
     display_encoding,
+    gamut_matrix,
+    inverse_gamut_matrix,
     linear_to_rec709,
     linear_to_rec1886,
     linear_to_srgb,
@@ -456,7 +460,35 @@ class TestAcesMatrices:
         ids=["ACEScg", "ACES2065-1"],
     )
     def test_matches_derivation_from_primaries(self, matrix: np.ndarray, primaries: list) -> None:
-        np.testing.assert_allclose(matrix, _derived_to_rec709(primaries), atol=1e-7)
+        np.testing.assert_allclose(matrix, _derived_to_rec709(primaries), rtol=1e-7, atol=1e-7)
+
+    @pytest.mark.parametrize(
+        "matrix",
+        [ACESCG_TO_REC709, ACES2065_TO_REC709, REC709_TO_ACESCG, REC709_TO_ACES2065],
+    )
+    def test_matrix_constants_are_readonly_float32(self, matrix: np.ndarray) -> None:
+        assert matrix.dtype == np.float32
+        assert matrix.flags.writeable is False
+
+    @pytest.mark.parametrize(
+        ("forward", "inverse"),
+        [(ACESCG_TO_REC709, REC709_TO_ACESCG), (ACES2065_TO_REC709, REC709_TO_ACES2065)],
+        ids=["ACEScg", "ACES2065-1"],
+    )
+    def test_precomputed_inverse_matrices_invert_forward_matrices(
+        self, forward: np.ndarray, inverse: np.ndarray
+    ) -> None:
+        np.testing.assert_allclose(inverse @ forward, np.eye(3, dtype=np.float32), atol=1e-6)
+
+    def test_gamut_matrix_accessors_return_precomputed_constants(self) -> None:
+        assert gamut_matrix(TONE_ACESCG_SRGB) is ACESCG_TO_REC709
+        assert gamut_matrix(TONE_ACES2065_SRGB) is ACES2065_TO_REC709
+        assert gamut_matrix(TONE_SRGB) is None
+        assert inverse_gamut_matrix(TONE_ACESCG_SRGB) is REC709_TO_ACESCG
+        assert inverse_gamut_matrix(TONE_ACESCG_REC709) is REC709_TO_ACESCG
+        assert inverse_gamut_matrix(TONE_ACES2065_SRGB) is REC709_TO_ACES2065
+        assert inverse_gamut_matrix(TONE_SRGB) is None
+        assert inverse_gamut_matrix("reinhard") is None
 
     @pytest.mark.parametrize("matrix", [ACESCG_TO_REC709, ACES2065_TO_REC709], ids=["ACEScg", "ACES2065-1"])
     def test_aces_white_maps_to_display_white(self, matrix: np.ndarray) -> None:

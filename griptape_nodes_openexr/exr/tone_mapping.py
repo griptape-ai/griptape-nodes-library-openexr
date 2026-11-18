@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import numpy as np
 
 TONE_SRGB = "Linear sRGB to sRGB"
@@ -80,6 +82,7 @@ REC709_OFFSET = 0.099  # power-segment offset
 
 REC1886_GAMMA = 1.0 / 2.4  # BT.1886 is a pure power function with no linear toe
 
+
 # Linear ACES to linear Rec.709 primaries, with a Bradford chromatic adaptation from the
 # ACES white (about D60) to D65, so ACES white lands on display white. Each row gives
 # one output channel as a weighted sum of the input (R, G, B), so every row sums to 1.
@@ -88,14 +91,23 @@ REC1886_GAMMA = 1.0 / 2.4  # BT.1886 is a pure power function with no linear toe
 # chromatic_adaptation_transform="Bradford"), built from the primaries in SMPTE ST 2065-1 (AP0, ACES2065-1) and Academy S-2014-004 (AP1,
 # ACEScg), and the BT.709 primaries and D65 white. tests/unit/test_tone_mapping.py
 # rederives them from those primaries.
-ACESCG_TO_REC709 = np.array(
+def _readonly_matrix_pair(rows: list[list[float]]) -> tuple[np.ndarray, np.ndarray]:
+    f64 = np.array(rows, dtype=np.float64)
+    forward = f64.astype(np.float32)
+    inverse = np.linalg.inv(f64).astype(np.float32)
+    forward.flags.writeable = False
+    inverse.flags.writeable = False
+    return forward, inverse
+
+
+ACESCG_TO_REC709, REC709_TO_ACESCG = _readonly_matrix_pair(
     [
         [1.70505099, -0.62179212, -0.08325887],
         [-0.13025642, 1.14080474, -0.01054832],
         [-0.02400336, -0.12896898, 1.15297233],
     ]
 )
-ACES2065_TO_REC709 = np.array(
+ACES2065_TO_REC709, REC709_TO_ACES2065 = _readonly_matrix_pair(
     [
         [2.52168619, -1.13413099, -0.38755520],
         [-0.27647991, 1.37271909, -0.09623917],
@@ -241,9 +253,10 @@ def convert_gamut(rgb: np.ndarray, matrix: np.ndarray) -> np.ndarray:
     if rgb.ndim == 0 or rgb.shape[-1] != _RGB_CHANNELS:
         msg = f"Gamut conversion needs RGB with 3 channels on the last axis, got shape {rgb.shape}."
         raise ValueError(msg)
+    mat_t = matrix.T if matrix.dtype == np.float32 else np.asarray(matrix, dtype=np.float32).T
     with np.errstate(over="ignore", invalid="ignore"):
         x = np.asarray(rgb, dtype=np.float32)
-        out = np.matmul(x, np.asarray(matrix, dtype=np.float32).T, dtype=np.float32)
+        out = np.matmul(x, mat_t, dtype=np.float32)
     if not np.isfinite(out).all():
         bad = ~np.isfinite(out).all(axis=-1)
         clean = np.nan_to_num(x[bad], nan=0.0, posinf=_FLOAT32_MAX, neginf=-_FLOAT32_MAX).astype(np.float64)
@@ -261,13 +274,21 @@ _TONE_TRANSFER_FUNCTIONS = {
     TONE_RAW.lower(): _clamp_only,
 }
 
-# ACES choices, keyed by the lowercased name: the matrix into Rec.709 primaries and
-# the base choice whose encoding follows it. Every choice in TONE_CHOICES has an entry
-# here or in _TONE_TRANSFER_FUNCTIONS.
+
+@dataclass(frozen=True)
+class _GamutConversion:
+    forward: np.ndarray
+    inverse: np.ndarray
+    encoding: str
+
+
+# ACES choices, keyed by the lowercased name: precomputed forward/inverse float32
+# matrices and the base choice whose encoding follows. Every choice in TONE_CHOICES
+# has an entry here or in _TONE_TRANSFER_FUNCTIONS.
 _TONE_GAMUT_CONVERSIONS = {
-    TONE_ACESCG_SRGB.lower(): (ACESCG_TO_REC709, TONE_SRGB),
-    TONE_ACESCG_REC709.lower(): (ACESCG_TO_REC709, TONE_REC709),
-    TONE_ACES2065_SRGB.lower(): (ACES2065_TO_REC709, TONE_SRGB),
+    TONE_ACESCG_SRGB.lower(): _GamutConversion(ACESCG_TO_REC709, REC709_TO_ACESCG, TONE_SRGB),
+    TONE_ACESCG_REC709.lower(): _GamutConversion(ACESCG_TO_REC709, REC709_TO_ACESCG, TONE_REC709),
+    TONE_ACES2065_SRGB.lower(): _GamutConversion(ACES2065_TO_REC709, REC709_TO_ACES2065, TONE_SRGB),
 }
 
 
@@ -307,11 +328,25 @@ def gamut_matrix(tone_mapping: str) -> np.ndarray | None:
         tone_mapping: A display transform name (case-insensitive).
 
     Returns:
-        The 3x3 matrix for an ACES choice, or None for a choice that assumes
-        Rec.709 primaries already, or an unknown name.
+        The precomputed float32 3x3 matrix for an ACES choice, or None for a
+        choice that assumes Rec.709 primaries already, or an unknown name.
     """
     conversion = _TONE_GAMUT_CONVERSIONS.get(_tone_key(tone_mapping))
-    return None if conversion is None else conversion[0]
+    return None if conversion is None else conversion.forward
+
+
+def inverse_gamut_matrix(tone_mapping: str) -> np.ndarray | None:
+    """The matrix mapping Rec.709 primaries back into `tone_mapping`'s source primaries.
+
+    Args:
+        tone_mapping: A display transform name (case-insensitive).
+
+    Returns:
+        The precomputed float32 3x3 inverse matrix for an ACES choice, or None
+        for a choice that assumes Rec.709 primaries already, or an unknown name.
+    """
+    conversion = _TONE_GAMUT_CONVERSIONS.get(_tone_key(tone_mapping))
+    return None if conversion is None else conversion.inverse
 
 
 def display_encoding(tone_mapping: str) -> str | None:
@@ -329,7 +364,7 @@ def display_encoding(tone_mapping: str) -> str | None:
     """
     tone = _tone_key(tone_mapping)
     if tone in _TONE_GAMUT_CONVERSIONS:
-        return _TONE_GAMUT_CONVERSIONS[tone][1].lower()
+        return _TONE_GAMUT_CONVERSIONS[tone].encoding.lower()
     if tone in _TONE_TRANSFER_FUNCTIONS:
         return tone
     return None
@@ -372,8 +407,8 @@ def apply_tone_mapping(rgb: np.ndarray, tone_mapping: str) -> np.ndarray:
     """
     tone = validate_tone_mapping(tone_mapping).lower()
     if tone in _TONE_GAMUT_CONVERSIONS:
-        matrix, encoding = _TONE_GAMUT_CONVERSIONS[tone]
-        return _TONE_TRANSFER_FUNCTIONS[encoding.lower()](convert_gamut(rgb, matrix))
+        conversion = _TONE_GAMUT_CONVERSIONS[tone]
+        return _TONE_TRANSFER_FUNCTIONS[conversion.encoding.lower()](convert_gamut(rgb, conversion.forward))
     return _TONE_TRANSFER_FUNCTIONS[tone](rgb)
 
 

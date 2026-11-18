@@ -135,7 +135,8 @@ class TestCompositeInLinearLight:
     def test_coloured_background_keeps_its_colour_under_an_aces_transform(self, tone: str) -> None:
         # The background is sRGB, not ACES, so the transform's gamut conversion must not
         # recolour it: it is moved into ACES primaries first and comes back unchanged.
-        out = _render(1.0, 0.0, _background((200, 60, 40)), tone_mapping=tone)
+        with patch.object(np.linalg, "inv", side_effect=AssertionError("inv must be precomputed")):
+            out = _render(1.0, 0.0, _background((200, 60, 40)), tone_mapping=tone)
         np.testing.assert_allclose(out[0, 0].astype(int), [200, 60, 40], atol=1)
 
     def test_background_goes_through_the_selected_display_transform(self) -> None:

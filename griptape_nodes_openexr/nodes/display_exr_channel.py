@@ -41,7 +41,7 @@ from griptape_nodes_openexr.exr.rendering import ndarray_to_png
 from griptape_nodes_openexr.exr.tone_mapping import (
     apply_exposure,
     convert_gamut,
-    gamut_matrix,
+    inverse_gamut_matrix,
     srgb_to_linear,
     to_uint8,
     validate_tone_mapping,
@@ -428,10 +428,10 @@ def _build_rgb(pixels: dict[str, np.ndarray], height: int, width: int) -> np.nda
 def _background_in_source_primaries(bg_rgb: np.ndarray, tone_mapping: str) -> np.ndarray:
     """Decode an sRGB background to linear light in the primaries `tone_mapping` expects."""
     linear = srgb_to_linear(bg_rgb)
-    matrix = gamut_matrix(tone_mapping)
-    if matrix is None:
+    inverse = inverse_gamut_matrix(tone_mapping)
+    if inverse is None:
         return linear
-    return convert_gamut(linear, np.linalg.inv(matrix))
+    return convert_gamut(linear, inverse)
 
 
 def _load_background_rgb(artifact: Any, width: int, height: int) -> np.ndarray:
