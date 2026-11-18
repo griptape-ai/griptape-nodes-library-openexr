@@ -468,7 +468,9 @@ def _compose_alpha(uint8_rgb: np.ndarray, alpha_plane: np.ndarray | None) -> np.
 
 def _composite(rgb: np.ndarray, alpha_plane: np.ndarray, bg_rgb: np.ndarray) -> np.ndarray:
     """Composite RGB over a background (A-over-B, straight alpha), both in the same encoding."""
-    a = np.clip(alpha_plane, 0.0, 1.0)[..., np.newaxis]
-    # Zero-coverage samples contribute nothing; selecting 0 keeps an infinite sample from turning into NaN.
-    fg = np.where(a > 0.0, rgb, 0.0)
-    return (fg * a + bg_rgb * (1.0 - a)).astype(np.float32)
+    with np.errstate(over="ignore", invalid="ignore"):
+        alpha_clamped = np.fmin(np.fmax(np.asarray(alpha_plane, dtype=np.float32), np.float32(0.0)), np.float32(1.0))
+        a = alpha_clamped[..., np.newaxis]
+        # Zero-coverage or NaN samples contribute nothing to the foreground term.
+        fg = np.where((a > 0.0) & ~np.isnan(rgb), rgb, np.float32(0.0))
+        return (fg * a + bg_rgb * (np.float32(1.0) - a)).astype(np.float32, copy=False)

@@ -98,6 +98,16 @@ ACES2065_TO_REC709 = np.array(
 )
 
 _RGB_CHANNELS = 3
+_FLOAT32_MAX = float(np.finfo(np.float32).max)
+
+
+def _clamp_unit(arr: np.ndarray) -> np.ndarray:
+    """Clamp to float32 [0, 1], mapping NaN and -inf to 0.0 and +inf to 1.0."""
+    with np.errstate(over="ignore", invalid="ignore"):
+        x = np.asarray(arr, dtype=np.float32)
+        out = np.fmax(x, np.float32(0.0))
+        np.fmin(out, np.float32(1.0), out=out)
+    return out
 
 
 def apply_exposure(arr: np.ndarray, ev: float) -> np.ndarray:
@@ -123,7 +133,7 @@ def linear_to_srgb(arr: np.ndarray) -> np.ndarray:
         Display-encoded float32 array in [0, 1], same shape as input.
     """
     # np.power on a negative base with a fractional exponent returns NaN.
-    x = np.clip(arr, 0.0, 1.0).astype(np.float32, copy=False)
+    x = _clamp_unit(arr)
 
     # Power segment over the whole array; the linear toe is patched in below.
     encoded = np.power(x, np.float32(SRGB_GAMMA), dtype=np.float32)
@@ -143,7 +153,7 @@ def srgb_to_linear(arr: np.ndarray) -> np.ndarray:
     Returns:
         Linear float32 array in [0, 1], same shape as input.
     """
-    x = np.clip(arr, 0.0, 1.0).astype(np.float32, copy=False)
+    x = _clamp_unit(arr)
 
     # Power segment over the whole array; the linear toe is patched in below.
     linear = (x + np.float32(SRGB_OFFSET)) / np.float32(SRGB_GAIN)
@@ -168,7 +178,7 @@ def linear_to_rec709(arr: np.ndarray) -> np.ndarray:
         Display-encoded float32 array in [0, 1], same shape as input.
     """
     # np.power on a negative base with a fractional exponent returns NaN.
-    x = np.clip(arr, 0.0, 1.0).astype(np.float32, copy=False)
+    x = _clamp_unit(arr)
 
     # Power segment over the whole array; the linear toe is patched in below.
     encoded = np.power(x, np.float32(REC709_GAMMA), dtype=np.float32)
@@ -191,27 +201,29 @@ def linear_to_rec1886(arr: np.ndarray) -> np.ndarray:
     Returns:
         Display-encoded float32 array in [0, 1], same shape as input.
     """
-    x = np.clip(arr, 0.0, 1.0).astype(np.float32, copy=False)
+    x = _clamp_unit(arr)
     return np.power(x, np.float32(REC1886_GAMMA), dtype=np.float32)
 
 
 def _clamp_only(arr: np.ndarray) -> np.ndarray:
     """Clamp to [0, 1] without applying any transfer function."""
-    return np.clip(arr, 0.0, 1.0).astype(np.float32, copy=False)
+    return _clamp_unit(arr)
 
 
 def convert_gamut(rgb: np.ndarray, matrix: np.ndarray) -> np.ndarray:
     """Convert linear RGB between primaries with a 3x3 matrix.
 
     Values a target gamut cannot hold come out negative or above 1.0; the
-    display encode that follows clamps them.
+    display encode that follows clamps them. Non-finite inputs (such as half-float
+    EXR highlights that overflowed to +inf, or NaN samples) are resolved without
+    cross-channel NaN contamination.
 
     Args:
         rgb: Float32 linear RGB array whose last axis holds the three channels.
         matrix: 3x3 conversion matrix, such as ACESCG_TO_REC709.
 
     Returns:
-        Float32 linear RGB in the target primaries, same shape as input.
+        Finite float32 linear RGB in the target primaries, same shape as input.
 
     Raises:
         ValueError: If the last axis does not hold three channels.
@@ -219,7 +231,16 @@ def convert_gamut(rgb: np.ndarray, matrix: np.ndarray) -> np.ndarray:
     if rgb.ndim == 0 or rgb.shape[-1] != _RGB_CHANNELS:
         msg = f"Gamut conversion needs RGB with 3 channels on the last axis, got shape {rgb.shape}."
         raise ValueError(msg)
-    return np.matmul(rgb, matrix.T.astype(np.float32), dtype=np.float32)
+    with np.errstate(over="ignore", invalid="ignore"):
+        x = np.asarray(rgb, dtype=np.float32)
+        out = np.matmul(x, np.asarray(matrix, dtype=np.float32).T, dtype=np.float32)
+    if not np.isfinite(out).all():
+        bad = ~np.isfinite(out).all(axis=-1)
+        clean = np.nan_to_num(x[bad], nan=0.0, posinf=_FLOAT32_MAX, neginf=-_FLOAT32_MAX).astype(np.float64)
+        with np.errstate(over="ignore", invalid="ignore"):
+            out64 = np.matmul(clean, np.asarray(matrix, dtype=np.float64).T)
+        out[bad] = np.clip(out64, -_FLOAT32_MAX, _FLOAT32_MAX).astype(np.float32)
+    return out
 
 
 # Display encoding per base choice, keyed by the lowercased name.
@@ -335,13 +356,13 @@ def apply_tone_mapping(rgb: np.ndarray, tone_mapping: str) -> np.ndarray:
 
     if tone in _TONE_GAMUT_CONVERSIONS:
         matrix, encoding = _TONE_GAMUT_CONVERSIONS[tone]
-        return _TONE_TRANSFER_FUNCTIONS[encoding.lower()](convert_gamut(rgb.astype(np.float32), matrix))
+        return _TONE_TRANSFER_FUNCTIONS[encoding.lower()](convert_gamut(rgb, matrix))
 
     if tone not in _TONE_TRANSFER_FUNCTIONS:
         msg = f"Unsupported tone mapping: {tone_mapping!r}. Choose one of: {', '.join(TONE_CHOICES)}."
         raise ValueError(msg)
 
-    return _TONE_TRANSFER_FUNCTIONS[tone](rgb.astype(np.float32))
+    return _TONE_TRANSFER_FUNCTIONS[tone](rgb)
 
 
 def to_uint8(arr: np.ndarray) -> np.ndarray:
@@ -357,4 +378,4 @@ def to_uint8(arr: np.ndarray) -> np.ndarray:
     Returns:
         uint8 array of the same shape, with values in [0, 255].
     """
-    return (np.clip(arr, 0.0, 1.0) * 255.0 + 0.5).astype(np.uint8)
+    return (_clamp_unit(arr) * np.float32(255.0) + np.float32(0.5)).astype(np.uint8)

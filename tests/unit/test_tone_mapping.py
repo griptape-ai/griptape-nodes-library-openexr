@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 import pytest
 
@@ -539,3 +541,69 @@ class TestAcesDisplayTransforms:
     def test_every_choice_has_a_display_encoding(self) -> None:
         for tone in TONE_CHOICES:
             assert display_encoding(tone) is not None
+
+
+class TestNonFinitePixels:
+    """Half-float EXR highlights can overflow to +inf, and damaged channels can hold NaN."""
+
+    @pytest.mark.parametrize("tone", TONE_CHOICES)
+    def test_positive_infinity_highlights_render_white_without_warnings(self, tone: str) -> None:
+        # Given an achromatic +inf highlight and a yellow [inf, inf, 0] highlight
+        arr = np.array([[[np.inf, np.inf, np.inf], [np.inf, np.inf, 0.0]]], dtype=np.float32)
+
+        # When tone mapping and quantizing with RuntimeWarnings treated as errors
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", RuntimeWarning)
+            mapped = apply_tone_mapping(arr, tone)
+            quantized = to_uint8(mapped)
+
+        # Then both pixels stay finite and clip to white and yellow
+        assert np.isfinite(mapped).all()
+        np.testing.assert_array_equal(quantized[0, 0], [255, 255, 255])
+        np.testing.assert_array_equal(quantized[0, 1], [255, 255, 0])
+
+    @pytest.mark.parametrize("tone", TONE_CHOICES)
+    def test_negative_infinity_clamps_to_black_without_warnings(self, tone: str) -> None:
+        arr = np.array([[[-np.inf, -np.inf, -np.inf]]], dtype=np.float32)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", RuntimeWarning)
+            quantized = to_uint8(apply_tone_mapping(arr, tone))
+        np.testing.assert_array_equal(quantized[0, 0], [0, 0, 0])
+
+    @pytest.mark.parametrize("tone", TONE_CHOICES)
+    def test_single_channel_nan_zeros_broken_channel_and_preserves_others(self, tone: str) -> None:
+        # Given a pixel whose red channel is NaN while green and blue are 0.5
+        arr = np.array([[[np.nan, 0.5, 0.5]]], dtype=np.float32)
+
+        # When tone mapping and quantizing with RuntimeWarnings treated as errors
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", RuntimeWarning)
+            mapped = apply_tone_mapping(arr, tone)
+            quantized = to_uint8(mapped)
+
+        # Then output stays finite in [0, 1], red maps to 0, and green/blue stay lit
+        assert np.isfinite(mapped).all()
+        assert mapped.min() >= 0.0
+        assert mapped.max() <= 1.0
+        assert quantized[0, 0, 0] == 0
+        assert quantized[0, 0, 1] > 0
+        assert quantized[0, 0, 2] > 0
+
+    @pytest.mark.parametrize("matrix", [ACESCG_TO_REC709, ACES2065_TO_REC709], ids=["ACEScg", "ACES2065-1"])
+    def test_float32_max_does_not_overflow_gamut_conversion_to_nan(self, matrix: np.ndarray) -> None:
+        fmax = np.finfo(np.float32).max
+        arr = np.array([[[fmax, fmax, fmax], [fmax, fmax, 0.0]]], dtype=np.float32)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", RuntimeWarning)
+            converted = convert_gamut(arr, matrix)
+        assert np.isfinite(converted).all()
+        assert (converted[0, 0] > 1.0).all()
+        assert converted[0, 1, 0] > 1.0
+        assert converted[0, 1, 1] > 1.0
+
+    def test_to_uint8_handles_non_finite_values_without_warnings(self) -> None:
+        arr = np.array([np.nan, -np.inf, np.inf], dtype=np.float32)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", RuntimeWarning)
+            result = to_uint8(arr)
+        np.testing.assert_array_equal(result, [0, 0, 255])

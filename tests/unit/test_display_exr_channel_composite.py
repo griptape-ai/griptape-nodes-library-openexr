@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import warnings
 from typing import Any
 from unittest.mock import MagicMock, patch
 
@@ -106,6 +107,28 @@ class TestCompositeInLinearLight:
     def test_infinite_foreground_at_zero_alpha_reproduces_background(self) -> None:
         out = _render(np.inf, 0.0, _background((10, 128, 240)))
         np.testing.assert_array_equal(out[0, 0], [10, 128, 240])
+
+    @pytest.mark.parametrize("tone", ["ACEScg to sRGB", "ACES2065-1 to sRGB"])
+    def test_infinite_foreground_at_nonzero_alpha_renders_white_under_aces(self, tone: str) -> None:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", RuntimeWarning)
+            out = _render(np.inf, 0.5, _background((10, 128, 240)), tone_mapping=tone)
+        np.testing.assert_array_equal(out[0, 0], [255, 255, 255])
+
+    def test_nan_alpha_preserves_background_without_warnings(self) -> None:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", RuntimeWarning)
+            out = _render(1.0, np.nan, _background((10, 128, 240)))
+        np.testing.assert_array_equal(out[0, 0], [10, 128, 240])
+
+    def test_nan_foreground_channel_preserves_background_contribution(self) -> None:
+        fg = np.array([[[np.nan, 1.0, 1.0]]], dtype=np.float32)
+        bg = np.array([[[0.5, 0.5, 0.5]]], dtype=np.float32)
+        alpha = np.array([[0.5]], dtype=np.float32)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", RuntimeWarning)
+            blended = _composite(fg, alpha, bg)
+        np.testing.assert_allclose(blended[0, 0], [0.25, 0.75, 0.75], rtol=1e-6)
 
     @pytest.mark.parametrize("tone", ["ACEScg to sRGB", "ACES2065-1 to sRGB"])
     def test_coloured_background_keeps_its_colour_under_an_aces_transform(self, tone: str) -> None:
