@@ -272,6 +272,16 @@ class TestApplyColorManagementBasicMode:
         mock_gn.handle_request.assert_not_called()
         assert label == TONE_SRGB
 
+    @pytest.mark.parametrize(
+        ("spelling", "canonical"),
+        [("sRGB", TONE_SRGB), ("rec709", TONE_REC709), ("RAW", "raw")],
+    )
+    def test_basic_mode_returns_canonical_label(self, spelling: str, canonical: str) -> None:
+        rgb = _rgb()
+        with patch(f"{_OCIO_HELPERS}.GriptapeNodes", MagicMock()):
+            _, label = apply_color_management(rgb, None, spelling)
+        assert label == canonical
+
     def test_basic_mode_output_is_display_encoded(self) -> None:
         """Basic mode must encode, so scene 0.18 lands near mid-grey rather than crushed."""
         rgb = _rgb(1, 1)  # 0.18 scene-linear

@@ -6,12 +6,13 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from griptape_nodes_openexr.exr.ocio_helpers import COLOR_MODE_BASIC, COLOR_MODE_OCIO
+from griptape_nodes_openexr.exr.ocio_helpers import COLOR_MODE_BASIC, COLOR_MODE_OCIO, read_tone_mapping
 from griptape_nodes_openexr.exr.tone_mapping import (
     TONE_ACES2065_SRGB,
     TONE_ACESCG_REC709,
     TONE_ACESCG_SRGB,
     TONE_CHOICES,
+    TONE_DEFAULT,
     TONE_REC709,
     TONE_REC1886,
     TONE_SRGB,
@@ -129,3 +130,26 @@ class TestToneMappingChoices:
         node.set_parameter_value("tone_mapping", earlier, initial_setup=True)
 
         assert node.get_parameter_value("tone_mapping") == current
+
+    @pytest.mark.parametrize(
+        ("spelling", "canonical"),
+        [("acescg to srgb", TONE_ACESCG_SRGB), ("RAW", "raw"), ("LINEAR SRGB TO REC709", TONE_REC709)],
+    )
+    def test_mixed_case_input_normalises_to_canonical_choice(
+        self, node_type: type, spelling: str, canonical: str
+    ) -> None:
+        node = _make_node(node_type, ocio_available=False)
+
+        node.set_parameter_value("tone_mapping", spelling)
+
+        assert node.get_parameter_value("tone_mapping") == canonical
+        assert read_tone_mapping(node, node.get_parameter_by_name("tone_mapping")) == canonical
+
+    @pytest.mark.parametrize("empty", [None, ""])
+    def test_empty_tone_mapping_defaults_to_canonical_default(self, node_type: type, empty: str | None) -> None:
+        node = _make_node(node_type, ocio_available=False)
+
+        node.set_parameter_value("tone_mapping", empty)
+
+        assert node.get_parameter_value("tone_mapping") == TONE_DEFAULT
+        assert read_tone_mapping(node, node.get_parameter_by_name("tone_mapping")) == TONE_DEFAULT

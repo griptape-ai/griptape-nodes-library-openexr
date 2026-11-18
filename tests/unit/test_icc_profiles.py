@@ -118,6 +118,13 @@ class TestProfileStructure:
         assert profile_for_tone_mapping(tone) is profile_for_tone_mapping(base)
         assert PROFILE_DESCRIPTIONS[tone.lower()] == PROFILE_DESCRIPTIONS[base.lower()]
 
+    @pytest.mark.parametrize(
+        ("alias", "current"),
+        [("srgb", "linear srgb to srgb"), ("rec709", "linear srgb to rec709"), ("rec1886", "linear srgb to rec1886")],
+    )
+    def test_earlier_alias_keys_remain_in_profile_descriptions(self, alias: str, current: str) -> None:
+        assert PROFILE_DESCRIPTIONS[alias] == PROFILE_DESCRIPTIONS[current]
+
 
 class TestProfileParsing:
     @pytest.mark.parametrize("tone", TONE_CHOICES)

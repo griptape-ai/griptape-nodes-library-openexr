@@ -35,10 +35,10 @@ from griptape_nodes_openexr.exr.ocio_helpers import (
     add_color_mode_parameters,
     apply_color_management,
     handle_color_mode_change,
+    read_tone_mapping,
 )
 from griptape_nodes_openexr.exr.rendering import ndarray_to_png
 from griptape_nodes_openexr.exr.tone_mapping import (
-    TONE_DEFAULT,
     apply_exposure,
     convert_gamut,
     gamut_matrix,
@@ -271,7 +271,7 @@ class DisplayEXRChannel(SuccessFailureNode):
             return
 
         ev = float(self.get_parameter_value(self._exposure_param.name) or 0.0)
-        tone_mapping = str(self.get_parameter_value(self._tone_mapping_param.name) or TONE_DEFAULT)
+        tone_mapping = read_tone_mapping(self, self._tone_mapping_param)
         embed_color_profile = bool(self.get_parameter_value(self._embed_color_profile_param.name))
         color_mode = str(self.get_parameter_value(self._color_mode_param.name) or COLOR_MODE_BASIC)
 

@@ -86,6 +86,15 @@ class TestEXRPreviewParameters:
             EXRPreviewParameters(tone_mapping="filmic")
         assert "filmic" in caplog.text.lower()
 
+    def test_mixed_case_tone_mapping_normalises_to_canonical_choice(self) -> None:
+        params = EXRPreviewParameters(tone_mapping="acescg to srgb")
+        assert params.tone_mapping == "ACEScg to sRGB"
+
+    @pytest.mark.parametrize("invalid", ["acescg", "reinhard", ""])
+    def test_unknown_tone_mapping_raises_validation_error(self, invalid: str) -> None:
+        with pytest.raises(ValidationError):
+            EXRPreviewParameters(tone_mapping=invalid)
+
     def test_extra_fields_ignored(self) -> None:
         params = EXRPreviewParameters.model_validate({"unknown_field": "ignored"})
         assert params.tone_mapping == "Linear sRGB to sRGB"

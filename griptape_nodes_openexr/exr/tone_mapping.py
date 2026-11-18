@@ -25,10 +25,16 @@ TONE_DEFAULT = TONE_SRGB
 
 # Earlier names for the linear sRGB choices, kept so saved workflows and scripted values
 # still resolve. Keyed by the lowercased name.
-_TONE_ALIASES = {
+TONE_ALIASES = {
     "srgb": TONE_SRGB,
     "rec709": TONE_REC709,
     "rec1886": TONE_REC1886,
+}
+
+# Every supported choice and earlier alias, keyed in lowercase to its canonical TONE_CHOICES name.
+_CANONICAL_TONES = {
+    **{tone.lower(): tone for tone in TONE_CHOICES},
+    **TONE_ALIASES,
 }
 
 TONE_CURVES_DESCRIPTION = (
@@ -262,16 +268,28 @@ _TONE_GAMUT_CONVERSIONS = {
 
 
 def canonical_tone_mapping(tone_mapping: str) -> str:
-    """The current name for a display transform, resolving an earlier name.
+    """The canonical TONE_CHOICES spelling for a display transform or earlier alias.
 
     Args:
         tone_mapping: A display transform name (case-insensitive).
 
     Returns:
-        The current choice for an earlier name such as 'sRGB', otherwise
-        tone_mapping unchanged.
+        The canonical choice from TONE_CHOICES when recognised, otherwise
+        tone_mapping unchanged so validation can report it.
     """
-    return _TONE_ALIASES.get(tone_mapping.lower(), tone_mapping)
+    return _CANONICAL_TONES.get(tone_mapping.lower(), tone_mapping)
+
+
+def validate_tone_mapping(tone_mapping: str) -> str:
+    """Resolve `tone_mapping` to its canonical choice, raising ValueError if retired or unknown."""
+    key = tone_mapping.lower()
+    if key in _CANONICAL_TONES:
+        return _CANONICAL_TONES[key]
+    retired = retired_tone_message(key)
+    if retired is not None:
+        raise ValueError(retired)
+    msg = f"Unsupported tone mapping: {tone_mapping!r}. Choose one of: {', '.join(TONE_CHOICES)}."
+    raise ValueError(msg)
 
 
 def _tone_key(tone_mapping: str) -> str:
@@ -348,20 +366,10 @@ def apply_tone_mapping(rgb: np.ndarray, tone_mapping: str) -> np.ndarray:
         ValueError: If tone_mapping is not a supported curve, or an ACES
             choice gets an array without three channels on its last axis.
     """
-    tone = _tone_key(tone_mapping)
-
-    retired = retired_tone_message(tone)
-    if retired is not None:
-        raise ValueError(retired)
-
+    tone = validate_tone_mapping(tone_mapping).lower()
     if tone in _TONE_GAMUT_CONVERSIONS:
         matrix, encoding = _TONE_GAMUT_CONVERSIONS[tone]
         return _TONE_TRANSFER_FUNCTIONS[encoding.lower()](convert_gamut(rgb, matrix))
-
-    if tone not in _TONE_TRANSFER_FUNCTIONS:
-        msg = f"Unsupported tone mapping: {tone_mapping!r}. Choose one of: {', '.join(TONE_CHOICES)}."
-        raise ValueError(msg)
-
     return _TONE_TRANSFER_FUNCTIONS[tone](rgb)
 
 

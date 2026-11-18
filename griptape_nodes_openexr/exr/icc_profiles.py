@@ -39,12 +39,12 @@ from griptape_nodes_openexr.exr.tone_mapping import (
     SRGB_LINEAR_CUTOFF,
     SRGB_OFFSET,
     SRGB_TOE_SLOPE,
+    TONE_ALIASES,
     TONE_CHOICES,
     TONE_RAW,
     TONE_REC709,
     TONE_REC1886,
     TONE_SRGB,
-    canonical_tone_mapping,
     display_encoding,
 )
 
@@ -81,9 +81,11 @@ def _encoding_of(tone: str) -> str:
     return encoding
 
 
-# Keyed by every choice. An ACES choice shares its base choice's description,
-# because its output is that encoding with Rec.709 primaries.
-PROFILE_DESCRIPTIONS = {tone.lower(): _ENCODING_DESCRIPTIONS[_encoding_of(tone)] for tone in TONE_CHOICES}
+# Keyed by every choice and earlier alias. An ACES choice shares its base choice's
+# description, because its output is that encoding with Rec.709 primaries.
+PROFILE_DESCRIPTIONS = {
+    tone.lower(): _ENCODING_DESCRIPTIONS[_encoding_of(tone)] for tone in (*TONE_CHOICES, *TONE_ALIASES)
+}
 
 
 def _s15fixed16(value: float) -> bytes:
@@ -237,8 +239,6 @@ _ENCODING_PROFILES = {
     TONE_RAW.lower(): build_icc_profile(_ENCODING_DESCRIPTIONS[TONE_RAW.lower()], "gamma", _LINEAR_GAMMA),
 }
 
-_PROFILES = {tone.lower(): _ENCODING_PROFILES[_encoding_of(tone)] for tone in TONE_CHOICES}
-
 
 def profile_for_tone_mapping(tone_mapping: str) -> bytes | None:
     """ICC profile describing the encoding `apply_tone_mapping` produced.
@@ -250,4 +250,5 @@ def profile_for_tone_mapping(tone_mapping: str) -> bytes | None:
         The profile bytes, or None if the name has no profile. Callers write
         an untagged image when None, which viewers read as sRGB.
     """
-    return _PROFILES.get(canonical_tone_mapping(tone_mapping).lower())
+    encoding = display_encoding(tone_mapping)
+    return None if encoding is None else _ENCODING_PROFILES[encoding]

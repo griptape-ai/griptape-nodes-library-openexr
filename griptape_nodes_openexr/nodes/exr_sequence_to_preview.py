@@ -47,6 +47,7 @@ from griptape_nodes_openexr.exr.ocio_helpers import (
     add_color_mode_parameters,
     apply_color_management,
     handle_color_mode_change,
+    read_tone_mapping,
 )
 from griptape_nodes_openexr.exr.sequence_helpers import (
     resolve_sequence_path,
@@ -62,7 +63,6 @@ from griptape_nodes_openexr.exr.tone_mapping import (
     TONE_REC1886,
     TONE_SRGB,
     apply_exposure,
-    canonical_tone_mapping,
     display_encoding,
     to_uint8,
 )
@@ -111,7 +111,8 @@ def color_trc_for(tone_mapping: str) -> str:
         An x264 transfer characteristic value (passed via -x264-params),
         falling back to bt709 for an unrecognised name.
     """
-    return _FFMPEG_TRC_VALUES.get(canonical_tone_mapping(tone_mapping).lower(), _DEFAULT_TRC)
+    encoding = display_encoding(tone_mapping)
+    return _DEFAULT_TRC if encoding is None else _ENCODING_TRC_VALUES[encoding]
 
 
 _SPEED_FAST = "fast"
@@ -332,7 +333,7 @@ class EXRSequenceToPreview(SuccessFailureNode):
         part_index = int(self.get_parameter_value(self._part_index_param.name))
         frame_rate = float(self.get_parameter_value(self._frame_rate_param.name))
         color_mode = str(self.get_parameter_value(self._color_mode_param.name))
-        tone_mapping = str(self.get_parameter_value(self._tone_mapping_param.name))
+        tone_mapping = read_tone_mapping(self, self._tone_mapping_param)
         threads = int(self.get_parameter_value(self._threads_param.name))
         fmt = str(self.get_parameter_value(self._format_param.name))
         missing_frames = str(self.get_parameter_value(self._missing_frames_param.name))

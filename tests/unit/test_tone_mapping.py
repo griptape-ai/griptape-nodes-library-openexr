@@ -29,6 +29,7 @@ from griptape_nodes_openexr.exr.tone_mapping import (
     linear_to_rec1886,
     linear_to_srgb,
     to_uint8,
+    validate_tone_mapping,
 )
 
 
@@ -467,19 +468,40 @@ class TestAcesDisplayTransforms:
         assert TONE_DEFAULT == "Linear sRGB to sRGB"
 
     @pytest.mark.parametrize(
-        ("earlier", "current"),
-        [("sRGB", TONE_SRGB), ("SRGB", TONE_SRGB), ("rec709", TONE_REC709), ("rec1886", TONE_REC1886)],
+        ("spelling", "canonical"),
+        [
+            ("sRGB", TONE_SRGB),
+            ("SRGB", TONE_SRGB),
+            ("rec709", TONE_REC709),
+            ("rec1886", TONE_REC1886),
+            ("acescg to srgb", TONE_ACESCG_SRGB),
+            ("ACESCG TO REC709", TONE_ACESCG_REC709),
+            ("aces2065-1 to srgb", TONE_ACES2065_SRGB),
+            ("RAW", "raw"),
+            ("linear srgb to srgb", TONE_SRGB),
+        ],
     )
-    def test_earlier_names_resolve_to_current_choices(self, earlier: str, current: str) -> None:
-        # Saved workflows store the earlier names, so they must keep rendering the same.
-        assert canonical_tone_mapping(earlier) == current
+    def test_earlier_and_mixed_case_names_resolve_to_canonical_choices(self, spelling: str, canonical: str) -> None:
+        # Saved workflows and connected string inputs can carry earlier aliases or arbitrary casing.
+        assert canonical_tone_mapping(spelling) == canonical
+        assert validate_tone_mapping(spelling) == canonical
         arr = np.array([[[0.18, 0.5, 0.9]]], dtype=np.float32)
-        np.testing.assert_array_equal(apply_tone_mapping(arr, earlier), apply_tone_mapping(arr, current))
-        assert display_encoding(earlier) == display_encoding(current)
+        np.testing.assert_array_equal(apply_tone_mapping(arr, spelling), apply_tone_mapping(arr, canonical))
+        assert display_encoding(spelling) == display_encoding(canonical)
 
-    @pytest.mark.parametrize("tone", ["raw", TONE_ACESCG_SRGB, "filmic", "reinhard"])
+    @pytest.mark.parametrize("tone", ["raw", TONE_ACESCG_SRGB, "filmic", "reinhard", ""])
     def test_other_names_pass_through(self, tone: str) -> None:
         assert canonical_tone_mapping(tone) == tone
+
+    @pytest.mark.parametrize("tone", ["filmic", "linear"])
+    def test_validate_tone_mapping_reports_retired_names(self, tone: str) -> None:
+        with pytest.raises(ValueError, match="no longer supported"):
+            validate_tone_mapping(tone)
+
+    @pytest.mark.parametrize("tone", ["reinhard", ""])
+    def test_validate_tone_mapping_rejects_unknown_names(self, tone: str) -> None:
+        with pytest.raises(ValueError, match="Unsupported tone mapping"):
+            validate_tone_mapping(tone)
 
     @pytest.mark.parametrize(
         ("tone", "base"),

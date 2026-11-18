@@ -177,6 +177,39 @@ class TestRetiredToneMappingIsReported:
         node.set_parameter_value("tone_mapping", tone)
         assert node.get_parameter_value("tone_mapping") == tone
 
+    @pytest.mark.parametrize("empty", [None, ""])
+    def test_empty_tone_mapping_runs_with_default(self, tmp_path: Path, empty: str | None) -> None:
+        from griptape_nodes.retained_mode.griptape_nodes import GriptapeNodes
+
+        node = _make_node()
+        fake_saved = MagicMock(location="/tmp/preview.mp4")
+        fake_dest = MagicMock()
+        fake_dest.write_bytes.return_value = fake_saved
+        node._output_file = MagicMock()
+        node._output_file.build_file.return_value = fake_dest
+        mock_situation_dest = MagicMock()
+        mock_situation_dest.resolve.return_value = tmp_path / "exr-preview" / "frame_0000.png"
+
+        node.set_parameter_value("sequence", _make_sequence([SINGLE_PART_RGBA]))
+        node.set_parameter_value("color_mode", COLOR_MODE_BASIC)
+        node.set_parameter_value("tone_mapping", empty)
+
+        def _fake_ffmpeg(cmd: list[str], **_kwargs: Any) -> MagicMock:
+            Path(cmd[-1]).write_bytes(b"FAKE_MP4")
+            return MagicMock(returncode=0, stderr="")
+
+        with (
+            patch(f"{_NODE_MODULE}.ProjectFileDestination") as mock_pfd,
+            patch.object(GriptapeNodes, "handle_request", return_value=MagicMock()),
+            patch(f"{_NODE_MODULE}.run") as mock_ffmpeg_run,
+            patch(f"{_NODE_MODULE}.subprocess.run", side_effect=_fake_ffmpeg),
+        ):
+            mock_pfd.from_situation.return_value = mock_situation_dest
+            mock_ffmpeg_run.get_or_fetch_platform_executables_else_raise.return_value = ("ffmpeg", "ffprobe")
+            asyncio.run(node.aprocess())
+
+        assert _was_successful(node) is True, node.parameter_output_values.get("result_details")
+
     @pytest.mark.parametrize("tone", ["filmic", "linear", "reinhard"])
     def test_saved_value_survives_workflow_load(self, node_in_flow, tone: str) -> None:
         from griptape_nodes.retained_mode.events.parameter_events import SetParameterValueRequest

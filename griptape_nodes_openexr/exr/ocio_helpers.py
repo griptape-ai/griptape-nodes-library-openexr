@@ -20,6 +20,7 @@ from griptape_nodes_openexr.exr.tone_mapping import (
     TONE_DEFAULT,
     apply_tone_mapping,
     canonical_tone_mapping,
+    validate_tone_mapping,
 )
 
 logger = logging.getLogger("griptape_nodes")
@@ -125,7 +126,19 @@ def apply_color_management(
         logger.debug("OCIO: transform succeeded (%s→%s/%s)", source_colorspace, display, view)
         return result.pixels, f"ocio:{source_colorspace}→{display}/{view}"  # type: ignore[attr-defined]
 
-    return apply_tone_mapping(rgb, tone_mapping), tone_mapping
+    canonical = validate_tone_mapping(tone_mapping)
+    return apply_tone_mapping(rgb, canonical), canonical
+
+
+def _convert_tone_mapping_param(value: str) -> str:
+    """Default an empty parameter value, otherwise resolve aliases and casing."""
+    return canonical_tone_mapping(value) if value else TONE_DEFAULT
+
+
+def read_tone_mapping(node: BaseNode, tone_mapping_param: ParameterString) -> str:
+    """Read and canonicalise a node's `tone_mapping` parameter, defaulting when empty."""
+    raw = node.get_parameter_value(tone_mapping_param.name)
+    return _convert_tone_mapping_param(str(raw) if raw is not None else "")
 
 
 @overload
@@ -203,8 +216,8 @@ def add_color_mode_parameters(
         default_value=TONE_DEFAULT,
         tooltip=tone_mapping_tooltip,
         allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
-        # Shows a workflow saved with an earlier name such as 'sRGB' under its current name.
-        converters=[canonical_tone_mapping],
+        # Shows saved aliases and mixed-case inputs under their canonical choice name.
+        converters=[_convert_tone_mapping_param],
     )
     # allow_custom keeps the dropdown but disables the Options converter, which
     # rewrites any off-list value to choices[0]. A workflow saved with a retired

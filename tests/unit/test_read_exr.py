@@ -745,6 +745,18 @@ class TestCaching:
         asyncio.run(node.aprocess())
         assert len(harness.load_calls) == loads + 1
 
+    def test_equivalent_tone_mapping_spellings_hit_the_render_cache(self, harness: _Harness, tmp_path: Path) -> None:
+        node = _make_node()
+        node.set_parameter_value("path", str(_single_file(tmp_path)))
+        node.set_parameter_value("tone_mapping", "ACEScg to sRGB")
+        asyncio.run(node.aprocess())
+        loads = len(harness.load_calls)
+
+        node.set_parameter_value("tone_mapping", "acescg to srgb")
+        asyncio.run(node.aprocess())
+
+        assert len(harness.load_calls) == loads
+
     def test_missing_path_reports_scan_diagnostic(self, harness: _Harness, tmp_path: Path) -> None:
         path = str(tmp_path / "missing.####.exr")
         harness.unresolvable.add(path)

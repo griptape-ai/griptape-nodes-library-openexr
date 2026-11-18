@@ -49,10 +49,11 @@ from griptape_nodes_openexr.exr.ocio_helpers import (
     ColorParamsProtocol,
     add_color_mode_parameters,
     handle_color_mode_change,
+    read_tone_mapping,
 )
 from griptape_nodes_openexr.exr.rendering import render_part_png
 from griptape_nodes_openexr.exr.sequence_helpers import resolve_sequence_path, sequence_path_parameter
-from griptape_nodes_openexr.exr.tone_mapping import EV_MAX, EV_MIN, TONE_DEFAULT
+from griptape_nodes_openexr.exr.tone_mapping import EV_MAX, EV_MIN
 from griptape_nodes_openexr.exr.viewer_launcher import handle_viewer_button_click
 
 if TYPE_CHECKING:
@@ -809,7 +810,7 @@ class ReadEXR(SuccessFailureNode):
             window_mode=window_mode,
             exposure_ev=float(self.get_parameter_value(self._exposure_param.name) or 0.0),
             color_mode=color_mode,
-            tone_mapping=str(self.get_parameter_value(self._tone_mapping_param.name) or TONE_DEFAULT),
+            tone_mapping=read_tone_mapping(self, self._tone_mapping_param),
             embed_color_profile=bool(self.get_parameter_value(self._embed_color_profile_param.name)),
             color_params=color_params,
         )

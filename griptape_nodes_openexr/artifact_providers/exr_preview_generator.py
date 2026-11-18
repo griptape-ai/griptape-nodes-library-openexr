@@ -31,9 +31,9 @@ from griptape_nodes_openexr.exr.tone_mapping import (
     TONE_DEFAULT,
     apply_exposure,
     apply_tone_mapping,
-    canonical_tone_mapping,
     retired_tone_message,
     to_uint8,
+    validate_tone_mapping,
 )
 
 if TYPE_CHECKING:
@@ -61,10 +61,10 @@ class EXRPreviewParameters(BaseGeneratorParameters):
         than something the user chose.
         """
         retired = retired_tone_message(value)
-        if retired is None:
-            return canonical_tone_mapping(value)
-        logger.warning("EXR preview: %s Using %r for previews.", retired, TONE_DEFAULT)
-        return TONE_DEFAULT
+        if retired is not None:
+            logger.warning("EXR preview: %s Using %r for previews.", retired, TONE_DEFAULT)
+            return TONE_DEFAULT
+        return validate_tone_mapping(value)
 
     exposure: float = Field(
         default=0.0,
