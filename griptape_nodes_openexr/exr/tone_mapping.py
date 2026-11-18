@@ -117,15 +117,54 @@ ACES2065_TO_REC709, REC709_TO_ACES2065 = _readonly_matrix_pair(
 
 _RGB_CHANNELS = 3
 _FLOAT32_MAX = float(np.finfo(np.float32).max)
+_SPARSE_TOE_DENOMINATOR = 16
 
 
 def _clamp_unit(arr: np.ndarray) -> np.ndarray:
     """Clamp to float32 [0, 1], mapping NaN and -inf to 0.0 and +inf to 1.0."""
     with np.errstate(over="ignore", invalid="ignore"):
         x = np.asarray(arr, dtype=np.float32)
-        out = np.fmax(x, np.float32(0.0))
+        out = np.empty_like(x)
+        np.fmax(x, np.float32(0.0), out=out)
         np.fmin(out, np.float32(1.0), out=out)
     return out
+
+
+def _encode_piecewise(  # noqa: PLR0913
+    arr: np.ndarray,
+    *,
+    cutoff: float,
+    toe_inclusive: bool,
+    toe_slope: float,
+    gamma: float,
+    gain: float,
+    offset: float,
+) -> np.ndarray:
+    """Apply a piecewise linear-toe + power encoding without eager full-frame temporaries."""
+    cutoff_f32 = np.float32(cutoff)
+    slope_f32 = np.float32(toe_slope)
+    with np.errstate(over="ignore", invalid="ignore"):
+        src = np.asarray(arr, dtype=np.float32)
+        toe = ~(src > cutoff_f32) if toe_inclusive else ~(src >= cutoff_f32)
+        encoded = np.empty_like(src)
+        np.fmax(src, cutoff_f32, out=encoded)
+        np.fmin(encoded, np.float32(1.0), out=encoded)
+
+    np.power(encoded, np.float32(gamma), out=encoded, dtype=np.float32)
+    encoded *= np.float32(gain)
+    encoded -= np.float32(offset)
+
+    toe_count = int(np.count_nonzero(toe))
+    if toe_count:
+        with np.errstate(over="ignore", invalid="ignore"):
+            if toe_count * _SPARSE_TOE_DENOMINATOR < src.size:
+                encoded[toe] = np.fmax(src[toe], np.float32(0.0)) * slope_f32
+            else:
+                tmp = np.empty_like(src)
+                np.fmax(src, np.float32(0.0), out=tmp)
+                tmp *= slope_f32
+                encoded = np.asarray(np.where(toe, tmp, encoded), dtype=np.float32)
+    return encoded
 
 
 def apply_exposure(arr: np.ndarray, ev: float) -> np.ndarray:
@@ -154,16 +193,15 @@ def linear_to_srgb(arr: np.ndarray) -> np.ndarray:
     Returns:
         Display-encoded float32 array in [0, 1], same shape as input.
     """
-    # np.power on a negative base with a fractional exponent returns NaN.
-    x = _clamp_unit(arr)
-
-    # Power segment over the whole array; the linear toe is patched in below.
-    encoded = np.power(x, np.float32(SRGB_GAMMA), dtype=np.float32)
-    encoded *= np.float32(SRGB_GAIN)
-    encoded -= np.float32(SRGB_OFFSET)
-
-    np.copyto(encoded, x * np.float32(SRGB_TOE_SLOPE), where=x <= SRGB_LINEAR_CUTOFF)
-    return encoded
+    return _encode_piecewise(
+        arr,
+        cutoff=SRGB_LINEAR_CUTOFF,
+        toe_inclusive=True,
+        toe_slope=SRGB_TOE_SLOPE,
+        gamma=SRGB_GAMMA,
+        gain=SRGB_GAIN,
+        offset=SRGB_OFFSET,
+    )
 
 
 def srgb_to_linear(arr: np.ndarray) -> np.ndarray:
@@ -175,15 +213,31 @@ def srgb_to_linear(arr: np.ndarray) -> np.ndarray:
     Returns:
         Linear float32 array in [0, 1], same shape as input.
     """
-    x = _clamp_unit(arr)
-
-    # Power segment over the whole array; the linear toe is patched in below.
-    linear = (x + np.float32(SRGB_OFFSET)) / np.float32(SRGB_GAIN)
-    np.power(linear, np.float32(1.0 / SRGB_GAMMA), out=linear, dtype=np.float32)
-
     # The toe ends where linear_to_srgb's toe ends, in the encoded domain: the linear cutoff
     # times the slope, about 0.04045 (the IEC 61966-2-1 decode threshold).
-    np.copyto(linear, x / np.float32(SRGB_TOE_SLOPE), where=x <= SRGB_LINEAR_CUTOFF * SRGB_TOE_SLOPE)
+    cutoff_f32 = np.float32(SRGB_LINEAR_CUTOFF * SRGB_TOE_SLOPE)
+    slope_f32 = np.float32(SRGB_TOE_SLOPE)
+    with np.errstate(over="ignore", invalid="ignore"):
+        src = np.asarray(arr, dtype=np.float32)
+        toe = ~(src > cutoff_f32)
+        linear = np.empty_like(src)
+        np.fmax(src, cutoff_f32, out=linear)
+        np.fmin(linear, np.float32(1.0), out=linear)
+
+    linear += np.float32(SRGB_OFFSET)
+    linear /= np.float32(SRGB_GAIN)
+    np.power(linear, np.float32(1.0 / SRGB_GAMMA), out=linear, dtype=np.float32)
+
+    toe_count = int(np.count_nonzero(toe))
+    if toe_count:
+        with np.errstate(over="ignore", invalid="ignore"):
+            if toe_count * _SPARSE_TOE_DENOMINATOR < src.size:
+                linear[toe] = np.fmax(src[toe], np.float32(0.0)) / slope_f32
+            else:
+                tmp = np.empty_like(src)
+                np.fmax(src, np.float32(0.0), out=tmp)
+                tmp /= slope_f32
+                linear = np.asarray(np.where(toe, tmp, linear), dtype=np.float32)
     return linear
 
 
@@ -211,16 +265,15 @@ def linear_to_rec709(arr: np.ndarray) -> np.ndarray:
     Returns:
         Display-encoded float32 array in [0, 1], same shape as input.
     """
-    # np.power on a negative base with a fractional exponent returns NaN.
-    x = _clamp_unit(arr)
-
-    # Power segment over the whole array; the linear toe is patched in below.
-    encoded = np.power(x, np.float32(REC709_GAMMA), dtype=np.float32)
-    encoded *= np.float32(REC709_GAIN)
-    encoded -= np.float32(REC709_OFFSET)
-
-    np.copyto(encoded, x * np.float32(REC709_TOE_SLOPE), where=x < REC709_CUTOFF)
-    return encoded
+    return _encode_piecewise(
+        arr,
+        cutoff=REC709_CUTOFF,
+        toe_inclusive=False,
+        toe_slope=REC709_TOE_SLOPE,
+        gamma=REC709_GAMMA,
+        gain=REC709_GAIN,
+        offset=REC709_OFFSET,
+    )
 
 
 def linear_to_rec1886(arr: np.ndarray) -> np.ndarray:
@@ -236,7 +289,8 @@ def linear_to_rec1886(arr: np.ndarray) -> np.ndarray:
         Display-encoded float32 array in [0, 1], same shape as input.
     """
     x = _clamp_unit(arr)
-    return np.power(x, np.float32(REC1886_GAMMA), dtype=np.float32)
+    np.power(x, np.float32(REC1886_GAMMA), out=x, dtype=np.float32)
+    return x
 
 
 def _clamp_only(arr: np.ndarray) -> np.ndarray:
@@ -437,4 +491,7 @@ def to_uint8(arr: np.ndarray) -> np.ndarray:
     Returns:
         uint8 array of the same shape, with values in [0, 255].
     """
-    return (_clamp_unit(arr) * np.float32(255.0) + np.float32(0.5)).astype(np.uint8)
+    scaled = _clamp_unit(arr)
+    scaled *= np.float32(255.0)
+    scaled += np.float32(0.5)
+    return scaled.astype(np.uint8)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import warnings
+from unittest.mock import patch
 
 import numpy as np
 import pytest
@@ -701,3 +702,46 @@ class TestSrgbUint8ToLinear:
     def test_rejects_non_uint8_input(self) -> None:
         with pytest.raises(ValueError, match="uint8"):
             srgb_uint8_to_linear(np.array([0.5], dtype=np.float32))
+
+
+class TestPiecewiseTransferPerformance:
+    """Piecewise curves avoid eager full-frame toe allocations and subnormal powf inputs."""
+
+    @pytest.mark.parametrize("curve", [linear_to_srgb, linear_to_rec709, srgb_to_linear])
+    def test_skips_toe_patch_when_all_values_lie_above_cutoff(self, curve) -> None:
+        arr = np.full((16, 16, 3), 0.5, dtype=np.float32)
+        with (
+            patch("griptape_nodes_openexr.exr.tone_mapping.np.copyto", side_effect=AssertionError("no copyto")),
+            patch("griptape_nodes_openexr.exr.tone_mapping.np.where", side_effect=AssertionError("no where")),
+        ):
+            out = curve(arr)
+        assert out.shape == arr.shape
+        assert out.dtype == np.float32
+
+    @pytest.mark.parametrize(
+        ("curve", "cutoff"),
+        [(linear_to_srgb, SRGB_LINEAR_CUTOFF), (linear_to_rec709, REC709_CUTOFF)],
+    )
+    def test_power_segment_never_receives_zero_or_subnormals(self, curve, cutoff: float) -> None:
+        arr = np.array([-1.0, 0.0, 1e-40, 0.5, 2.0], dtype=np.float32)
+        real_power = np.power
+        seen_mins: list[float] = []
+
+        def _spy_power(base: np.ndarray, *args, **kwargs) -> np.ndarray:
+            seen_mins.append(float(np.min(base)))
+            return real_power(base, *args, **kwargs)
+
+        with patch("griptape_nodes_openexr.exr.tone_mapping.np.power", side_effect=_spy_power):
+            curve(arr)
+
+        assert seen_mins
+        assert seen_mins[0] >= np.float32(cutoff)
+
+    @pytest.mark.parametrize("toe_count", [0, 1, 4, 16, 64])
+    @pytest.mark.parametrize("curve", [linear_to_srgb, linear_to_rec709, srgb_to_linear])
+    def test_sparse_and_dense_toe_paths_agree_elementwise(self, curve, toe_count: int) -> None:
+        arr = np.full((64,), 0.5, dtype=np.float32)
+        arr[:toe_count] = np.float32(0.001)
+        batch_out = curve(arr)
+        scalar_out = np.array([float(curve(np.array(v, dtype=np.float32))) for v in arr], dtype=np.float32)
+        np.testing.assert_array_equal(batch_out, scalar_out)
