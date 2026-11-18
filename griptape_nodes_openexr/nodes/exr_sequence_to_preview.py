@@ -73,6 +73,7 @@ _DEFAULT_FRAME_RATE = 24.0
 _DEFAULT_THREADS = 4
 _LOG_INTERVAL_PCT = 10
 _PIX_FMT = "yuv420p"
+_MOVFLAGS = "+faststart+write_colr"
 _FRAME_PATTERN = "frame_%04d.png"
 
 # Transfer characteristics per display transform. A video carries no ICC
@@ -113,6 +114,32 @@ def color_trc_for(tone_mapping: str) -> str:
     """
     encoding = display_encoding(tone_mapping)
     return _DEFAULT_TRC if encoding is None else _ENCODING_TRC_VALUES[encoding]
+
+
+def video_colour_args(tone_mapping: str, *, ocio: bool) -> list[str]:
+    """Build ffmpeg filter and x264 flags for YUV matrix conversion and colour tags.
+
+    Both modes convert RGB frames to TV-range BT.709 YUV and tag the matrix in
+    both the H.264 stream and the container colr box (via frame setparams),
+    so players decode YUV with the same matrix used to encode it. Basic mode
+    also tags Rec.709 primaries and the selected transfer curve; OCIO mode
+    leaves primaries and transfer unspecified because the config's display
+    space is unknown here.
+    """
+    if ocio:
+        return [
+            "-vf",
+            "scale=out_color_matrix=bt709:out_range=tv,setparams=range=tv:colorspace=bt709",
+            "-x264-params",
+            "colormatrix=bt709",
+        ]
+    trc = color_trc_for(tone_mapping)
+    return [
+        "-vf",
+        f"scale=out_color_matrix=bt709:out_range=tv,setparams=range=tv:colorspace=bt709:color_primaries=bt709:color_trc={trc}",
+        "-x264-params",
+        f"colorprim=bt709:transfer={trc}:colormatrix=bt709",
+    ]
 
 
 _SPEED_FAST = "fast"
@@ -455,27 +482,12 @@ class EXRSequenceToPreview(SuccessFailureNode):
                 "-crf",
                 str(crf),
             ]
-            if color_params is None:
-                # Basic mode: our transforms share Rec.709 primaries, so only
-                # the transfer curve varies. scale=out_color_matrix=bt709
-                # makes swscale's RGB->YUV conversion actually use Rec.709
-                # coefficients; colormatrix=bt709 alone only tags the stream,
-                # leaving ffmpeg's default BT.601 math underneath it.
-                cmd += ["-vf", "scale=out_color_matrix=bt709"]
-                cmd += [
-                    "-x264-params",
-                    f"colorprim=bt709:transfer={color_trc_for(tone_mapping)}:colormatrix=bt709",
-                ]
-            # Under OCIO the display/view transform resolves to a config
-            # colorspace we cannot describe (sRGB, P3, Rec.2020, ...), so we
-            # leave colour characteristics unspecified rather than assert
-            # Rec.709 for output that may not be Rec.709, matching the PNG
-            # paths, which write no profile in that case either.
             cmd += [
+                *video_colour_args(tone_mapping, ocio=color_params is not None),
                 "-pix_fmt",
                 _PIX_FMT,
                 "-movflags",
-                "+faststart",
+                _MOVFLAGS,
                 "-an",
                 "-y",
                 str(output_path),
