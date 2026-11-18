@@ -15,11 +15,12 @@ from griptape_nodes.retained_mode.events.config_events import GetConfigValueResu
 from griptape_nodes.retained_mode.griptape_nodes import GriptapeNodes
 from PIL import Image
 
+from griptape_nodes_openexr.exr.display_window import WINDOW_MODE_DATA, WindowFraming
 from griptape_nodes_openexr.exr.exr_io import ChannelSource
 from griptape_nodes_openexr.exr.exr_types import WindowCoordinates
 from griptape_nodes_openexr.exr.ocio_helpers import COLOR_MODE_OCIO
 from griptape_nodes_openexr.exr.tone_mapping import linear_to_srgb, srgb_to_linear
-from griptape_nodes_openexr.nodes.display_exr_channel import _composite
+from griptape_nodes_openexr.nodes.display_exr_channel import _composite, _render_channels
 
 _NODE_MODULE = "griptape_nodes_openexr.nodes.display_exr_channel"
 
@@ -171,6 +172,69 @@ class TestCompositeUnderOcio:
             out = _render(2.0, 0.5, _background((0, 0, 0)), color_params=MagicMock())
 
         assert np.all(out == 128)
+
+    def test_stale_retired_tone_mapping_is_ignored_in_ocio_mode(self) -> None:
+        def _identity(rgb: np.ndarray, _params: Any, _tone: str) -> tuple[np.ndarray, str]:
+            return rgb, "ocio:test"
+
+        with patch(f"{_NODE_MODULE}.apply_color_management", side_effect=_identity):
+            out = _render(0.5, 0.0, _background((10, 128, 240)), color_params=MagicMock(), tone_mapping="filmic")
+
+        np.testing.assert_array_equal(out[0, 0], [10, 128, 240])
+
+
+class TestToneMappingValidatedBeforeDecode:
+    @pytest.mark.parametrize(
+        ("invalid_tone", "expected_snippet"),
+        [
+            ("filmic", "no longer supported"),
+            ("linear", "no longer supported"),
+            ("reinhard", "Unsupported tone mapping"),
+        ],
+    )
+    def test_invalid_tone_mapping_fails_before_loading_channels_or_background(
+        self, invalid_tone: str, expected_snippet: str
+    ) -> None:
+        with patch(f"{_NODE_MODULE}.ProjectFileParameter", return_value=MagicMock()):
+            from griptape_nodes_openexr.nodes.display_exr_channel import DisplayEXRChannel
+
+            node = DisplayEXRChannel("test_prevalidate")
+
+        for slot in "RGBA":
+            node.set_parameter_value(f"channel_{slot.lower()}", _channel(slot))
+        node.set_parameter_value("background", _background((200, 60, 40)))
+        node.set_parameter_value("tone_mapping", invalid_tone)
+
+        config_result = GetConfigValueResultFailure(result_details="setting absent")
+        assert isinstance(config_result, GetConfigValueResultFailure)
+        with (
+            patch.object(GriptapeNodes, "handle_request", return_value=config_result),
+            patch(f"{_NODE_MODULE}.load_slot_sources") as mock_load_slots,
+            patch(f"{_NODE_MODULE}._load_background_rgb") as mock_load_bg,
+        ):
+            asyncio.run(node.aprocess())
+
+        assert node.parameter_output_values.get("was_successful") is False
+        assert expected_snippet in str(node.parameter_output_values.get("result_details", ""))
+        mock_load_slots.assert_not_called()
+        mock_load_bg.assert_not_called()
+
+    def test_render_channels_rejects_invalid_tone_mapping_before_loading_background(self) -> None:
+        rgb = np.ones((H, W, 3), dtype=np.float32)
+        alpha = _plane(0.5)
+        coverage = np.ones((H, W), dtype=bool)
+        window = WindowCoordinates(0, 0, W - 1, H - 1)
+        framing = WindowFraming(WINDOW_MODE_DATA, window, window)
+
+        with (
+            patch(f"{_NODE_MODULE}._load_background_rgb") as mock_load_bg,
+            patch(f"{_NODE_MODULE}.srgb_to_linear") as mock_srgb_to_linear,
+            pytest.raises(ValueError, match="no longer supported"),
+        ):
+            _render_channels(rgb, alpha, coverage, framing, _background((200, 60, 40)), None, "filmic")
+
+        mock_load_bg.assert_not_called()
+        mock_srgb_to_linear.assert_not_called()
 
 
 class TestCompositeHelper:

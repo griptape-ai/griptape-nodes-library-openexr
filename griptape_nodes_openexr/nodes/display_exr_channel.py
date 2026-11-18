@@ -44,6 +44,7 @@ from griptape_nodes_openexr.exr.tone_mapping import (
     gamut_matrix,
     srgb_to_linear,
     to_uint8,
+    validate_tone_mapping,
 )
 from griptape_nodes_openexr.exr.viewer_launcher import handle_viewer_button_click
 
@@ -248,8 +249,22 @@ class DisplayEXRChannel(SuccessFailureNode):
         window_mode = str(self.get_parameter_value(self._window_mode_param.name))
         alignment_policy = str(self.get_parameter_value(self._alignment_param.name))
         frame_reference = str(self.get_parameter_value(self._frame_reference_param.name))
+        ev = float(self.get_parameter_value(self._exposure_param.name) or 0.0)
+        tone_mapping = read_tone_mapping(self, self._tone_mapping_param)
+        embed_color_profile = bool(self.get_parameter_value(self._embed_color_profile_param.name))
+        color_mode = str(self.get_parameter_value(self._color_mode_param.name) or COLOR_MODE_BASIC)
+
+        color_params: ColorParamsProtocol | None = None
+        if color_mode == COLOR_MODE_OCIO:
+            color_params = self.get_parameter_value(self._color_params_param.name)  # type: ignore[assignment]
+            if color_params is None:
+                self._on_fail_handler("OCIO mode requires a connected color_params artifact.")
+                return
+
         try:
             channel_alignment.resolve_reference(all_slots, alignment_policy, frame_reference, window_mode)
+            if color_params is None:
+                tone_mapping = validate_tone_mapping(tone_mapping)
             limit = render_limits.get_render_limit()
             sources = load_slot_sources(all_slots)
             assembly = channel_alignment.assemble_channels(
@@ -269,18 +284,6 @@ class DisplayEXRChannel(SuccessFailureNode):
         except Exception as e:
             self._on_fail_handler(f"Failed to build RGB: {e}")
             return
-
-        ev = float(self.get_parameter_value(self._exposure_param.name) or 0.0)
-        tone_mapping = read_tone_mapping(self, self._tone_mapping_param)
-        embed_color_profile = bool(self.get_parameter_value(self._embed_color_profile_param.name))
-        color_mode = str(self.get_parameter_value(self._color_mode_param.name) or COLOR_MODE_BASIC)
-
-        color_params: ColorParamsProtocol | None = None
-        if color_mode == COLOR_MODE_OCIO:
-            color_params = self.get_parameter_value(self._color_params_param.name)  # type: ignore[assignment]
-            if color_params is None:
-                self._on_fail_handler("OCIO mode requires a connected color_params artifact.")
-                return
 
         rgb = apply_exposure(rgb, ev)
 
@@ -371,6 +374,8 @@ def _render_channels(  # noqa: PLR0913
     Raises ValueError or RuntimeError for framing, colour or background failures.
     Exposure has already been applied by the caller.
     """
+    if color_params is None:
+        tone_mapping = validate_tone_mapping(tone_mapping)
     prepared = _prepare_framing(rgb, alpha, coverage, framing, background is not None)
     rgb, alpha, coverage = prepared.rgb, prepared.alpha, prepared.coverage
     height, width = rgb.shape[:2]
