@@ -64,6 +64,25 @@ class TestApplyExposure:
         result = apply_exposure(arr, 1.0)
         assert result.dtype == np.float32
 
+    def test_zero_ev_returns_float32_input_without_copying(self) -> None:
+        arr = np.array([0.5, 1.0, 2.0], dtype=np.float32)
+        result = apply_exposure(arr, 0.0)
+        assert result is arr
+
+    def test_zero_ev_casts_float64_input_to_float32(self) -> None:
+        arr = np.array([0.5, 1.0], dtype=np.float64)
+        result = apply_exposure(arr, 0.0)
+        assert result.dtype == np.float32
+        np.testing.assert_allclose(result, [0.5, 1.0])
+
+    def test_large_positive_ev_overflows_cleanly_without_warnings(self) -> None:
+        arr = np.array([np.finfo(np.float32).max], dtype=np.float32)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", RuntimeWarning)
+            result = apply_exposure(arr, 2.0)
+        assert result.dtype == np.float32
+        assert np.isposinf(result[0])
+
 
 class TestToUint8:
     def test_zero_maps_to_0(self) -> None:

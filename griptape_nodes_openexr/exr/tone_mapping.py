@@ -126,7 +126,11 @@ def apply_exposure(arr: np.ndarray, ev: float) -> np.ndarray:
     Returns:
         Scaled float32 array, same shape as input.
     """
-    return (arr * (2.0**ev)).astype(np.float32)
+    with np.errstate(over="ignore", invalid="ignore"):
+        x = np.asarray(arr, dtype=np.float32)
+        if ev == 0.0:
+            return x
+        return x * np.float32(2.0**ev)
 
 
 def linear_to_srgb(arr: np.ndarray) -> np.ndarray:
