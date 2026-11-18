@@ -80,12 +80,13 @@ REC709_GAMMA = 0.45  # power-segment exponent
 REC709_GAIN = 1.099  # power-segment scale
 REC709_OFFSET = 0.099  # power-segment offset
 
-REC1886_GAMMA = 1.0 / 2.4  # BT.1886 is a pure power function with no linear toe
+REC1886_GAMMA = 1.0 / 2.4  # zero-black-level BT.1886 display inverse EOTF (gamma 2.4)
 
 
 # Linear ACES to linear Rec.709 primaries, with a Bradford chromatic adaptation from the
 # ACES white (about D60) to D65, so ACES white lands on display white. Each row gives
-# one output channel as a weighted sum of the input (R, G, B), so every row sums to 1.
+# one output channel as a weighted sum of the input (R, G, B), so each row sums to 1
+# within rounding of the 8-decimal constants.
 #
 # Values are the published ones from colour-science (colour.RGB_to_RGB with
 # chromatic_adaptation_transform="Bradford"), built from the primaries in SMPTE ST 2065-1 (AP0, ACES2065-1) and Academy S-2014-004 (AP1,
@@ -213,8 +214,8 @@ def srgb_to_linear(arr: np.ndarray) -> np.ndarray:
     Returns:
         Linear float32 array in [0, 1], same shape as input.
     """
-    # The toe ends where linear_to_srgb's toe ends, in the encoded domain: the linear cutoff
-    # times the slope, about 0.04045 (the IEC 61966-2-1 decode threshold).
+    # The toe ends at linear_to_srgb's encoded continuity point (0.0031308 * 12.92 = 0.040449936,
+    # which IEC 61966-2-1 rounds to 0.04045).
     cutoff_f32 = np.float32(SRGB_LINEAR_CUTOFF * SRGB_TOE_SLOPE)
     slope_f32 = np.float32(SRGB_TOE_SLOPE)
     with np.errstate(over="ignore", invalid="ignore"):
@@ -277,10 +278,10 @@ def linear_to_rec709(arr: np.ndarray) -> np.ndarray:
 
 
 def linear_to_rec1886(arr: np.ndarray) -> np.ndarray:
-    """Encode display-linear values with the BT.1886 transfer function.
+    """Encode display-linear values for an idealised zero-black BT.1886 display.
 
-    A pure 2.4 power function with no linear toe, matching an idealised
-    Rec.709 display. Nuke exposes this as its 'rec1886' view.
+    ITU-R BT.1886 defines a display EOTF with black-level lift; at zero black
+    luminance its inverse reduces to a 1/2.4 power curve with no linear toe.
 
     Args:
         arr: Float32 pixel array, any shape. Values outside [0, 1] are clamped.

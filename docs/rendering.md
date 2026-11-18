@@ -28,7 +28,7 @@ encoding. The encodings match the views in Nuke's default OCIO config, so
 | ------------------------ | ---------------------------------------- | ---------------------- |
 | `Linear sRGB to sRGB`    | sRGB transfer function (IEC 61966-2-1)   | 118                    |
 | `Linear sRGB to rec709`  | BT.709 OETF                              | 104                    |
-| `Linear sRGB to rec1886` | BT.1886, pure gamma 2.4                  | 125                    |
+| `Linear sRGB to rec1886` | Zero-black BT.1886 (gamma 2.4)           | 125                    |
 | `raw`                    | None. Clamped to [0, 1] with no encoding | 46                     |
 
 Workflows saved with the earlier names `sRGB`, `rec709` and `rec1886` load
@@ -102,18 +102,21 @@ The automatic file-level EXR preview uses the data window and receives no node-s
 ## Colour Profiles
 
 By default the written PNG carries no colour profile, so viewers read it as
-sRGB whichever transform produced it. That is what makes `rec709` and
-`rec1886` look different on screen: the file is encoded with one curve and
-decoded with another, the same mismatch you get sending a Rec.709 output to an
-sRGB monitor.
+sRGB whichever transform produced it. That is what makes `Linear sRGB to rec709`
+and `Linear sRGB to rec1886` look different on screen: the file is encoded with
+one curve and decoded with another, the same mismatch you get sending a Rec.709
+output to an sRGB monitor.
 
-Setting `embed_color_profile` writes an ICC profile naming the curve actually
-used. The pixels are untouched; only the label changes.
+Setting `embed_color_profile` writes an ICC profile naming the Rec.709 primaries
+and transfer curve used. The pixels are untouched; only the label changes.
 
-With a profile embedded, all the transforms look the same in a colour-managed
-viewer. The application uses the profile to convert the encoded values to your
-display, producing the same colour for each transform. The visible difference
-between transforms occurs when the profile is missing.
+With a profile embedded, transforms that assume the same source primaries look
+the same in a colour-managed viewer. Once the file says how its Rec.709 pixels
+were encoded, a managed application decodes that curve and converts to your
+display, so `Linear sRGB to sRGB`, `Linear sRGB to rec709` and
+`Linear sRGB to rec1886` match on screen, and `ACEScg to sRGB` matches
+`ACEScg to rec709`. Transforms with different source primaries still render
+differently because they apply different gamut conversions before encoding.
 
 Choose `embed_color_profile` according to how you will use the output:
 
@@ -125,11 +128,13 @@ Choose `embed_color_profile` according to how you will use the output:
 The parameter is hidden in `ocio` colour mode, where the display/view
 transform already resolves to a display colorspace we cannot describe.
 
-**Video** has no `embed_color_profile` parameter. An MP4 cannot carry an ICC
-profile, so in `basic` colour mode **EXR Sequence to Preview** writes Rec.709
-primaries and a matching transfer characteristic into the stream instead.
-Players use those tags; without them, the player guesses. In `ocio` colour mode
-the video is left untagged, since the display/view transform resolves to a
-colorspace we cannot name.
+**Video** is always tagged with CICP stream and `colr` container metadata, and
+has no `embed_color_profile` parameter because YUV video players use CICP
+signalling rather than RGB ICC profiles. In `basic` mode **EXR Sequence to
+Preview** converts frames to BT.709 YUV and tags Rec.709 primaries, the BT.709
+matrix and the matching transfer characteristic. In `ocio` mode it converts
+frames to BT.709 YUV and tags the BT.709 matrix while leaving primaries and
+transfer unspecified, since the OCIO display/view transform can target any
+display space.
 
 Alpha is included automatically when an alpha channel (`A`) is found in the part.

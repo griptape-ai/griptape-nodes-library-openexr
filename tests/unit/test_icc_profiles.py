@@ -125,6 +125,39 @@ class TestProfileStructure:
     def test_earlier_alias_keys_remain_in_profile_descriptions(self, alias: str, current: str) -> None:
         assert PROFILE_DESCRIPTIONS[alias] == PROFILE_DESCRIPTIONS[current]
 
+    def test_wtpt_records_d65_with_bradford_chad_and_exact_d50_primary_sum(self) -> None:
+        blob = profile_for_tone_mapping("Linear sRGB to sRGB")
+        assert blob is not None
+        pcs_d50 = struct.unpack(">iii", blob[68:80])
+        (count,) = struct.unpack(">I", blob[_ICC_HEADER_SIZE : _ICC_HEADER_SIZE + 4])
+        tags: dict[bytes, tuple[int, int]] = {}
+        for i in range(count):
+            entry = _ICC_HEADER_SIZE + 4 + i * 12
+            sig, off, sz = struct.unpack(">4sII", blob[entry : entry + 12])
+            tags[sig] = (off, sz)
+
+        # ICC v2 mediaWhitePointTag records the D65 display white point (~0.9505, 1.0, 1.0891).
+        wtpt_off, _ = tags[b"wtpt"]
+        wtpt = [v / 65536.0 for v in struct.unpack(">iii", blob[wtpt_off + 8 : wtpt_off + 20])]
+        np.testing.assert_allclose(wtpt, [0.950455, 1.0, 1.089050], atol=1e-4)
+
+        # chromaticAdaptationTag (sf32) adapts D65 media white into the D50 PCS illuminant.
+        assert b"chad" in tags
+        chad_off, chad_sz = tags[b"chad"]
+        assert chad_sz == 44
+        assert blob[chad_off : chad_off + 4] == b"sf32"
+        chad = (
+            np.array(struct.unpack(">9i", blob[chad_off + 8 : chad_off + 44]), dtype=np.float64).reshape(3, 3) / 65536.0
+        )
+        np.testing.assert_allclose(chad @ np.array(wtpt), np.array(pcs_d50) / 65536.0, atol=1e-4)
+
+        # D50-adapted rXYZ + gXYZ + bXYZ fixed-point columns sum identically to the header PCS D50 XYZ.
+        prim_fixed = [
+            struct.unpack(">iii", blob[tags[sig][0] + 8 : tags[sig][0] + 20]) for sig in (b"rXYZ", b"gXYZ", b"bXYZ")
+        ]
+        col_sums = tuple(sum(col[i] for col in prim_fixed) for i in range(3))
+        assert col_sums == pcs_d50
+
 
 class TestProfileParsing:
     @pytest.mark.parametrize("tone", TONE_CHOICES)
@@ -213,3 +246,15 @@ class TestColourRoundTrip:
         Image.fromarray(rendered, mode="RGB").save(buf, format="PNG", icc_profile=blob)
         reloaded = np.array(Image.open(BytesIO(buf.getvalue())))
         np.testing.assert_array_equal(reloaded, rendered)
+
+    def test_acescg_curves_match_when_tagged_while_different_source_primaries_differ(self) -> None:
+        coloured = [0.5, 0.2, 0.1]
+        rec709_blob = profile_for_tone_mapping("ACEScg to rec709")
+        srgb_blob = profile_for_tone_mapping("ACEScg to sRGB")
+        assert rec709_blob is not None
+        assert srgb_blob is not None
+        aces_from_rec709 = _convert_to_srgb(_render(coloured, "ACEScg to rec709"), rec709_blob)
+        aces_srgb = _convert_to_srgb(_render(coloured, "ACEScg to sRGB"), srgb_blob)
+        lin_srgb = _convert_to_srgb(_render(coloured, "Linear sRGB to sRGB"), srgb_blob)
+        np.testing.assert_allclose(aces_from_rec709, aces_srgb, atol=1)
+        assert np.abs(aces_srgb.astype(int) - lin_srgb.astype(int)).max() > 10

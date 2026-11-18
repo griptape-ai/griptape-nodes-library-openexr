@@ -232,7 +232,7 @@ class TestLinearToRec709:
 
 
 class TestLinearToRec1886:
-    """BT.1886, a pure 2.4 power function. Nuke calls this view 'rec1886'."""
+    """Zero-black-level BT.1886 display inverse EOTF (gamma 2.4)."""
 
     def test_zero_maps_to_zero(self) -> None:
         result = linear_to_rec1886(np.array([0.0], dtype=np.float32))
@@ -251,7 +251,7 @@ class TestLinearToRec1886:
         assert result[0] == pytest.approx(0.489437, rel=1e-5)
 
     def test_has_no_linear_toe(self) -> None:
-        # Unlike sRGB and BT.709 this is a pure power curve all the way down.
+        # At zero black level this curve follows x**(1/2.4) down to 0 with no linear toe.
         result = linear_to_rec1886(np.array([0.001], dtype=np.float32))
         assert result[0] == pytest.approx(0.001 ** (1.0 / 2.4), rel=1e-5)
 

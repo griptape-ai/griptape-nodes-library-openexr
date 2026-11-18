@@ -32,9 +32,10 @@ TONE_MAPPING_TOOLTIP = f"Display transform when color_mode is 'basic'. {TONE_CUR
 
 EMBED_PROFILE_TOOLTIP = (
     "Embed an ICC profile describing the selected display transform. Off: the image is "
-    "untagged and viewers read it as sRGB, so rec709 and rec1886 look different on screen. "
-    "On: the file is correctly labelled for other applications, and all transforms then "
-    "look the same in a colour-managed viewer."
+    "untagged and viewers read it as sRGB, so 'Linear sRGB to rec709' and "
+    "'Linear sRGB to rec1886' look different on screen. On: the file is labelled for "
+    "other applications, and transforms sharing the same source primaries then look "
+    "the same in a colour-managed viewer."
 )
 
 
@@ -178,8 +179,8 @@ def add_color_mode_parameters(
 
     Registers color_mode, tone_mapping, color_params and, unless
     `include_embed_profile` is False, embed_color_profile. A node writing
-    video passes False: an MP4 cannot carry an ICC profile, so it signals
-    colour through stream tags and the switch would do nothing there.
+    video passes False because YUV video players read CICP stream and
+    container tags rather than an RGB ICC profile.
 
     The mode defaults to 'basic'. Initial visibility follows the saved mode in
     node.metadata, and then any color_mode value restored from a saved workflow.

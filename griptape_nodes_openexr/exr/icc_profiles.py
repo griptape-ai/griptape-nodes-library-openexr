@@ -1,14 +1,17 @@
 """ICC profiles describing the display transforms in basic colour mode.
 
 An 8-bit PNG with no embedded profile is read as sRGB by every viewer. That
-suits the 'sRGB' transform and mislabels the others, so a file written with
-'rec709' cannot be converted correctly by another application.
+suits 'Linear sRGB to sRGB' and mislabels other transfer curves, so a file
+written with 'Linear sRGB to rec709' is misinterpreted by other applications.
 
-These profiles let the file say which curve it was written with. Embedding one
-does not change a single pixel; it changes what a colour-managed application
-does with them. The visible consequence is that rec709 and rec1886 stop looking
-different from sRGB on screen, because a managed viewer now converts them to
-the same colour. That is the feature working, not a bug.
+These profiles let the file state which transfer curve it was written with.
+Embedding one leaves every pixel value unchanged and tells a colour-managed
+application how to decode it. Transforms that assume the same source primaries
+(such as 'Linear sRGB to sRGB', 'Linear sRGB to rec709' and
+'Linear sRGB to rec1886', or 'ACEScg to sRGB' and 'ACEScg to rec709') then
+render to the same display colour in a managed viewer. Transforms with
+different source primaries still differ because they apply different gamut
+conversions before encoding.
 
 Pillow cannot build these: ImageCms.createProfile offers only sRGB, LAB and
 XYZ, with no way to specify primaries or a transfer curve. They are therefore
@@ -50,13 +53,26 @@ from griptape_nodes_openexr.exr.tone_mapping import (
 
 TransferCurve = Literal["srgb", "rec709", "gamma"]
 
-# Rec.709 primaries chromatically adapted to the D50 white point the ICC
-# profile connection space requires. These are the standard values published
-# for the sRGB profile, whose primaries Rec.709 shares.
-_RED_XYZ = (0.4360, 0.2225, 0.0139)
-_GREEN_XYZ = (0.3851, 0.7169, 0.0971)
-_BLUE_XYZ = (0.1431, 0.0606, 0.7141)
-_D50_XYZ = (0.9642, 1.0000, 0.8249)
+# Rec.709 primaries chromatically adapted via Bradford from D65 (0.3127, 0.3290)
+# to the ICC D50 profile connection space illuminant, with fixed-point columns
+# summing to _D50_XYZ. ICC v2 records the actual D65 media white point in wtpt
+# alongside the D65-to-D50 Bradford matrix in chad.
+_RED_XYZ = (0.43603516, 0.22248840, 0.01391602)
+_GREEN_XYZ = (0.38511658, 0.71690369, 0.09706116)
+_BLUE_XYZ = (0.14305115, 0.06060791, 0.71392822)
+_D50_XYZ = (0.96420288, 1.00000000, 0.82490540)
+_D65_XYZ = (0.95045471, 1.00000000, 1.08905029)
+_D65_TO_D50_CHAD = (
+    1.04788208,
+    0.02291870,
+    -0.05020142,
+    0.02958679,
+    0.99047852,
+    -0.01705933,
+    -0.00924683,
+    0.01506042,
+    0.75178528,
+)
 
 _REC1886_GAMMA = 1.0 / REC1886_GAMMA  # invert the forward encode gamma to get the decode (EOTF) gamma
 _LINEAR_GAMMA = 1.0  # 'raw' has no transfer function
@@ -95,6 +111,11 @@ def _s15fixed16(value: float) -> bytes:
 
 def _xyz_type(xyz: tuple[float, float, float]) -> bytes:
     return b"XYZ " + bytes(4) + b"".join(_s15fixed16(c) for c in xyz)
+
+
+def _sf32_type(values: tuple[float, ...]) -> bytes:
+    """Encode a tuple of floats as an ICC s15Fixed16ArrayType ('sf32') tag."""
+    return b"sf32" + bytes(4) + b"".join(_s15fixed16(v) for v in values)
 
 
 def _desc_type(text: str) -> bytes:
@@ -168,10 +189,10 @@ def _curve_tag(trc: TransferCurve, gamma: float) -> bytes:
 
 
 def _header(total_size: int) -> bytes:
-    """Build the 128-byte ICC v2.1 header for a display device profile."""
+    """Build the 128-byte ICC v2.4 header for a display device profile."""
     header = struct.pack(">I", total_size)
     header += b"none"  # preferred CMM: no preference
-    header += struct.pack(">I", 0x02100000)  # version 2.1.0
+    header += struct.pack(">I", 0x02400000)  # version 2.4.0 (ICC.1:2001-04, includes chad)
     header += b"mntr" + b"RGB " + b"XYZ "  # display device, RGB data, XYZ PCS
     header += struct.pack(">HHHHHH", 2024, 1, 1, 0, 0, 0)  # fixed date, for reproducible bytes
     header += b"acsp" + bytes(4) + bytes(4)  # signature, platform, flags
@@ -200,7 +221,8 @@ def build_icc_profile(description: str, trc: TransferCurve, gamma: float = 1.0) 
     curve = _curve_tag(trc, gamma)
     tags = {
         b"desc": _desc_type(description),
-        b"wtpt": _xyz_type(_D50_XYZ),
+        b"wtpt": _xyz_type(_D65_XYZ),
+        b"chad": _sf32_type(_D65_TO_D50_CHAD),
         b"rXYZ": _xyz_type(_RED_XYZ),
         b"gXYZ": _xyz_type(_GREEN_XYZ),
         b"bXYZ": _xyz_type(_BLUE_XYZ),
@@ -210,7 +232,7 @@ def build_icc_profile(description: str, trc: TransferCurve, gamma: float = 1.0) 
         b"cprt": _text_type("Public Domain"),
     }
     # Order is not significant to readers, but fixing it keeps the bytes stable.
-    order = [b"desc", b"wtpt", b"rXYZ", b"gXYZ", b"bXYZ", b"rTRC", b"gTRC", b"bTRC", b"cprt"]
+    order = [b"desc", b"wtpt", b"chad", b"rXYZ", b"gXYZ", b"bXYZ", b"rTRC", b"gTRC", b"bTRC", b"cprt"]
 
     table_size = 4 + len(order) * _TAG_ENTRY_SIZE
     body_start = _ICC_HEADER_SIZE + table_size

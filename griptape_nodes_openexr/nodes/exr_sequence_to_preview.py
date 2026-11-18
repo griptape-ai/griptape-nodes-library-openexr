@@ -76,8 +76,8 @@ _PIX_FMT = "yuv420p"
 _MOVFLAGS = "+faststart+write_colr"
 _FRAME_PATTERN = "frame_%04d.png"
 
-# Transfer characteristics per display transform. A video carries no ICC
-# profile, so these tags are its only colour signalling.
+# Transfer characteristics per display transform. Video players use CICP
+# stream and colr container tags for YUV colour signalling.
 #
 # They are passed through -x264-params rather than ffmpeg's own -color_trc:
 # the bundled static_ffmpeg build accepts -color_trc without error but drops
@@ -219,8 +219,8 @@ class EXRSequenceToPreview(SuccessFailureNode):
         )
         self.add_parameter(self._exposure_param)
 
-        # No embed_color_profile: an MP4 cannot carry an ICC profile, so this
-        # node signals colour through the stream tags written below instead.
+        # No embed_color_profile: YUV video players use CICP stream and colr
+        # container tags, which this node always writes below.
         (
             self._color_mode_param,
             self._tone_mapping_param,

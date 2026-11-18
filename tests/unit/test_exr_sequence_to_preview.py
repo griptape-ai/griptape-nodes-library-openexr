@@ -128,8 +128,8 @@ class TestNodeInit:
 
 class TestNoEmbedColorProfileParameter:
     def test_video_node_has_no_embed_color_profile(self) -> None:
-        # An MP4 cannot carry an ICC profile, so the switch would do nothing
-        # here. Colour is signalled through the stream tags instead.
+        # YUV video players use CICP stream and colr container tags, so this
+        # node signals colour through those tags rather than an ICC profile.
         node = _make_node()
         assert node.get_parameter_by_name("embed_color_profile") is None
 
@@ -597,8 +597,8 @@ class TestAProcessPipeline:
 
         assert "libx264" in captured_cmd
         assert "yuv420p" in captured_cmd
-        # A video carries no ICC profile, so these tags are its only colour
-        # signalling. Without them a player guesses.
+        # YUV video players use CICP stream and colr container tags for
+        # colour signalling. Without them a player guesses.
         assert "-x264-params" in captured_cmd
         params = captured_cmd[captured_cmd.index("-x264-params") + 1]
         assert "colorprim=bt709" in params
