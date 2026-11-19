@@ -1,4 +1,4 @@
-# Rendering and colour management
+# Rendering And Colour Management
 
 ## OpenColorIO
 
@@ -17,7 +17,7 @@ OCIO Config** and **Config File Path**. In OCIO Color Parameters, select the sou
 colourspace, display and view. The same `color_params` output can connect to
 Display EXR Part, Display EXR Channel or EXR Sequence to Preview.
 
-## Display transforms
+## Display Transforms
 
 In `basic` colour mode, `tone_mapping` selects how scene-linear values are
 encoded for display. The names match the views in Nuke's default OCIO config,
@@ -56,7 +56,7 @@ output on an sRGB monitor. See [Colour profiles](rendering.md#colour-profiles).
 > display encodings, matching Nuke's default viewer. Use `sRGB` for a similar
 > look, or `ocio` mode for a real tone-mapped view transform.
 
-## Display window
+## Display Window
 
 Use `window_mode` to choose which region the node displays. Supported by **Read EXR**, **Display EXR Part**, **Display EXR Channel** and **EXR Sequence to Preview**.
 
@@ -79,7 +79,7 @@ The automatic file-level EXR preview uses the data window and receives no node-s
 
 **Load EXR** and **Load EXR Sequence** report both windows as stored. For a sequence, each frame is framed by its own header, so a changing data window renders at one size in `Crop Overscan` mode when the display window stays constant. Workflows saved before this option existed load with `Full`, so they render as they did.
 
-## Colour profiles
+## Colour Profiles
 
 By default the written PNG carries no colour profile, so viewers read it as
 sRGB whichever transform produced it. That is what makes `rec709` and

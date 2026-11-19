@@ -1,4 +1,4 @@
-# Migration from deprecated load nodes
+# Migration From Deprecated Load Nodes
 
 **Load EXR** and **Load EXR Sequence** are deprecated. Both nodes remain available during migration. Existing saved workflows retain their parameters, connections and execution behaviour, and receive deprecation warnings. Workflows are not converted automatically.
 

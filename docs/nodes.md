@@ -1,4 +1,4 @@
-# Node reference
+# Node Reference
 
 Use **Read EXR** for new file and sequence reading workflows. See the [getting-started examples](../README.md#getting-started) for common connections.
 
@@ -109,7 +109,7 @@ Frames that fail to scan (resolution/channel mismatch against the rest of the se
 
 The output `parts` is a plain list, so it connects directly into a **For Each** loop for per-frame work (e.g. **Display EXR Part** per frame).
 
-### Manual composition alternative
+### Manual Composition Alternative
 
 For new selected-frame reading workflows, connect `Sequence` to **Read EXR**'s `path` and iterate actual frame numbers through `frame`. See [Iterating a sequence](sequences.md#iterating-a-sequence).
 

@@ -1,4 +1,4 @@
-# OpenEXR Library for Griptape Nodes
+# OpenEXR Library For Griptape Nodes
 
 Read EXR images and frame sequences, preview parts and channels, make review videos,
 and save images or floating-point channel data to EXR.
@@ -9,7 +9,7 @@ See the [migration guide](docs/migration.md) before changing an existing workflo
 
 ## Getting Started
 
-### Install the library
+### Install The Library
 
 1. In Griptape Nodes, open **Manage > Library Management**.
 2. Click **Add Library** and paste this repository URL:
@@ -20,7 +20,7 @@ The examples below use **Display Image**, **Get From List** and **Scan Sequence*
 from the standard library. For a managed environment where library installation
 is unavailable, ask your administrator to install the library.
 
-### Read an image or inspect a render layer
+### Read An Image Or Inspect A Render Layer
 
 1. Add **Read EXR** and set `path` to an EXR file, such as `/renders/beauty.exr`.
 2. Select a part or layer when the file contains more than one.
@@ -36,7 +36,7 @@ flowchart LR
 The preview is an 8-bit PNG. The `part` and `channels` outputs retain the source
 floating-point data. Use those outputs for channel work or saving HDR data.
 
-### Read a frame sequence
+### Read A Frame Sequence
 
 In **Read EXR**, select a sequence through the File Browser or type a frame
 pattern such as `/renders/shot/beauty.####.exr` into `path`. Choose a `frame`
@@ -53,7 +53,7 @@ flowchart LR
 
 See [frame sequences](docs/sequences.md) for iteration, frame gaps and video sizing.
 
-### Make a preview video
+### Make A Preview Video
 
 Add **EXR Sequence to Preview**, set `sequence` to
 `/renders/shot/beauty.####.exr`, choose `frame_rate` and run it. The default output
@@ -68,7 +68,7 @@ Use the `video` output or the file named by `output_file`.
 See [sequence policies](docs/sequences.md#discovery-and-failed-frames) if frames
 are missing or have different dimensions.
 
-### Display a channel or save it to EXR
+### Display A Channel Or Save It To EXR
 
 Connect Read EXR's `channels` to **Get From List** and set `index` to the channel
 you want. Connect the selected channel to a display slot, a save slot, or both:
@@ -88,7 +88,7 @@ preserve source floating-point values; saving an 8-bit preview does not recover
 its HDR data. Choose `FLOAT` when you need 32-bit storage. The default `HALF` uses
 16-bit floating-point storage.
 
-### Choose a node
+### Choose A Node
 
 | Node                                                                                      | Use it for                                                                                                                |
 | ----------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |

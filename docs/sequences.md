@@ -1,6 +1,6 @@
-# Frame sequences
+# Frame Sequences
 
-## Iterating a sequence
+## Iterating A Sequence
 
 **Read EXR** emits one frame per execution. Use a graph loop to iterate frames. Wire **For Loop Start**'s `index` output into `frame` and drive the loop from `first_frame` and `last_frame`:
 
@@ -14,7 +14,7 @@ While a connection drives `frame`, the slider is disabled but continues to show 
 
 An out-of-range `frame` clamps to the sequence bounds and reports this in the result details. A frame absent from the sequence's entries fails with an error naming the frame. The scan has already applied your `MissingItemPolicy`; Read EXR does not apply another missing-frame policy. Use `FILL_NEAREST` at the scan to fill gaps during a continuous frame-number loop. With `SKIP`, iterate available sequence entries; requesting a skipped frame fails.
 
-## Discovery and failed frames
+## Discovery And Failed Frames
 
 Read EXR's `path` and EXR Sequence to Preview's `sequence` accept `####`, `%04d` and `@@@@` frame patterns, a single file path, or a connected `Sequence`. Select a file or sequence through the File Browser, or type the path or pattern directly. **Scan Sequence** is optional. A connected sequence retains its entries and missing-frame policy. A single file produces a one-frame sequence or video.
 
@@ -28,7 +28,7 @@ Invalid patterns and paths with no matching frames report a failure in `result_d
 
 For the deprecated Load EXR Sequence node's batch mismatch validation and header scans, see the [node reference](nodes.md#load-exr-sequence) and [migration guide](migration.md).
 
-## Sequence canvas policies
+## Sequence Canvas Policies
 
 Both MP4 and MOV use H.264 with `yuv420p`, which requires even width and height. `odd_dimensions=Pad to Even` adds black pixels after colour processing, preserving the rendered image at the top-left. `Require Even` reports the odd dimensions and stops before encoding.
 
