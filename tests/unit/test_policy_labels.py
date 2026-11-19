@@ -23,7 +23,9 @@ from griptape_nodes_openexr.nodes.exr_sequence_to_preview import EXRSequenceToPr
     ],
 )
 def test_parameters_offer_final_labels(node_type: type, parameter: str, label: str) -> None:
-    with patch("griptape_nodes_openexr.exr.ocio_helpers.find_colorspace_transform_request_type", return_value=None):
+    with patch(
+        "griptape_nodes_openexr.exr.colour.ocio_helpers.find_colorspace_transform_request_type", return_value=None
+    ):
         node = node_type("labels")
     node.set_parameter_value(parameter, label)
     assert node.get_parameter_value(parameter) == label
@@ -67,7 +69,9 @@ def test_previous_sequence_policy_casing_is_rejected(odd: str, sizes: str) -> No
 def test_tooltips_use_option_constants(module, constant: str, node_type: type, parameter: str) -> None:
     with (
         patch.object(module, constant, "Updated option label"),
-        patch("griptape_nodes_openexr.exr.ocio_helpers.find_colorspace_transform_request_type", return_value=None),
+        patch(
+            "griptape_nodes_openexr.exr.colour.ocio_helpers.find_colorspace_transform_request_type", return_value=None
+        ),
     ):
         node = node_type("tooltips")
     assert "Updated option label" in node.get_parameter_by_name(parameter).tooltip

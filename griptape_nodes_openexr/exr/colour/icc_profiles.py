@@ -1,24 +1,25 @@
 """ICC profiles describing the display transforms in basic colour mode.
 
 An 8-bit PNG with no embedded profile is read as sRGB by every viewer. That
-suits the 'sRGB' transform and mislabels the others, so a file written with
-'rec709' cannot be converted correctly by another application.
+suits 'Linear sRGB to sRGB' and mislabels other transfer curves, so a file
+written with 'Linear sRGB to rec709' is misinterpreted by other applications.
 
-These profiles let the file say which curve it was written with. Embedding one
-does not change a single pixel; it changes what a colour-managed application
-does with them. The visible consequence is that rec709 and rec1886 stop looking
-different from sRGB on screen, because a managed viewer now converts them to
-the same colour. That is the feature working, not a bug.
+These profiles identify the file's transfer curve without changing pixel values.
+Colour-managed applications use the profile to decode them. Transforms that assume the same source primaries
+(such as 'Linear sRGB to sRGB', 'Linear sRGB to rec709' and
+'Linear sRGB to rec1886', or 'ACEScg to sRGB' and 'ACEScg to rec709') then
+render to the same display colour in a managed viewer. Transforms with
+different source primaries still differ because they apply different gamut
+conversions before encoding.
 
-Pillow cannot build these: ImageCms.createProfile offers only sRGB, LAB and
-XYZ, with no way to specify primaries or a transfer curve. They are therefore
-assembled here from the ICC v2 spec. This module needs no colour management
-library of its own, and deliberately imports neither PIL nor OpenColorIO: a
-profile is a bytes blob, and Pillow writes it with `save(icc_profile=...)`
-without parsing it.
+ImageCms.createProfile offers only sRGB, LAB and XYZ, with no way to specify
+primaries or a transfer curve. This module builds the profiles from the ICC v2
+spec without importing PIL or OpenColorIO. Pillow writes the profile bytes
+with `save(icc_profile=...)` without parsing them.
 
-All our transforms share Rec.709 primaries, so the profiles differ only in
-their tone reproduction curve.
+Every transform writes Rec.709 primaries, so the profiles differ only in
+their tone reproduction curve. The ACES transforms convert to Rec.709 before
+encoding, so each shares the profile of the base transform it encodes with.
 """
 
 from __future__ import annotations
@@ -26,33 +27,44 @@ from __future__ import annotations
 import struct
 from typing import Literal
 
-from griptape_nodes_openexr.exr.tone_mapping import (
-    REC709_CUTOFF,
-    REC709_GAIN,
-    REC709_GAMMA,
-    REC709_OFFSET,
-    REC709_TOE_SLOPE,
-    REC1886_GAMMA,
-    SRGB_GAIN,
-    SRGB_GAMMA,
-    SRGB_LINEAR_CUTOFF,
-    SRGB_OFFSET,
-    SRGB_TOE_SLOPE,
+from griptape_nodes_openexr.exr.colour.tone_mapping import (
+    TONE_ALIASES,
+    TONE_CHOICES,
     TONE_RAW,
     TONE_REC709,
     TONE_REC1886,
     TONE_SRGB,
+    display_encoding,
+)
+from griptape_nodes_openexr.exr.colour.transfer_functions import (
+    REC709,
+    REC1886_GAMMA,
+    SRGB,
+    PiecewiseTransferCurve,
 )
 
 TransferCurve = Literal["srgb", "rec709", "gamma"]
 
-# Rec.709 primaries chromatically adapted to the D50 white point the ICC
-# profile connection space requires. These are the standard values published
-# for the sRGB profile, whose primaries Rec.709 shares.
-_RED_XYZ = (0.4360, 0.2225, 0.0139)
-_GREEN_XYZ = (0.3851, 0.7169, 0.0971)
-_BLUE_XYZ = (0.1431, 0.0606, 0.7141)
-_D50_XYZ = (0.9642, 1.0000, 0.8249)
+# Rec.709 primaries chromatically adapted via Bradford from D65 (0.3127, 0.3290)
+# to the ICC D50 profile connection space illuminant, with fixed-point columns
+# summing to _D50_XYZ. ICC v2 records the actual D65 media white point in wtpt
+# alongside the D65-to-D50 Bradford matrix in chad.
+_RED_XYZ = (0.43603516, 0.22248840, 0.01391602)
+_GREEN_XYZ = (0.38511658, 0.71690369, 0.09706116)
+_BLUE_XYZ = (0.14305115, 0.06060791, 0.71392822)
+_D50_XYZ = (0.96420288, 1.00000000, 0.82490540)
+_D65_XYZ = (0.95045471, 1.00000000, 1.08905029)
+_D65_TO_D50_CHAD = (
+    1.04788208,
+    0.02291870,
+    -0.05020142,
+    0.02958679,
+    0.99047852,
+    -0.01705933,
+    -0.00924683,
+    0.01506042,
+    0.75178528,
+)
 
 _REC1886_GAMMA = 1.0 / REC1886_GAMMA  # invert the forward encode gamma to get the decode (EOTF) gamma
 _LINEAR_GAMMA = 1.0  # 'raw' has no transfer function
@@ -61,11 +73,26 @@ _ICC_HEADER_SIZE = 128
 _TAG_ENTRY_SIZE = 12
 _CURVE_SAMPLE_COUNT = 1024  # resolution of the sampled 'curv' TRC tags
 
-PROFILE_DESCRIPTIONS = {
+_ENCODING_DESCRIPTIONS = {
     TONE_SRGB.lower(): "sRGB IEC61966-2.1",
     TONE_REC709.lower(): "Rec.709",
     TONE_REC1886.lower(): "Rec.709 (BT.1886)",
     TONE_RAW.lower(): "Linear Rec.709",
+}
+
+
+def _encoding_of(tone: str) -> str:
+    encoding = display_encoding(tone)
+    if encoding is None:
+        msg = f"No display encoding for {tone!r}"
+        raise ValueError(msg)
+    return encoding
+
+
+# Every choice and earlier alias maps to a description. ACES choices share their
+# base encoding's description because both output Rec.709 primaries.
+PROFILE_DESCRIPTIONS = {
+    tone.lower(): _ENCODING_DESCRIPTIONS[_encoding_of(tone)] for tone in (*TONE_CHOICES, *TONE_ALIASES)
 }
 
 
@@ -78,12 +105,16 @@ def _xyz_type(xyz: tuple[float, float, float]) -> bytes:
     return b"XYZ " + bytes(4) + b"".join(_s15fixed16(c) for c in xyz)
 
 
+def _sf32_type(values: tuple[float, ...]) -> bytes:
+    """Encode a tuple of floats as an ICC s15Fixed16ArrayType ('sf32') tag."""
+    return b"sf32" + bytes(4) + b"".join(_s15fixed16(v) for v in values)
+
+
 def _desc_type(text: str) -> bytes:
     """Encode an ICC v2 'desc' tag (textDescriptionType).
 
-    The type carries an ASCII string followed by fixed-size Unicode and
-    ScriptCode fields. Those are unused here but must still be present, or
-    a strict parser rejects the tag.
+    An ASCII string is followed by fixed-size Unicode and ScriptCode fields.
+    These fields are unused here but required by strict parsers.
     """
     ascii_bytes = text.encode("ascii") + b"\0"
     # Unicode language code and count (4 + 4, no string), ScriptCode code and
@@ -95,8 +126,8 @@ def _desc_type(text: str) -> bytes:
 def _text_type(text: str) -> bytes:
     """Encode an ICC v2 'text' tag (textType), required for 'cprt'.
 
-    Unlike 'desc', this type is just the signature, four reserved bytes, and
-    a null-terminated ASCII string: no Unicode/ScriptCode fields.
+    The tag contains a signature, four reserved bytes and a null-terminated
+    ASCII string. It has no Unicode or ScriptCode fields.
     """
     return b"text" + bytes(4) + text.encode("ascii") + b"\0"
 
@@ -106,26 +137,24 @@ def _gamma_curve(gamma: float) -> bytes:
     return b"curv" + bytes(4) + struct.pack(">I", 1) + struct.pack(">H", round(gamma * 256))
 
 
-def _sampled_curve(decode_exponent: float, gain: float, offset: float, toe_slope: float, linear_cutoff: float) -> bytes:
+def _sampled_curve(curve: PiecewiseTransferCurve) -> bytes:
     """Encode a piecewise curve as an ICC v2 'curv' tag of sampled u16 values.
 
-    ICC v2 has no parametric curve type (that is 'para', a v4-only addition),
-    so a v2.1 profile must describe a non-power curve as a sampled lookup
-    table instead. The curve is Y = (aX + b)^g for X >= d, else Y = cX, which
-    is the shape both the sRGB and BT.709 encodes take.
+    The parametric 'para' type was added in ICC v4. A v2.1 profile represents
+    a non-power curve with a sampled lookup table. Both sRGB and BT.709 use
+    Y = (aX + b)^g for X >= d, else Y = cX.
 
-    The curve runs device-to-linear, the inverse of the forward encode in
-    `tone_mapping`, so every coefficient is derived from the encode
-    constants: `g` is the reciprocal of the forward exponent, `a` and `b`
-    undo the gain and offset, and `c` undoes the toe slope. `d` is the
-    breakpoint, which this formula wants in the encoded domain while
-    `tone_mapping` states it as a linear value, so it is the linear cutoff
-    carried through the toe.
+    The curve decodes device values to linear light, inverting the encoding
+    used by `tone_mapping`. Its coefficients come from the encoding constants:
+    `g` is the reciprocal exponent, `a` and `b` undo the gain and offset, and
+    `c` undoes the toe slope. The breakpoint `d` is in the encoded domain.
+    Multiply the linear cutoff by the toe slope to obtain it.
     """
-    decode_gain = 1.0 / gain
-    decode_offset = offset / gain
-    decode_toe_slope = 1.0 / toe_slope
-    breakpoint_x = linear_cutoff * toe_slope
+    decode_exponent = 1.0 / curve.exponent
+    decode_gain = 1.0 / curve.gain
+    decode_offset = curve.offset / curve.gain
+    decode_toe_slope = 1.0 / curve.toe_slope
+    breakpoint_x = curve.linear_cutoff * curve.toe_slope
 
     samples = []
     for i in range(_CURVE_SAMPLE_COUNT):
@@ -137,11 +166,9 @@ def _sampled_curve(decode_exponent: float, gain: float, offset: float, toe_slope
 
 def _curve_tag(trc: TransferCurve, gamma: float) -> bytes:
     if trc == "srgb":
-        # SRGB_GAMMA is the forward exponent 1/2.4, so its reciprocal is the
-        # 2.4 the ICC decode curve needs.
-        return _sampled_curve(1.0 / SRGB_GAMMA, SRGB_GAIN, SRGB_OFFSET, SRGB_TOE_SLOPE, SRGB_LINEAR_CUTOFF)
+        return _sampled_curve(SRGB)
     if trc == "rec709":
-        return _sampled_curve(1.0 / REC709_GAMMA, REC709_GAIN, REC709_OFFSET, REC709_TOE_SLOPE, REC709_CUTOFF)
+        return _sampled_curve(REC709)
     if trc == "gamma":
         return _gamma_curve(gamma)
     msg = f"Unknown transfer curve: {trc!r}"
@@ -149,10 +176,10 @@ def _curve_tag(trc: TransferCurve, gamma: float) -> bytes:
 
 
 def _header(total_size: int) -> bytes:
-    """Build the 128-byte ICC v2.1 header for a display device profile."""
+    """Build the 128-byte ICC v2.4 header for a display device profile."""
     header = struct.pack(">I", total_size)
     header += b"none"  # preferred CMM: no preference
-    header += struct.pack(">I", 0x02100000)  # version 2.1.0
+    header += struct.pack(">I", 0x02400000)  # version 2.4.0 (ICC.1:2001-04, includes chad)
     header += b"mntr" + b"RGB " + b"XYZ "  # display device, RGB data, XYZ PCS
     header += struct.pack(">HHHHHH", 2024, 1, 1, 0, 0, 0)  # fixed date, for reproducible bytes
     header += b"acsp" + bytes(4) + bytes(4)  # signature, platform, flags
@@ -181,7 +208,8 @@ def build_icc_profile(description: str, trc: TransferCurve, gamma: float = 1.0) 
     curve = _curve_tag(trc, gamma)
     tags = {
         b"desc": _desc_type(description),
-        b"wtpt": _xyz_type(_D50_XYZ),
+        b"wtpt": _xyz_type(_D65_XYZ),
+        b"chad": _sf32_type(_D65_TO_D50_CHAD),
         b"rXYZ": _xyz_type(_RED_XYZ),
         b"gXYZ": _xyz_type(_GREEN_XYZ),
         b"bXYZ": _xyz_type(_BLUE_XYZ),
@@ -190,8 +218,8 @@ def build_icc_profile(description: str, trc: TransferCurve, gamma: float = 1.0) 
         b"bTRC": curve,
         b"cprt": _text_type("Public Domain"),
     }
-    # Order is not significant to readers, but fixing it keeps the bytes stable.
-    order = [b"desc", b"wtpt", b"rXYZ", b"gXYZ", b"bXYZ", b"rTRC", b"gTRC", b"bTRC", b"cprt"]
+    # Fixed tag order keeps the bytes stable. Readers accept any order.
+    order = [b"desc", b"wtpt", b"chad", b"rXYZ", b"gXYZ", b"bXYZ", b"rTRC", b"gTRC", b"bTRC", b"cprt"]
 
     table_size = 4 + len(order) * _TAG_ENTRY_SIZE
     body_start = _ICC_HEADER_SIZE + table_size
@@ -213,16 +241,16 @@ def build_icc_profile(description: str, trc: TransferCurve, gamma: float = 1.0) 
     return _header(total) + struct.pack(">I", len(order)) + entries + body
 
 
-_PROFILES = {
-    TONE_SRGB.lower(): build_icc_profile(PROFILE_DESCRIPTIONS[TONE_SRGB.lower()], "srgb"),
-    TONE_REC709.lower(): build_icc_profile(PROFILE_DESCRIPTIONS[TONE_REC709.lower()], "rec709"),
-    TONE_REC1886.lower(): build_icc_profile(PROFILE_DESCRIPTIONS[TONE_REC1886.lower()], "gamma", _REC1886_GAMMA),
-    TONE_RAW.lower(): build_icc_profile(PROFILE_DESCRIPTIONS[TONE_RAW.lower()], "gamma", _LINEAR_GAMMA),
+_ENCODING_PROFILES = {
+    TONE_SRGB.lower(): build_icc_profile(_ENCODING_DESCRIPTIONS[TONE_SRGB.lower()], "srgb"),
+    TONE_REC709.lower(): build_icc_profile(_ENCODING_DESCRIPTIONS[TONE_REC709.lower()], "rec709"),
+    TONE_REC1886.lower(): build_icc_profile(_ENCODING_DESCRIPTIONS[TONE_REC1886.lower()], "gamma", _REC1886_GAMMA),
+    TONE_RAW.lower(): build_icc_profile(_ENCODING_DESCRIPTIONS[TONE_RAW.lower()], "gamma", _LINEAR_GAMMA),
 }
 
 
 def profile_for_tone_mapping(tone_mapping: str) -> bytes | None:
-    """ICC profile describing the encoding `apply_tone_mapping` produced.
+    """Return the ICC profile for the encoding produced by `apply_tone_mapping`.
 
     Args:
         tone_mapping: A display transform name (case-insensitive).
@@ -231,4 +259,5 @@ def profile_for_tone_mapping(tone_mapping: str) -> bytes | None:
         The profile bytes, or None if the name has no profile. Callers write
         an untagged image when None, which viewers read as sRGB.
     """
-    return _PROFILES.get(tone_mapping.lower())
+    encoding = display_encoding(tone_mapping)
+    return None if encoding is None else _ENCODING_PROFILES[encoding]

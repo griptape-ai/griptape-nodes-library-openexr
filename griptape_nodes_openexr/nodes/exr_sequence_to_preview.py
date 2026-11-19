@@ -29,6 +29,24 @@ from static_ffmpeg import run  # type: ignore[import-untyped]
 
 from griptape_nodes_openexr.exr import render_limits, sequence_canvas
 from griptape_nodes_openexr.exr.channel_selection import select_display_channels
+from griptape_nodes_openexr.exr.colour.ocio_helpers import (
+    ColorParamsProtocol,
+    add_color_mode_parameters,
+    apply_color_management,
+    handle_color_mode_change,
+    read_color_settings,
+)
+from griptape_nodes_openexr.exr.colour.tone_mapping import (
+    EV_MAX,
+    EV_MIN,
+    TONE_RAW,
+    TONE_REC709,
+    TONE_REC1886,
+    TONE_SRGB,
+    apply_exposure,
+    display_encoding,
+    to_uint8,
+)
 from griptape_nodes_openexr.exr.display_window import (
     WINDOW_MODE_DATA,
     WINDOW_MODE_DEFAULT,
@@ -41,27 +59,10 @@ from griptape_nodes_openexr.exr.display_window import (
 )
 from griptape_nodes_openexr.exr.exr_io import build_rgb_array, load_exr_channels
 from griptape_nodes_openexr.exr.exr_types import WindowCoordinates
-from griptape_nodes_openexr.exr.ocio_helpers import (
-    COLOR_MODE_OCIO,
-    ColorParamsProtocol,
-    add_color_mode_parameters,
-    apply_color_management,
-    handle_color_mode_change,
-)
 from griptape_nodes_openexr.exr.sequence_helpers import (
     resolve_sequence_path,
     run_over_sequence,
     sequence_path_parameter,
-)
-from griptape_nodes_openexr.exr.tone_mapping import (
-    EV_MAX,
-    EV_MIN,
-    TONE_RAW,
-    TONE_REC709,
-    TONE_REC1886,
-    TONE_SRGB,
-    apply_exposure,
-    to_uint8,
 )
 
 logger = logging.getLogger("griptape_nodes")
@@ -70,10 +71,11 @@ _DEFAULT_FRAME_RATE = 24.0
 _DEFAULT_THREADS = 4
 _LOG_INTERVAL_PCT = 10
 _PIX_FMT = "yuv420p"
+_MOVFLAGS = "+faststart+write_colr"
 _FRAME_PATTERN = "frame_%04d.png"
 
-# Transfer characteristics per display transform. A video carries no ICC
-# profile, so these tags are its only colour signalling.
+# Transfer characteristics per display transform. Video players use CICP
+# stream and colr container tags for YUV colour signalling.
 #
 # They are passed through -x264-params rather than ffmpeg's own -color_trc:
 # the bundled static_ffmpeg build accepts -color_trc without error but drops
@@ -81,7 +83,7 @@ _FRAME_PATTERN = "frame_%04d.png"
 # apply. Setting all three through x264 keeps them consistent and verifiable.
 # An unrecognised value is ignored rather than honoured, hence the explicit
 # fallback rather than passing an arbitrary transform name through.
-_FFMPEG_TRC_VALUES = {
+_ENCODING_TRC_VALUES = {
     TONE_SRGB.lower(): "iec61966-2-1",
     TONE_REC709.lower(): "bt709",
     # No exact tag exists for gamma 2.4; bt709 is the closest available.
@@ -101,7 +103,34 @@ def color_trc_for(tone_mapping: str) -> str:
         An x264 transfer characteristic value (passed via -x264-params),
         falling back to bt709 for an unrecognised name.
     """
-    return _FFMPEG_TRC_VALUES.get(tone_mapping.lower(), _DEFAULT_TRC)
+    encoding = display_encoding(tone_mapping)
+    return _DEFAULT_TRC if encoding is None else _ENCODING_TRC_VALUES[encoding]
+
+
+def video_colour_args(tone_mapping: str, *, ocio: bool) -> list[str]:
+    """Build ffmpeg filter and x264 flags for YUV matrix conversion and colour tags.
+
+    Both modes convert RGB frames to TV-range BT.709 YUV and tag the matrix in
+    both the H.264 stream and the container colr box (via frame setparams),
+    so players decode YUV with the same matrix used to encode it. Basic mode
+    also tags Rec.709 primaries and the selected transfer curve; OCIO mode
+    leaves primaries and transfer unspecified because the config's display
+    space is unknown here.
+    """
+    if ocio:
+        return [
+            "-vf",
+            "scale=out_color_matrix=bt709:out_range=tv,setparams=range=tv:colorspace=bt709",
+            "-x264-params",
+            "colormatrix=bt709",
+        ]
+    trc = color_trc_for(tone_mapping)
+    return [
+        "-vf",
+        f"scale=out_color_matrix=bt709:out_range=tv,setparams=range=tv:colorspace=bt709:color_primaries=bt709:color_trc={trc}",
+        "-x264-params",
+        f"colorprim=bt709:transfer={trc}:colormatrix=bt709",
+    ]
 
 
 _SPEED_FAST = "fast"
@@ -181,8 +210,8 @@ class EXRSequenceToPreview(SuccessFailureNode):
         )
         self.add_parameter(self._exposure_param)
 
-        # No embed_color_profile: an MP4 cannot carry an ICC profile, so this
-        # node signals colour through the stream tags written below instead.
+        # No embed_color_profile: YUV video players use CICP stream and colr
+        # container tags, which this node always writes below.
         (
             self._color_mode_param,
             self._tone_mapping_param,
@@ -303,6 +332,14 @@ class EXRSequenceToPreview(SuccessFailureNode):
         self._clear_execution_status()
         self.parameter_output_values[self._video_param.name] = None
 
+        try:
+            _, tone_mapping, color_params = read_color_settings(
+                self, self._color_mode_param, self._tone_mapping_param, self._color_params_param
+            )
+        except ValueError as e:
+            self._on_fail(str(e))
+            return
+
         # --- Resolve sequence ---
         raw = self.get_parameter_value(self._sequence_param.name)
         resolved = await to_thread(resolve_sequence_path, raw)
@@ -321,8 +358,6 @@ class EXRSequenceToPreview(SuccessFailureNode):
         ev = float(self.get_parameter_value(self._exposure_param.name))
         part_index = int(self.get_parameter_value(self._part_index_param.name))
         frame_rate = float(self.get_parameter_value(self._frame_rate_param.name))
-        color_mode = str(self.get_parameter_value(self._color_mode_param.name))
-        tone_mapping = str(self.get_parameter_value(self._tone_mapping_param.name))
         threads = int(self.get_parameter_value(self._threads_param.name))
         fmt = str(self.get_parameter_value(self._format_param.name))
         missing_frames = str(self.get_parameter_value(self._missing_frames_param.name))
@@ -335,13 +370,6 @@ class EXRSequenceToPreview(SuccessFailureNode):
         except (ValueError, RuntimeError) as e:
             self._on_fail(str(e))
             return
-
-        color_params: ColorParamsProtocol | None = None
-        if color_mode == COLOR_MODE_OCIO:
-            color_params = self.get_parameter_value(self._color_params_param.name)  # type: ignore[assignment]
-            if color_params is None:
-                self._on_fail("OCIO mode requires a connected color_params artifact.")
-                return
 
         logger.info("%s: encoding %d EXR frames at %.1f fps (%d thread(s))", self.name, total, frame_rate, threads)
 
@@ -444,27 +472,12 @@ class EXRSequenceToPreview(SuccessFailureNode):
                 "-crf",
                 str(crf),
             ]
-            if color_params is None:
-                # Basic mode: our transforms share Rec.709 primaries, so only
-                # the transfer curve varies. scale=out_color_matrix=bt709
-                # makes swscale's RGB->YUV conversion actually use Rec.709
-                # coefficients; colormatrix=bt709 alone only tags the stream,
-                # leaving ffmpeg's default BT.601 math underneath it.
-                cmd += ["-vf", "scale=out_color_matrix=bt709"]
-                cmd += [
-                    "-x264-params",
-                    f"colorprim=bt709:transfer={color_trc_for(tone_mapping)}:colormatrix=bt709",
-                ]
-            # Under OCIO the display/view transform resolves to a config
-            # colorspace we cannot describe (sRGB, P3, Rec.2020, ...), so we
-            # leave colour characteristics unspecified rather than assert
-            # Rec.709 for output that may not be Rec.709, matching the PNG
-            # paths, which write no profile in that case either.
             cmd += [
+                *video_colour_args(tone_mapping, ocio=color_params is not None),
                 "-pix_fmt",
                 _PIX_FMT,
                 "-movflags",
-                "+faststart",
+                _MOVFLAGS,
                 "-an",
                 "-y",
                 str(output_path),

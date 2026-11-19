@@ -1,22 +1,27 @@
-"""The MP4 colour tags, verified against the real ffmpeg binary.
+"""MP4 and MOV colour signalling, verified against the bundled ffmpeg binary.
 
-A video carries no ICC profile, so these tags are its only colour signalling.
-The unit tests assert the command we build; these assert ffmpeg actually
-honours it. That distinction matters here: this build accepts ffmpeg's own
--color_trc without error and then drops it, which only a real encode reveals.
+The unit tests assert the command we build; these assert ffmpeg writes matching
+stream headers, container colr boxes, and YUV pixel values in both basic and
+OCIO modes.
 """
 
 from __future__ import annotations
 
 import json
+import struct
 import subprocess
 from pathlib import Path
 
 import pytest
 from static_ffmpeg import run  # type: ignore[import-untyped]
 
-from griptape_nodes_openexr.exr.tone_mapping import TONE_CHOICES
-from griptape_nodes_openexr.nodes.exr_sequence_to_preview import _PIX_FMT, color_trc_for
+from griptape_nodes_openexr.exr.colour.tone_mapping import TONE_CHOICES
+from griptape_nodes_openexr.nodes.exr_sequence_to_preview import (
+    _MOVFLAGS,
+    _PIX_FMT,
+    color_trc_for,
+    video_colour_args,
+)
 
 
 @pytest.fixture(scope="module")
@@ -27,8 +32,8 @@ def ffmpeg_tools() -> tuple[str, str]:
     return ffmpeg, ffprobe
 
 
-def _encode(ffmpeg: str, out: Path, tone: str, *, convert_matrix: bool = True) -> None:
-    """Encode a throwaway clip with the same colour flags the node uses."""
+def _encode(ffmpeg: str, out: Path, tone: str, *, ocio: bool = False) -> None:
+    """Encode a short clip with the exact colour and container flags the node uses."""
     cmd = [
         ffmpeg,
         "-loglevel",
@@ -39,16 +44,11 @@ def _encode(ffmpeg: str, out: Path, tone: str, *, convert_matrix: bool = True) -
         "testsrc=duration=0.1:size=64x64:rate=10",
         "-c:v",
         "libx264",
-    ]
-    if convert_matrix:
-        cmd += ["-vf", "scale=out_color_matrix=bt709"]
-    cmd += [
+        *video_colour_args(tone, ocio=ocio),
         "-pix_fmt",
         _PIX_FMT,
-        "-x264-params",
-        f"colorprim=bt709:transfer={color_trc_for(tone)}:colormatrix=bt709",
-        "-color_range",
-        "tv",
+        "-movflags",
+        _MOVFLAGS,
         "-y",
         str(out),
     ]
@@ -66,18 +66,56 @@ def _stream_tags(ffprobe: str, path: Path) -> dict:
     return json.loads(result.stdout)["streams"][0]
 
 
+def _colr_cicp(path: Path) -> tuple[bytes, int, int, int]:
+    """Read (colour_type, primaries, transfer, matrix) from an MP4/MOV colr box."""
+    raw = path.read_bytes()
+    idx = raw.find(b"colr")
+    assert idx >= 4, f"No colr box found in {path.name}"
+    colour_type = raw[idx + 4 : idx + 8]
+    primaries, transfer, matrix = struct.unpack(">HHH", raw[idx + 8 : idx + 14])
+    return colour_type, primaries, transfer, matrix
+
+
 @pytest.mark.parametrize("tone", TONE_CHOICES)
-def test_tags_are_written_to_the_file(tone: str, tmp_path: Path, ffmpeg_tools: tuple[str, str]) -> None:
+@pytest.mark.parametrize("ext", ["mp4", "mov"])
+def test_basic_mode_writes_stream_tags_and_colr_box(
+    tone: str, ext: str, tmp_path: Path, ffmpeg_tools: tuple[str, str]
+) -> None:
     ffmpeg, ffprobe = ffmpeg_tools
-    out = tmp_path / f"{tone.lower()}.mp4"
-    _encode(ffmpeg, out, tone)
+    slug = tone.lower().replace(" ", "_")
+    out = tmp_path / f"{slug}.{ext}"
+    _encode(ffmpeg, out, tone, ocio=False)
 
     stream = _stream_tags(ffprobe, out)
-    # "unknown" is what a silently dropped flag looks like, so assert the
-    # value rather than merely that the key exists.
     assert stream.get("color_transfer") == color_trc_for(tone)
     assert stream.get("color_primaries") == "bt709"
     assert stream.get("color_space") == "bt709"
+    assert stream.get("color_range") == "tv"
+
+    colour_type, primaries, transfer, matrix = _colr_cicp(out)
+    assert colour_type == (b"nclx" if ext == "mp4" else b"nclc")
+    assert primaries == 1  # BT.709
+    assert transfer != 2  # explicit transfer code, never unspecified
+    assert matrix == 1  # BT.709
+
+
+@pytest.mark.parametrize("ext", ["mp4", "mov"])
+def test_ocio_mode_tags_bt709_matrix_and_leaves_primaries_and_transfer_unspecified(
+    ext: str, tmp_path: Path, ffmpeg_tools: tuple[str, str]
+) -> None:
+    ffmpeg, ffprobe = ffmpeg_tools
+    out = tmp_path / f"ocio.{ext}"
+    _encode(ffmpeg, out, "raw", ocio=True)
+
+    stream = _stream_tags(ffprobe, out)
+    assert stream.get("color_space") == "bt709"
+    assert stream.get("color_range") == "tv"
+    assert stream.get("color_primaries") is None
+    assert stream.get("color_transfer") is None
+
+    colour_type, primaries, transfer, matrix = _colr_cicp(out)
+    assert colour_type == (b"nclx" if ext == "mp4" else b"nclc")
+    assert (primaries, transfer, matrix) == (2, 2, 1)
 
 
 def test_transforms_with_different_curves_get_different_tags(tmp_path: Path, ffmpeg_tools: tuple[str, str]) -> None:
@@ -91,8 +129,8 @@ def test_transforms_with_different_curves_get_different_tags(tmp_path: Path, ffm
     assert len({tags["sRGB"], tags["rec709"], tags["raw"]}) == 3
 
 
-def _red_frame_yuv(ffmpeg: str, out: Path, *, convert_matrix: bool) -> tuple[int, int, int]:
-    """Encode one pure-red frame and read back its YUV sample via ffprobe."""
+def _red_frame_yuv(ffmpeg: str, out: Path, extra_args: list[str]) -> tuple[int, int, int]:
+    """Encode one pure-red frame and read back its YUV sample."""
     subprocess.run(  # noqa: S603
         [
             ffmpeg,
@@ -104,7 +142,7 @@ def _red_frame_yuv(ffmpeg: str, out: Path, *, convert_matrix: bool) -> tuple[int
             "color=c=red:size=2x2:rate=1:duration=0.1",
             "-c:v",
             "rawvideo",
-            *(["-vf", "scale=out_color_matrix=bt709"] if convert_matrix else []),
+            *extra_args,
             "-pix_fmt",
             _PIX_FMT,
             "-frames:v",
@@ -117,25 +155,18 @@ def _red_frame_yuv(ffmpeg: str, out: Path, *, convert_matrix: bool) -> tuple[int
         timeout=60,
     )
     raw = out.read_bytes()
-    # yuv420p, 2x2: Y plane is 4 bytes, then one U byte and one V byte.
-    y, u, v = raw[0], raw[4], raw[5]
-    return y, u, v
+    return raw[0], raw[4], raw[5]
 
 
-def test_matrix_conversion_matches_the_asserted_tag(tmp_path: Path, ffmpeg_tools: tuple[str, str]) -> None:
-    # colormatrix=bt709 only tags the stream; ffmpeg's default RGB->YUV
-    # conversion uses BT.601 regardless, so an untagged encode and a BT.709
-    # encode of the same red frame must land on different YUV samples, and
-    # the explicit conversion must match the known BT.709 coefficients.
+@pytest.mark.parametrize("ocio", [False, True])
+def test_matrix_conversion_uses_bt709_in_both_modes(ocio: bool, tmp_path: Path, ffmpeg_tools: tuple[str, str]) -> None:
     ffmpeg, _ = ffmpeg_tools
-    untagged = tmp_path / "untagged.yuv"
-    converted = tmp_path / "converted.yuv"
-
-    untagged_yuv = _red_frame_yuv(ffmpeg, untagged, convert_matrix=False)
-    converted_yuv = _red_frame_yuv(ffmpeg, converted, convert_matrix=True)
+    untagged_yuv = _red_frame_yuv(ffmpeg, tmp_path / "untagged.yuv", [])
+    colour_args = video_colour_args("sRGB", ocio=ocio)
+    vf_args = colour_args[:2]  # ["-vf", "..."]
+    converted_yuv = _red_frame_yuv(ffmpeg, tmp_path / f"converted_{ocio}.yuv", vf_args)
 
     assert untagged_yuv != converted_yuv
-    # BT.709 full-range red (255,0,0) -> Y=63, U=102, V=240 (tv range); allow
-    # a small margin for encoder rounding.
+    # BT.709 limited-range red (255,0,0) -> Y=63, U=102, V=240.
     expected = (63, 102, 240)
     assert all(abs(a - b) <= 2 for a, b in zip(converted_yuv, expected, strict=True))
