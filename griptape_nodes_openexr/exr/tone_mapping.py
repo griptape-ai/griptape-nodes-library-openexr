@@ -83,16 +83,8 @@ REC709_OFFSET = 0.099  # power-segment offset
 REC1886_GAMMA = 1.0 / 2.4  # zero-black-level BT.1886 display inverse EOTF (gamma 2.4)
 
 
-# Linear ACES to linear Rec.709 primaries, with a Bradford chromatic adaptation from the
-# ACES white (about D60) to D65, so ACES white lands on display white. Each row gives
-# one output channel as a weighted sum of the input (R, G, B), so each row sums to 1
-# within rounding of the 8-decimal constants.
-#
-# Values are the published ones from colour-science (colour.RGB_to_RGB with
-# chromatic_adaptation_transform="Bradford"), built from the primaries in SMPTE ST 2065-1 (AP0, ACES2065-1) and Academy S-2014-004 (AP1,
-# ACEScg), and the BT.709 primaries and D65 white. tests/unit/test_tone_mapping.py
-# rederives them from those primaries.
 def _readonly_matrix_pair(rows: list[list[float]]) -> tuple[np.ndarray, np.ndarray]:
+    """Build read-only float32 matrices, calculating the inverse in float64."""
     f64 = np.array(rows, dtype=np.float64)
     forward = f64.astype(np.float32)
     inverse = np.linalg.inv(f64).astype(np.float32)
@@ -101,6 +93,16 @@ def _readonly_matrix_pair(rows: list[list[float]]) -> tuple[np.ndarray, np.ndarr
     return forward, inverse
 
 
+# Linear ACES to linear Rec.709 primaries, with a Bradford chromatic adaptation from the
+# ACES white (about D60) to D65, so ACES white lands on display white. Each row gives
+# one output channel as a weighted sum of the input (R, G, B), so each row sums to 1
+# within rounding of the 8-decimal constants.
+#
+# Values are the published ones from colour-science (colour.RGB_to_RGB with
+# chromatic_adaptation_transform="Bradford"), built from the primaries in SMPTE ST 2065-1
+# (AP0, ACES2065-1), Academy S-2014-004 (AP1, ACEScg), and the BT.709 primaries and D65 white.
+# tests/unit/test_tone_mapping.py rederives them from those primaries.
+# The REC709_TO_* matrices are calculated inverses of these forward matrices.
 ACESCG_TO_REC709, REC709_TO_ACESCG = _readonly_matrix_pair(
     [
         [1.70505099, -0.62179212, -0.08325887],
