@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
@@ -108,6 +109,28 @@ def scan_exr_header(file_path: str, *, header_only: bool = True) -> EXRData:
         raise ValueError(msg)
 
     resolved_path = File(str(file_path)).resolve()
+    return scan_exr_header_from_path(resolved_path, header_only=header_only)
+
+
+def scan_exr_header_from_path(file_path: str, *, header_only: bool = True) -> EXRData:
+    """Read all part headers from an absolute filesystem path without engine resolution.
+
+    Header conversion and pixel-type reporting match :func:`scan_exr_header`.
+    With ``header_only=True``, pixel chunks are not loaded and channel types are
+    reported as HALF. Set it to False to decode pixels and report actual types.
+
+    Raises:
+        ValueError: If the path is empty or not absolute, or the file has no parts.
+        RuntimeError: If the file cannot be opened or its headers cannot be parsed.
+    """
+    if not file_path:
+        msg = "file_path must not be empty"
+        raise ValueError(msg)
+    if not Path(file_path).is_absolute():
+        msg = "file_path must be an absolute filesystem path"
+        raise ValueError(msg)
+
+    resolved_path = str(file_path)
     parts: list[EXRPart] = []
     try:
         # TODO: revisit direct file I/O once artifact manager is pluggable https://github.com/griptape-ai/griptape-nodes-library-openexr/issues/9

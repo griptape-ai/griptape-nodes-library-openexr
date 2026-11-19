@@ -7,6 +7,8 @@ only way to tell that the right part and layer were read.
 
 from __future__ import annotations
 
+import asyncio
+import json
 from io import BytesIO
 from pathlib import Path
 from typing import Any
@@ -211,10 +213,262 @@ class TestSinglePartFile:
         assert node.parameter_output_values["channel_count"] == len(expected.parts[0].channels)
 
 
+_METADATA_DEFAULTS = {
+    "compression": "",
+    "storage_type": "",
+    "pixel_aspect_ratio": 1.0,
+    "data_window": "",
+    "display_window": "",
+    "time_code": "",
+    "software": "",
+    "owner": "",
+    "chromaticities": "",
+    "custom_attributes": "{}",
+}
+
+
+def _metadata(node) -> dict[str, Any]:
+    return {name: node.parameter_output_values[name] for name in _METADATA_DEFAULTS}
+
+
+def _write_metadata_parts(path: Path, owners: list[str], windows: list[tuple[int, int, int, int]]) -> Path:
+    """Write distinct selected-part metadata, sharing the multipart display window."""
+    import OpenEXR
+
+    parts = []
+    for index, (owner, window) in enumerate(zip(owners, windows, strict=True)):
+        xmin, ymin, xmax, ymax = window
+        header = {
+            "type": OpenEXR.scanlineimage,
+            "compression": OpenEXR.ZIP_COMPRESSION,
+            "owner": owner,
+            "software": "metadata integration test",
+            "pixelAspectRatio": 1.25,
+            "timeCode": f"01:02:03:{index:02d}",
+            "shot": f"shot-{owner}",
+            "take": index + 1,
+            "dataWindow": (np.array(window[:2], np.int32), np.array(window[2:], np.int32)),
+            "displayWindow": (np.array([0, 0], np.int32), np.array([15, 11], np.int32)),
+        }
+        pixels = np.full((ymax - ymin + 1, xmax - xmin + 1), 0.5, np.float32)
+        parts.append(OpenEXR.Part(header, dict.fromkeys("RGB", pixels), f"part-{index}"))
+    with OpenEXR.File(parts) as exr:
+        exr.write(str(path))
+    return path
+
+
+class TestHeaderMetadata:
+    def test_populated_fixture_before_and_during_execution(self, engine: _Engine) -> None:
+        node = _make_node()
+        with patch(f"{_RENDER_MODULE}.load_exr_channels", side_effect=AssertionError("edit decoded pixels")):
+            node.set_parameter_value("path", str(DATA / "custom_attributes.exr"))
+            asyncio.run(node.wait_for_pending_scan())
+        live = _metadata(node)
+        assert {name: value for name, value in live.items() if name != "chromaticities"} == {
+            "compression": "ZIP_COMPRESSION",
+            "storage_type": "scanlineimage",
+            "pixel_aspect_ratio": 1.0,
+            "data_window": "0,0 - 63,63",
+            "display_window": "0,0 - 63,63",
+            "time_code": "",
+            "software": "generate_fixtures.py v1.0",
+            "owner": "VFX Studio",
+            "custom_attributes": "{}",
+        }
+        assert json.loads(live["chromaticities"]) == pytest.approx(
+            {
+                "red_x": 0.64,
+                "red_y": 0.33,
+                "green_x": 0.30,
+                "green_y": 0.60,
+                "blue_x": 0.15,
+                "blue_y": 0.06,
+                "white_x": 0.3127,
+                "white_y": 0.3290,
+            }
+        )
+
+        asyncio.run(_run(node))
+        assert _was_successful(node) is True, _result_details(node)
+        assert _metadata(node) == live
+        node.parameter_output_values.update(_METADATA_DEFAULTS)
+        asyncio.run(_run(node))
+        assert _was_successful(node) is True, _result_details(node)
+        assert _metadata(node) == live  # Cached execution must also publish authoritative metadata.
+        assert (node.parameter_output_values["image_width"], node.parameter_output_values["image_height"]) == (64, 64)
+        assert (node.parameter_output_values["part_count"], node.parameter_output_values["channel_count"]) == (1, 4)
+
+    def test_render_cache_hit_publishes_fresh_metadata(self, engine: _Engine, tmp_path: Path) -> None:
+        import os
+
+        window = (0, 0, 15, 11)
+        path = _write_metadata_parts(tmp_path / "metadata.exr", ["before-owner"], [window])
+        node = _make_node()
+        node.set_parameter_value("path", str(path))
+        asyncio.run(_run(node))
+        assert _was_successful(node) is True, _result_details(node)
+        assert node.parameter_output_values["owner"] == "before-owner"
+        image = node.parameter_output_values["image"]
+        writes = len(engine.written)
+        stamp = path.stat()
+
+        # Change only same-length metadata and preserve the render key's file stamp.
+        # Execution must read fresh headers even when it can reuse the rendered pixels.
+        _write_metadata_parts(path, ["after--owner"], [window])
+        assert path.stat().st_size == stamp.st_size
+        os.utime(path, ns=(stamp.st_atime_ns, stamp.st_mtime_ns))
+        assert scan_exr_header(str(path)).parts[0].header.owner == "after--owner"
+
+        with patch(f"{_RENDER_MODULE}.load_exr_channels", side_effect=AssertionError("cache hit decoded pixels")):
+            asyncio.run(_run(node))
+
+        assert _was_successful(node) is True, _result_details(node)
+        assert "Reused cached render" in _result_details(node)
+        assert len(engine.written) == writes
+        assert node.parameter_output_values["image"] is image
+        assert node.parameter_output_values["owner"] == "after--owner"
+        assert json.loads(node.parameter_output_values["custom_attributes"]) == {"shot": "shot-after--owner", "take": 1}
+        assert node.parameter_output_values["part"].header.owner == "after--owner"
+
+    def test_source_transition_removes_absent_optional_attributes(self, engine: _Engine) -> None:
+        node = _make_node()
+        node.set_parameter_value("path", str(DATA / "custom_attributes.exr"))
+        asyncio.run(node.wait_for_pending_scan())
+        assert node.parameter_output_values["owner"] == "VFX Studio"
+        node.set_parameter_value("path", str(DATA / "nuke_metadata.exr"))
+        asyncio.run(node.wait_for_pending_scan())
+        assert json.loads(node.parameter_output_values["custom_attributes"])["nuke/version"] == "15.0v1"
+        node.set_parameter_value("path", str(SINGLE_PART_RGBA))
+        asyncio.run(node.wait_for_pending_scan())
+        for name in ("time_code", "software", "owner", "chromaticities", "custom_attributes"):
+            assert node.parameter_output_values[name] == _METADATA_DEFAULTS[name]
+        live = _metadata(node)
+        asyncio.run(_run(node))
+        assert _was_successful(node) is True, _result_details(node)
+        assert _metadata(node) == live
+
+        node.set_parameter_value("path", "")
+        asyncio.run(node.wait_for_pending_scan())
+        assert _metadata(node) == _METADATA_DEFAULTS
+
+    def test_multipart_selection_updates_metadata_without_rendering(self, engine: _Engine, tmp_path: Path) -> None:
+        path = _write_metadata_parts(
+            tmp_path / "parts.exr",
+            ["beauty-owner", "matte-owner"],
+            [
+                (-8, -4, 23, 15),
+                (4, 2, 11, 7),
+            ],
+        )
+        node = _make_node()
+        node.set_parameter_value("path", str(path))
+        asyncio.run(node.wait_for_pending_scan())
+        assert node.parameter_output_values["owner"] == "beauty-owner"
+        assert node.parameter_output_values["data_window"] == "-8,-4 - 23,15"
+        with patch(f"{_RENDER_MODULE}.load_exr_channels", side_effect=AssertionError("edit decoded pixels")):
+            node.set_parameter_value("part_name", "1: part-1")
+            asyncio.run(node.wait_for_pending_scan())
+        assert node.parameter_output_values["owner"] == "matte-owner"
+        assert node.parameter_output_values["data_window"] == "4,2 - 11,7"
+        assert node.parameter_output_values["display_window"] == "0,0 - 15,11"
+        assert node.parameter_output_values["time_code"] == "01:02:03:01"
+        assert node.parameter_output_values["pixel_aspect_ratio"] == 1.25
+        assert json.loads(node.parameter_output_values["custom_attributes"]) == {"shot": "shot-matte-owner", "take": 2}
+        live = _metadata(node)
+        node.set_parameter_value("window_mode", WINDOW_MODE_DISPLAY)
+        asyncio.run(_run(node))
+        assert _was_successful(node) is True, _result_details(node)
+        assert _metadata(node) == live
+        assert _rendered(node).shape == (12, 16, 3)
+        assert (node.parameter_output_values["image_width"], node.parameter_output_values["image_height"]) == (16, 12)
+        assert (node.parameter_output_values["part_count"], node.parameter_output_values["channel_count"]) == (2, 3)
+        assert (node.parameter_output_values["part"].width, node.parameter_output_values["part"].height) == (8, 6)
+
+    def test_sequence_metadata_follows_selected_frame(self, engine: _Engine, tmp_path: Path) -> None:
+        paths = [
+            _write_metadata_parts(tmp_path / "frame.1001.exr", ["first-owner"], [(-8, -4, 23, 15)]),
+            _write_metadata_parts(tmp_path / "frame.1002.exr", ["second-owner"], [(4, 2, 11, 7)]),
+        ]
+        node = _make_node()
+        node.set_parameter_value("path", _sequence_dict(paths, start=1001))
+        for frame, owner, window, size in (
+            (1002, "second-owner", "4,2 - 11,7", (8, 6)),
+            (1001, "first-owner", "-8,-4 - 23,15", (32, 20)),
+        ):
+            with patch(f"{_RENDER_MODULE}.load_exr_channels", side_effect=AssertionError("edit decoded pixels")):
+                node.set_parameter_value("frame", frame)
+                asyncio.run(node.wait_for_pending_scan())
+            assert node.parameter_output_values["owner"] == owner
+            assert node.parameter_output_values["data_window"] == window
+            assert json.loads(node.parameter_output_values["custom_attributes"]) == {"shot": f"shot-{owner}", "take": 1}
+            live = _metadata(node)
+            asyncio.run(_run(node))
+            assert _was_successful(node) is True, _result_details(node)
+            assert _metadata(node) == live
+            assert (node.parameter_output_values["image_width"], node.parameter_output_values["image_height"]) == size
+            assert node.parameter_output_values["part"].frame_number == frame
+            assert (node.parameter_output_values["part_count"], node.parameter_output_values["channel_count"]) == (1, 3)
+        assert (node.parameter_output_values["first_frame"], node.parameter_output_values["last_frame"]) == (1001, 1002)
+        assert node.parameter_output_values["frame_count"] == 2
+
+    def test_event_loop_edits_refresh_metadata_in_background(self, engine: _Engine, tmp_path: Path) -> None:
+        paths = [
+            _write_metadata_parts(
+                tmp_path / "frame.1001.exr",
+                ["first-owner", "first-matte"],
+                [
+                    (-8, -4, 23, 15),
+                    (4, 2, 11, 7),
+                ],
+            ),
+            _write_metadata_parts(
+                tmp_path / "frame.1002.exr",
+                ["second-owner", "second-matte"],
+                [
+                    (0, 0, 15, 11),
+                    (2, 1, 7, 4),
+                ],
+            ),
+        ]
+        node = _make_node()
+
+        async def edit() -> None:
+            node.set_parameter_value("path", _sequence_dict(paths, start=1001))
+            await node.wait_for_pending_scan()
+            assert node.parameter_output_values["owner"] == "first-owner"
+            node.set_parameter_value("frame", 1002)
+            await node.wait_for_pending_scan()
+            assert node.parameter_output_values["owner"] == "second-owner"
+            node.set_parameter_value("part_name", "1: part-1")
+            await node.wait_for_pending_scan()
+            assert node.parameter_output_values["owner"] == "second-matte"
+            assert node.parameter_output_values["data_window"] == "2,1 - 7,4"
+            node.set_parameter_value("path", str(SINGLE_PART_RGBA))
+            await node.wait_for_pending_scan()
+            assert node.parameter_output_values["owner"] == ""
+            assert node.parameter_output_values["custom_attributes"] == "{}"
+
+        with patch(f"{_RENDER_MODULE}.load_exr_channels", side_effect=AssertionError("edit decoded pixels")):
+            asyncio.run(edit())
+
+    def test_failed_execution_clears_live_metadata(self, engine: _Engine) -> None:
+        node = _make_node()
+        node.set_parameter_value("path", str(DATA / "custom_attributes.exr"))
+        asyncio.run(_run(node))
+        assert _was_successful(node) is True, _result_details(node)
+        assert node.parameter_output_values["owner"] == "VFX Studio"
+        node.set_parameter_value("color_mode", COLOR_MODE_OCIO)
+        asyncio.run(_run(node))
+        assert _was_successful(node) is False
+        assert "color_params" in _result_details(node)
+        assert _metadata(node) == _METADATA_DEFAULTS
+
+
 class TestMultiPartFile:
     def test_part_dropdown_lists_the_real_part_names(self, engine: _Engine) -> None:
         node = _make_node()
         node.set_parameter_value("path", str(MULTI_PART))
+        asyncio.run(node.wait_for_pending_scan())
         assert node._part_choices() == ["0: rgba", "1: depth", "2: normal"]
 
     def test_selecting_depth_renders_that_part(self, engine: _Engine) -> None:
@@ -251,12 +505,14 @@ class TestLayers:
     def test_layer_dropdown_lists_the_aov_prefixes(self, engine: _Engine) -> None:
         node = _make_node()
         node.set_parameter_value("path", str(SINGLE_PART_AOVS))
+        asyncio.run(node.wait_for_pending_scan())
         # Order follows the channel order the file reports, which OpenEXR sorts.
         assert node._layer_choices() == ["beauty", "depth", "diffuse", "normal"]
 
     def test_default_layer_matches_select_display_channels(self, engine: _Engine) -> None:
         node = _make_node()
         node.set_parameter_value("path", str(SINGLE_PART_AOVS))
+        asyncio.run(node.wait_for_pending_scan())
 
         channel_names = [channel.name for channel in scan_exr_header(str(SINGLE_PART_AOVS)).parts[0].channels]
         selected = select_display_channels(channel_names)

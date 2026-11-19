@@ -28,17 +28,72 @@ An **Open in external viewer** button opens the source EXR in a configured HDR v
 
 **Outputs**
 
-| Parameter                      | Type                       | Description                                                                                                                                           |
-| ------------------------------ | -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `image`                        | `ImageUrlArtifact`         | 8-bit PNG (RGB or RGBA) of the current frame                                                                                                          |
-| `part`                         | `EXRPartArtifact`          | Descriptor for the selected part, retaining its source floating-point data                                                                            |
-| `channels`                     | `list[EXRChannelArtifact]` | One descriptor per channel in that part                                                                                                               |
-| `image_width` / `image_height` | `int`                      | Dimensions of the rendered `image`: the display window in `Crop Overscan` mode, otherwise the data window. `part` keeps the data window's dimensions. |
-| `part_count` / `channel_count` | `int`                      | Parts in the file, channels in the part that was read                                                                                                 |
-| `first_frame` / `last_frame`   | `int`                      | Sequence bounds; `0` for a single file                                                                                                                |
-| `frame_count`                  | `int`                      | Frames in the sequence; `1` for a single file                                                                                                         |
+| Parameter                        | Type                       | Description                                                                                                                                           |
+| -------------------------------- | -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `image`                          | `ImageUrlArtifact`         | 8-bit PNG (RGB or RGBA) of the current frame                                                                                                          |
+| `part`                           | `EXRPartArtifact`          | Descriptor for the selected part, retaining its source floating-point data                                                                            |
+| `channels`                       | `list[EXRChannelArtifact]` | One descriptor per channel in that part                                                                                                               |
+| `image_width` / `image_height`   | `int`                      | Dimensions of the rendered `image`: the display window in `Crop Overscan` mode, otherwise the data window. `part` keeps the data window's dimensions. |
+| `part_count` / `channel_count`   | `int`                      | Parts in the file, channels in the part that was read                                                                                                 |
+| `first_frame` / `last_frame`     | `int`                      | Sequence bounds; `0` for a single file                                                                                                                |
+| `frame_count`                    | `int`                      | Frames in the sequence; `1` for a single file                                                                                                         |
+| `compression`                    | `str`                      | Binding codec name, e.g. `ZIP_COMPRESSION`; default `""`                                                                                              |
+| `storage_type`                   | `str`                      | `scanlineimage`, `tiledimage`, `deepscanline`, or `deeptiled`; default `""`                                                                           |
+| `pixel_aspect_ratio`             | `float`                    | Source pixel width/height ratio; default `1.0`                                                                                                        |
+| `data_window` / `display_window` | `str`                      | Source windows as `"xmin,ymin - xmax,ymax"`; default `""`                                                                                             |
+| `time_code`                      | `str`                      | Source timecode text; default `""` when absent                                                                                                        |
+| `software`                       | `str`                      | Authoring application; default `""` when absent                                                                                                       |
+| `owner`                          | `str`                      | Asset owner; default `""` when absent                                                                                                                 |
+| `chromaticities`                 | `str`                      | JSON object with `red_x`, `red_y`, `green_x`, `green_y`, `blue_x`, `blue_y`, `white_x`, `white_y`; default `""` when absent                           |
+| `custom_attributes`              | `str`                      | JSON object of non-standard header attributes, indented with two spaces; default `"{}"`                                                               |
 
 The `image` output is a rendered 8-bit PNG rather than the `.exr` itself, because the standard library's image nodes cannot open an EXR and have no float or greater-than-8-bit path. The float data travels on `part` and `channels` instead, so a downstream **Display EXR Channel** still gets the real pixels.
+
+### Header Metadata
+
+The ten metadata outputs describe the selected `part_name` in the selected `frame`. They refresh without decoding pixels when `path`, `frame`, or `part_name` changes.
+Each node reads metadata independently in a background thread when `path`, `frame`, or
+`part_name` changes. Execution performs its own fresh read, including when the rendered PNG
+is reused. Completed headers are never cached. Reads started for an older selection may finish,
+but their results and failures cannot update the current selection.
+Python callers can await `wait_for_pending_scan()` to inspect refreshed metadata. Standalone
+setters with no running host loop defer their read until that wait or node execution.
+Running the node updates metadata for the frame and part actually rendered.
+A failed execution clears all ten outputs to the defaults in the table, so metadata from a
+previous successful read does not survive a failed run. If the selection changes during a run,
+that run follows the Failed control output and discards its image results. Metadata refreshed
+for the newer selection is preserved. Completions after node deletion or library unload cannot
+publish outputs or status.
+
+Header reads currently run in a thread in the hosting process. OpenEXR holds the GIL during
+file opening, so slow storage can still stall Python execution in that host. Rapid edits and
+execution may start overlapping reads. Native reads already running cannot be cancelled;
+cancelling their caller waits for the worker to finish before cancellation propagates.
+Enough blocked reads can occupy the thread pool. Process isolation
+and reader cleanup are tracked in [#119](https://github.com/griptape-ai/griptape-nodes-library-openexr/issues/119).
+
+`data_window` and `display_window` retain the source coordinates regardless of `window_mode`.
+They do not replace `image_width` and `image_height`, which still describe the rendered PNG.
+`part_count` counts all parts in the selected frame; `channel_count` counts channels in its
+selected part.
+
+`chromaticities` is JSON text, for example:
+
+```json
+{"red_x": 0.64, "red_y": 0.33, "green_x": 0.3, "green_y": 0.6, "blue_x": 0.15, "blue_y": 0.06, "white_x": 0.3127, "white_y": 0.329}
+```
+
+`custom_attributes` is also JSON text, for example:
+
+```json
+{
+  "shot": "shot-010",
+  "take": 2
+}
+```
+
+Standard attributes such as `owner`, `software`, `comments`, and `capDate` are not included
+in `custom_attributes`. Both JSON outputs use the same formatting as **Load EXR**.
 
 ## Load EXR
 

@@ -13,7 +13,6 @@ pixel types at the cost of loading pixel data into memory.
 from __future__ import annotations
 
 import hashlib
-import json
 import logging
 import os
 from typing import TYPE_CHECKING, Any
@@ -41,7 +40,8 @@ from griptape_nodes_openexr.exr.exr_header_artifact import (
     EXRPartArtifact,
 )
 from griptape_nodes_openexr.exr.exr_io import scan_exr_header
-from griptape_nodes_openexr.exr.exr_types import EXRData, EXRPart, _convert_attribute_value
+from griptape_nodes_openexr.exr.exr_types import EXRData, EXRPart
+from griptape_nodes_openexr.exr.header_metadata import HEADER_METADATA_DEFAULTS, header_metadata_outputs
 from griptape_nodes_openexr.exr.viewer_launcher import handle_viewer_button_click
 
 if TYPE_CHECKING:
@@ -51,15 +51,6 @@ logger = logging.getLogger("griptape_nodes")
 
 _PART_PREFIX = "part_"
 _CHANNEL_PREFIX = "channel_"
-
-_CHROMA_RED_X = "red_x"
-_CHROMA_RED_Y = "red_y"
-_CHROMA_GREEN_X = "green_x"
-_CHROMA_GREEN_Y = "green_y"
-_CHROMA_BLUE_X = "blue_x"
-_CHROMA_BLUE_Y = "blue_y"
-_CHROMA_WHITE_X = "white_x"
-_CHROMA_WHITE_Y = "white_y"
 
 
 def _sanitize_key(name: str) -> str:
@@ -378,16 +369,8 @@ class LoadEXR(SuccessFailureNode):
         self.parameter_output_values[self._image_height_param.name] = 0
         self.parameter_output_values[self._part_count_param.name] = 0
         self.parameter_output_values[self._channel_count_param.name] = 0
-        self.parameter_output_values[self._compression_param.name] = ""
-        self.parameter_output_values[self._storage_type_param.name] = ""
-        self.parameter_output_values[self._pixel_aspect_ratio_param.name] = 1.0
-        self.parameter_output_values[self._data_window_param.name] = ""
-        self.parameter_output_values[self._display_window_param.name] = ""
-        self.parameter_output_values[self._time_code_param.name] = ""
-        self.parameter_output_values[self._software_param.name] = ""
-        self.parameter_output_values[self._owner_param.name] = ""
-        self.parameter_output_values[self._chromaticities_param.name] = ""
-        self.parameter_output_values[self._custom_attributes_param.name] = "{}"
+        for name, value in HEADER_METADATA_DEFAULTS.items():
+            self.parameter_output_values[name] = value
         self.parameter_output_values[self._parts_param.name] = []
 
     def _on_inputs_changed(self, file_path: str) -> None:
@@ -425,48 +408,12 @@ class LoadEXR(SuccessFailureNode):
     def _populate_scalar_outputs(self, exr_data: EXRData) -> None:
         """Fill the EXR Info group outputs from the first part's header."""
         part = exr_data.parts[0]
-        header = part.header
-
         self.parameter_output_values[self._image_width_param.name] = part.width
         self.parameter_output_values[self._image_height_param.name] = part.height
         self.parameter_output_values[self._part_count_param.name] = len(exr_data.parts)
         self.parameter_output_values[self._channel_count_param.name] = sum(len(p.channels) for p in exr_data.parts)
-        self.parameter_output_values[self._compression_param.name] = header.compression.value
-        self.parameter_output_values[self._storage_type_param.name] = header.storage_type.value
-        self.parameter_output_values[self._pixel_aspect_ratio_param.name] = header.pixel_aspect_ratio
-
-        dw = header.data_window
-        self.parameter_output_values[self._data_window_param.name] = f"{dw.xmin},{dw.ymin} - {dw.xmax},{dw.ymax}"
-        disp = header.display_window
-        self.parameter_output_values[self._display_window_param.name] = (
-            f"{disp.xmin},{disp.ymin} - {disp.xmax},{disp.ymax}"
-        )
-
-        self.parameter_output_values[self._time_code_param.name] = header.time_code or ""
-        self.parameter_output_values[self._software_param.name] = header.software or ""
-        self.parameter_output_values[self._owner_param.name] = header.owner or ""
-
-        if header.chromaticities:
-            c = header.chromaticities
-            chroma_dict = {
-                _CHROMA_RED_X: c.red_x,
-                _CHROMA_RED_Y: c.red_y,
-                _CHROMA_GREEN_X: c.green_x,
-                _CHROMA_GREEN_Y: c.green_y,
-                _CHROMA_BLUE_X: c.blue_x,
-                _CHROMA_BLUE_Y: c.blue_y,
-                _CHROMA_WHITE_X: c.white_x,
-                _CHROMA_WHITE_Y: c.white_y,
-            }
-            self.parameter_output_values[self._chromaticities_param.name] = json.dumps(
-                {k: _convert_attribute_value(v) for k, v in chroma_dict.items()}
-            )
-        else:
-            self.parameter_output_values[self._chromaticities_param.name] = ""
-
-        self.parameter_output_values[self._custom_attributes_param.name] = (
-            json.dumps(header.custom, indent=2, default=str) if header.custom else "{}"
-        )
+        for name, value in header_metadata_outputs(part.header).items():
+            self.parameter_output_values[name] = value
 
     def _populate_structured_outputs(self, file_path: str, exr_data: EXRData) -> None:
         """Build and set the structured artifact outputs."""
