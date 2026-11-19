@@ -111,6 +111,17 @@ class TestToneMappingChoices:
         assert _tone_choices(node) == TONE_CHOICES
         assert {TONE_ACESCG_SRGB, TONE_ACESCG_REC709, TONE_ACES2065_SRGB} <= set(_tone_choices(node))
 
+    def test_profile_tooltip_explains_viewer_defaults_for_untagged_images(self, node_type: type) -> None:
+        node = _make_node(node_type, ocio_available=False)
+        parameter = node.get_parameter_by_name("embed_color_profile")
+        if parameter is None:
+            return
+        tooltip = parameter.tooltip
+
+        assert "viewer uses its default colour interpretation" in tooltip
+        assert "If that default is sRGB" in tooltip
+        assert "viewers read it as sRGB" not in tooltip
+
     def test_tooltip_explains_input_primaries_and_clipping_without_nuke_comparison(self, node_type: type) -> None:
         node = _make_node(node_type, ocio_available=False)
         tooltip = node.get_parameter_by_name("tone_mapping").tooltip

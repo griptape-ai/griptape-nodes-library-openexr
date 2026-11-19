@@ -32,8 +32,9 @@ TONE_MAPPING_TOOLTIP = f"Display transform when color_mode is 'basic'. {TONE_CUR
 
 EMBED_PROFILE_TOOLTIP = (
     "Embed an ICC profile describing the selected display transform. Off: the image is "
-    "untagged and viewers read it as sRGB, so 'Linear sRGB to rec709' and "
-    "'Linear sRGB to rec1886' look different on screen. On: the file is labelled for "
+    "untagged and the viewer uses its default colour interpretation. If that default is sRGB, "
+    "'Linear sRGB to rec709' and 'Linear sRGB to rec1886' look different from 'Linear sRGB to sRGB'. "
+    "On: the file is labelled for "
     "other applications, and transforms sharing the same source primaries then look "
     "the same in a colour-managed viewer."
 )
