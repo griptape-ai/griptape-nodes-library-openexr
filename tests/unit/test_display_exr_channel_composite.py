@@ -234,7 +234,7 @@ class TestToneMappingValidatedBeforeDecode:
 
         with (
             patch(f"{_NODE_MODULE}._load_background_rgb") as mock_load_bg,
-            patch(f"{_NODE_MODULE}.srgb_to_linear") as mock_srgb_to_linear,
+            patch(f"{_NODE_MODULE}.srgb_uint8_to_linear") as mock_srgb_to_linear,
             pytest.raises(ValueError, match="no longer supported"),
         ):
             _render_channels(rgb, alpha, coverage, framing, _background((200, 60, 40)), None, "filmic")

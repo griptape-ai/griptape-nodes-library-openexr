@@ -56,7 +56,6 @@ from griptape_nodes_openexr.exr.sequence_helpers import (
 from griptape_nodes_openexr.exr.tone_mapping import (
     EV_MAX,
     EV_MIN,
-    TONE_CHOICES,
     TONE_RAW,
     TONE_REC709,
     TONE_REC1886,
@@ -90,13 +89,6 @@ _ENCODING_TRC_VALUES = {
     # No exact tag exists for gamma 2.4; bt709 is the closest available.
     TONE_REC1886.lower(): "bt709",
     TONE_RAW.lower(): "linear",
-}
-# Keyed by every choice. An ACES choice writes Rec.709 primaries with its base
-# choice's encoding, so it carries that choice's tag.
-_FFMPEG_TRC_VALUES = {
-    tone.lower(): _ENCODING_TRC_VALUES[encoding]
-    for tone in TONE_CHOICES
-    if (encoding := display_encoding(tone)) is not None
 }
 _DEFAULT_TRC = "bt709"
 

@@ -1256,10 +1256,17 @@ class TestVideoColourTags:
 
     def test_every_choice_maps_to_an_accepted_value(self) -> None:
         from griptape_nodes_openexr.exr.tone_mapping import TONE_CHOICES
-        from griptape_nodes_openexr.nodes.exr_sequence_to_preview import _FFMPEG_TRC_VALUES, color_trc_for
+        from griptape_nodes_openexr.nodes.exr_sequence_to_preview import color_trc_for
 
-        accepted = set(_FFMPEG_TRC_VALUES.values())
-        for tone in TONE_CHOICES:
-            # Every choice must have an explicit entry, not reach the fallback.
-            assert tone.lower() in _FFMPEG_TRC_VALUES
-            assert color_trc_for(tone) in accepted
+        expected = {
+            "Linear sRGB to sRGB": "iec61966-2-1",
+            "Linear sRGB to rec709": "bt709",
+            "Linear sRGB to rec1886": "bt709",
+            "raw": "linear",
+            "ACEScg to sRGB": "iec61966-2-1",
+            "ACEScg to rec709": "bt709",
+            "ACES2065-1 to sRGB": "iec61966-2-1",
+        }
+        assert set(expected) == set(TONE_CHOICES)
+        for tone, transfer in expected.items():
+            assert color_trc_for(tone) == transfer
