@@ -8,13 +8,12 @@ from pathlib import Path
 
 import pytest
 
-_DATA_DIR = Path(__file__).parent / "data"
-_MARKER = _DATA_DIR / "infinity_attributes.exr"
+from tests.generate_fixtures import FIXTURES, OUT
 
 
 @pytest.fixture(scope="session", autouse=True)
 def ensure_fixtures() -> None:
-    if _MARKER.exists():
+    if all((OUT / name).exists() for name, _ in FIXTURES):
         return
 
     result = subprocess.run(
