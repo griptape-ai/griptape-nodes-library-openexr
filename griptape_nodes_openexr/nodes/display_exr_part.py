@@ -21,12 +21,9 @@ from griptape_nodes_openexr.exr.display_window import (
 )
 from griptape_nodes_openexr.exr.exr_header_artifact import EXRPartArtifact
 from griptape_nodes_openexr.exr.ocio_helpers import (
-    COLOR_MODE_BASIC,
-    COLOR_MODE_OCIO,
-    ColorParamsProtocol,
     add_color_mode_parameters,
     handle_color_mode_change,
-    read_tone_mapping,
+    read_color_settings,
 )
 from griptape_nodes_openexr.exr.rendering import render_part_png
 from griptape_nodes_openexr.exr.tone_mapping import EV_MAX, EV_MIN
@@ -167,17 +164,10 @@ class DisplayEXRPart(SuccessFailureNode):
         alpha_channel = select_alpha_channel(channel_names, selected)
 
         ev = float(self.get_parameter_value(self._exposure_param.name) or 0.0)
-        tone_mapping = read_tone_mapping(self, self._tone_mapping_param)
-        color_mode = str(self.get_parameter_value(self._color_mode_param.name) or COLOR_MODE_BASIC)
-
-        color_params: ColorParamsProtocol | None = None
-        if color_mode == COLOR_MODE_OCIO:
-            color_params = self.get_parameter_value(self._color_params_param.name)  # type: ignore[assignment]
-            if color_params is None:
-                self._on_fail_handler("OCIO mode requires a connected color_params artifact.")
-                return
-
         try:
+            _, tone_mapping, color_params = read_color_settings(
+                self, self._color_mode_param, self._tone_mapping_param, self._color_params_param
+            )
             window_mode = validate_window_mode(str(self.get_parameter_value(self._window_mode_param.name)))
             framing = WindowFraming.for_header(window_mode, part.header)
             png_bytes, tone_mode = render_part_png(

@@ -42,12 +42,11 @@ from griptape_nodes_openexr.exr.display_window import (
 from griptape_nodes_openexr.exr.exr_io import build_rgb_array, load_exr_channels
 from griptape_nodes_openexr.exr.exr_types import WindowCoordinates
 from griptape_nodes_openexr.exr.ocio_helpers import (
-    COLOR_MODE_OCIO,
     ColorParamsProtocol,
     add_color_mode_parameters,
     apply_color_management,
     handle_color_mode_change,
-    read_tone_mapping,
+    read_color_settings,
 )
 from griptape_nodes_openexr.exr.sequence_helpers import (
     resolve_sequence_path,
@@ -341,6 +340,14 @@ class EXRSequenceToPreview(SuccessFailureNode):
         self._clear_execution_status()
         self.parameter_output_values[self._video_param.name] = None
 
+        try:
+            _, tone_mapping, color_params = read_color_settings(
+                self, self._color_mode_param, self._tone_mapping_param, self._color_params_param
+            )
+        except ValueError as e:
+            self._on_fail(str(e))
+            return
+
         # --- Resolve sequence ---
         raw = self.get_parameter_value(self._sequence_param.name)
         resolved = await to_thread(resolve_sequence_path, raw)
@@ -359,8 +366,6 @@ class EXRSequenceToPreview(SuccessFailureNode):
         ev = float(self.get_parameter_value(self._exposure_param.name))
         part_index = int(self.get_parameter_value(self._part_index_param.name))
         frame_rate = float(self.get_parameter_value(self._frame_rate_param.name))
-        color_mode = str(self.get_parameter_value(self._color_mode_param.name))
-        tone_mapping = read_tone_mapping(self, self._tone_mapping_param)
         threads = int(self.get_parameter_value(self._threads_param.name))
         fmt = str(self.get_parameter_value(self._format_param.name))
         missing_frames = str(self.get_parameter_value(self._missing_frames_param.name))
@@ -373,13 +378,6 @@ class EXRSequenceToPreview(SuccessFailureNode):
         except (ValueError, RuntimeError) as e:
             self._on_fail(str(e))
             return
-
-        color_params: ColorParamsProtocol | None = None
-        if color_mode == COLOR_MODE_OCIO:
-            color_params = self.get_parameter_value(self._color_params_param.name)  # type: ignore[assignment]
-            if color_params is None:
-                self._on_fail("OCIO mode requires a connected color_params artifact.")
-                return
 
         logger.info("%s: encoding %d EXR frames at %.1f fps (%d thread(s))", self.name, total, frame_rate, threads)
 

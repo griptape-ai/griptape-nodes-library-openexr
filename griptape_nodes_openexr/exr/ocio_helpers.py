@@ -142,6 +142,29 @@ def read_tone_mapping(node: BaseNode, tone_mapping_param: ParameterString) -> st
     return _convert_tone_mapping_param(str(raw) if raw is not None else "")
 
 
+def read_color_settings(
+    node: BaseNode,
+    color_mode_param: ParameterString,
+    tone_mapping_param: ParameterString,
+    color_params_param: Parameter,
+) -> tuple[str, str, ColorParamsProtocol | None]:
+    """Resolve execution colour settings, validating basic mode before source I/O.
+
+    OCIO ignores the hidden tone mapping value and requires a connected artifact.
+    Call within the node's failure handler boundary.
+    """
+    color_mode = str(node.get_parameter_value(color_mode_param.name) or COLOR_MODE_BASIC)
+    tone_mapping = read_tone_mapping(node, tone_mapping_param)
+    color_params: ColorParamsProtocol | None = None
+    if color_mode == COLOR_MODE_OCIO:
+        color_params = node.get_parameter_value(color_params_param.name)  # type: ignore[assignment]
+        if color_params is None:
+            raise ValueError("OCIO mode requires a connected color_params artifact.")
+    else:
+        tone_mapping = validate_tone_mapping(tone_mapping)
+    return color_mode, tone_mapping, color_params
+
+
 @overload
 def add_color_mode_parameters(
     node: BaseNode,

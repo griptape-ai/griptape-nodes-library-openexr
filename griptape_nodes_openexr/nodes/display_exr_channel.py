@@ -29,13 +29,11 @@ from griptape_nodes_openexr.exr.exr_header_artifact import EXRChannelArtifact
 from griptape_nodes_openexr.exr.exr_io import load_slot_sources
 from griptape_nodes_openexr.exr.icc_profiles import profile_for_tone_mapping
 from griptape_nodes_openexr.exr.ocio_helpers import (
-    COLOR_MODE_BASIC,
-    COLOR_MODE_OCIO,
     ColorParamsProtocol,
     add_color_mode_parameters,
     apply_color_management,
     handle_color_mode_change,
-    read_tone_mapping,
+    read_color_settings,
 )
 from griptape_nodes_openexr.exr.rendering import ndarray_to_png
 from griptape_nodes_openexr.exr.tone_mapping import (
@@ -252,21 +250,12 @@ class DisplayEXRChannel(SuccessFailureNode):
         alignment_policy = str(self.get_parameter_value(self._alignment_param.name))
         frame_reference = str(self.get_parameter_value(self._frame_reference_param.name))
         ev = float(self.get_parameter_value(self._exposure_param.name) or 0.0)
-        tone_mapping = read_tone_mapping(self, self._tone_mapping_param)
         embed_color_profile = bool(self.get_parameter_value(self._embed_color_profile_param.name))
-        color_mode = str(self.get_parameter_value(self._color_mode_param.name) or COLOR_MODE_BASIC)
-
-        color_params: ColorParamsProtocol | None = None
-        if color_mode == COLOR_MODE_OCIO:
-            color_params = self.get_parameter_value(self._color_params_param.name)  # type: ignore[assignment]
-            if color_params is None:
-                self._on_fail_handler("OCIO mode requires a connected color_params artifact.")
-                return
-
         try:
+            _, tone_mapping, color_params = read_color_settings(
+                self, self._color_mode_param, self._tone_mapping_param, self._color_params_param
+            )
             channel_alignment.resolve_reference(all_slots, alignment_policy, frame_reference, window_mode)
-            if color_params is None:
-                tone_mapping = validate_tone_mapping(tone_mapping)
             limit = render_limits.get_render_limit()
             sources = load_slot_sources(all_slots)
             assembly = channel_alignment.assemble_channels(

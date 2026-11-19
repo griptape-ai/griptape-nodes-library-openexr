@@ -44,12 +44,10 @@ from griptape_nodes_openexr.exr.display_window import (
 from griptape_nodes_openexr.exr.exr_header_artifact import EXRChannelArtifact, EXRPartArtifact
 from griptape_nodes_openexr.exr.exr_io import scan_exr_header
 from griptape_nodes_openexr.exr.ocio_helpers import (
-    COLOR_MODE_BASIC,
-    COLOR_MODE_OCIO,
     ColorParamsProtocol,
     add_color_mode_parameters,
     handle_color_mode_change,
-    read_tone_mapping,
+    read_color_settings,
 )
 from griptape_nodes_openexr.exr.rendering import render_part_png
 from griptape_nodes_openexr.exr.sequence_helpers import resolve_sequence_path, sequence_path_parameter
@@ -684,13 +682,23 @@ class ReadEXR(SuccessFailureNode):
         """
         self._clear_execution_status()
 
+        try:
+            color_mode, tone_mapping, color_params = read_color_settings(
+                self, self._color_mode_param, self._tone_mapping_param, self._color_params_param
+            )
+        except ValueError as e:
+            self._on_fail(str(e))
+            return
+
         scan = await self._aresolve_scan()
         if scan is None:
             return
 
         is_sequence = self._publish_sequence_info(scan)
 
-        plan = self._plan_frame(scan, is_sequence=is_sequence)
+        plan = self._plan_frame(
+            scan, is_sequence=is_sequence, color_mode=color_mode, tone_mapping=tone_mapping, color_params=color_params
+        )
         if plan is None:
             return
 
@@ -770,7 +778,15 @@ class ReadEXR(SuccessFailureNode):
         self.parameter_output_values[self._frame_count_param.name] = len(sequence.entries)
         return is_sequence
 
-    def _plan_frame(self, scan: ScanState, *, is_sequence: bool) -> _FramePlan | None:
+    def _plan_frame(
+        self,
+        scan: ScanState,
+        *,
+        is_sequence: bool,
+        color_mode: str,
+        tone_mapping: str,
+        color_params: ColorParamsProtocol | None,
+    ) -> _FramePlan | None:
         """Resolve frame, part and colour settings. Returns None after calling `_on_fail`."""
         try:
             window_mode = validate_window_mode(str(self.get_parameter_value(self._window_mode_param.name)))
@@ -790,14 +806,6 @@ class ReadEXR(SuccessFailureNode):
             self._on_fail(f"Part '{part_name}' is not in this file")
             return None
 
-        color_mode = str(self.get_parameter_value(self._color_mode_param.name) or COLOR_MODE_BASIC)
-        color_params: ColorParamsProtocol | None = None
-        if color_mode == COLOR_MODE_OCIO:
-            color_params = self.get_parameter_value(self._color_params_param.name)  # type: ignore[assignment]
-            if color_params is None:
-                self._on_fail("OCIO mode requires a connected color_params artifact.")
-                return None
-
         return _FramePlan(
             entry=entry,
             frame_note=frame_note,
@@ -810,7 +818,7 @@ class ReadEXR(SuccessFailureNode):
             window_mode=window_mode,
             exposure_ev=float(self.get_parameter_value(self._exposure_param.name) or 0.0),
             color_mode=color_mode,
-            tone_mapping=read_tone_mapping(self, self._tone_mapping_param),
+            tone_mapping=tone_mapping,
             embed_color_profile=bool(self.get_parameter_value(self._embed_color_profile_param.name)),
             color_params=color_params,
         )
