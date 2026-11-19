@@ -32,6 +32,7 @@ from griptape_nodes_openexr.exr.channel_selection import (
     default_layer,
     list_layers,
     order_channels_for_display,
+    resolve_layer,
     select_alpha_channel,
     select_display_channels,
 )
@@ -592,7 +593,11 @@ class ReadEXR(SuccessFailureNode):
         layer_choices = list_layers(channel_names)
         _set_choices(self._layer_param, layer_choices)
         current_layer = self.get_parameter_value(self._layer_param.name)
-        if current_layer not in layer_choices:
+        resolved_layer = resolve_layer(channel_names, str(current_layer or ""))
+        if resolved_layer in layer_choices:
+            if resolved_layer != current_layer:
+                self.set_parameter_value(self._layer_param.name, resolved_layer, emit_change=False)
+        else:
             fallback = default_layer(channel_names) or (layer_choices[0] if layer_choices else "")
             self.set_parameter_value(self._layer_param.name, fallback, emit_change=False)
         self._set_hidden(self._layer_param, hidden=len(layer_choices) <= 1)

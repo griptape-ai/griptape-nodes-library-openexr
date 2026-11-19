@@ -31,7 +31,7 @@ from griptape_nodes.retained_mode.events.os_events import (
 )
 from griptape_nodes.retained_mode.griptape_nodes import GriptapeNodes
 
-from griptape_nodes_openexr.exr.channel_selection import ROOT_LAYER
+from griptape_nodes_openexr.exr.channel_selection import RGBA_LAYER, ROOT_LAYER, ROOT_OTHER_LAYER
 from griptape_nodes_openexr.exr.exr_header_artifact import EXRChannelArtifact, EXRPartArtifact
 from griptape_nodes_openexr.exr.exr_types import (
     EXRChannelInfo,
@@ -484,8 +484,23 @@ class TestDropdowns:
     def test_single_layer_hides_the_layer_dropdown(self, harness: _Harness, tmp_path: Path) -> None:
         node = _make_node()
         node.set_parameter_value("path", str(_single_file(tmp_path)))
-        assert node._layer_choices() == [ROOT_LAYER]
+        assert node._layer_choices() == [RGBA_LAYER]
         assert _param(node, "layer").ui_options.get("hide") is True
+
+    def test_undotted_colour_and_non_colour_channels_are_separate_layers(
+        self, harness: _Harness, tmp_path: Path
+    ) -> None:
+        channel_names = ("A", "B", "G", "R", "Z")
+        harness.exr_data = _make_exr_data(_make_part("", channel_names))
+        harness.pixels = _make_pixels(channel_names)
+        node = _make_node()
+        node.set_parameter_value("path", str(_single_file(tmp_path)))
+        assert node._layer_choices() == [RGBA_LAYER, ROOT_OTHER_LAYER]
+        assert node.get_parameter_value("layer") == RGBA_LAYER
+        node.set_parameter_value("layer", ROOT_OTHER_LAYER)
+        asyncio.run(node.aprocess())
+        assert _was_successful(node) is True, _result_details(node)
+        assert harness.load_calls[-1][2] == ["Z"]
 
     def test_chosen_layer_drives_the_decoded_channels(self, harness: _Harness, tmp_path: Path) -> None:
         channel_names = ("beauty.R", "beauty.G", "beauty.B", "diffuse.R", "diffuse.G", "diffuse.B")
@@ -586,6 +601,19 @@ class TestRestoreBeforeScan:
         assert _was_successful(node) is True, _result_details(node)
         assert node.get_parameter_value("part_name") == "1: aovs"
         assert node.parameter_output_values["part"].name == "aovs"
+
+    def test_a_restored_root_layer_selects_the_rgba_layer(self, harness: _Harness, tmp_path: Path) -> None:
+        channel_names = ("A", "B", "G", "R", "Z", "depth.Z")
+        harness.exr_data = _make_exr_data(_make_part("", channel_names))
+        harness.pixels = _make_pixels(channel_names)
+        node = _make_node()
+        # A workflow saved while unprefixed channels were labeled (root).
+        node.set_parameter_value("layer", ROOT_LAYER, initial_setup=True)
+        node.set_parameter_value("path", str(_single_file(tmp_path)), initial_setup=True)
+        asyncio.run(node.aprocess())
+
+        assert _was_successful(node) is True, _result_details(node)
+        assert harness.load_calls[-1][2] == ["R", "G", "B", "A"]
 
 
 class TestSequence:
