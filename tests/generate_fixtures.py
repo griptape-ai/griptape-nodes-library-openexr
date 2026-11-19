@@ -208,21 +208,24 @@ def make_vector_attributes():
     OpenEXR.File(header, channels).write(str(OUT / "vector_attributes.exr"))
 
 
+# tests/conftest.py regenerates when any of these files is missing.
+FIXTURES = [
+    ("single_part_rgba.exr", make_single_part_rgba),
+    ("single_part_aovs.exr", make_single_part_aovs),
+    ("multi_part.exr", make_multi_part),
+    ("tiled.exr", make_tiled),
+    ("overscan.exr", make_overscan),
+    ("custom_attributes.exr", make_custom_attributes),
+    ("nuke_metadata.exr", make_nuke_metadata),
+    ("pixel_types.exr", make_pixel_types),
+    ("legacy_multipart.exr", make_legacy_multipart),
+    ("infinity_attributes.exr", make_infinity_attributes),
+    ("vector_attributes.exr", make_vector_attributes),
+]
+
+
 if __name__ == "__main__":
-    fixtures = [
-        ("single_part_rgba.exr", make_single_part_rgba),
-        ("single_part_aovs.exr", make_single_part_aovs),
-        ("multi_part.exr", make_multi_part),
-        ("tiled.exr", make_tiled),
-        ("overscan.exr", make_overscan),
-        ("custom_attributes.exr", make_custom_attributes),
-        ("nuke_metadata.exr", make_nuke_metadata),
-        ("pixel_types.exr", make_pixel_types),
-        ("legacy_multipart.exr", make_legacy_multipart),
-        ("infinity_attributes.exr", make_infinity_attributes),
-        ("vector_attributes.exr", make_vector_attributes),
-    ]
-    for name, fn in fixtures:
+    for name, fn in FIXTURES:
         fn()
         print(f"  wrote {OUT / name}")
     print("Done.")
