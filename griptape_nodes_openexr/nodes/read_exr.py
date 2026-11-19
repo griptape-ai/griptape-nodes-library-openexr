@@ -9,7 +9,7 @@ from concurrent.futures import Future
 from contextvars import ContextVar
 from copy import deepcopy
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, NamedTuple
+from typing import TYPE_CHECKING, Any, ClassVar, NamedTuple
 
 from griptape.artifacts import ImageUrlArtifact
 from griptape_nodes.common.macro_parser import MacroSyntaxError, ParsedMacro
@@ -70,7 +70,8 @@ if TYPE_CHECKING:
     from griptape_nodes_openexr.exr.exr_types import EXRData, EXRPart
 
 logger = logging.getLogger("griptape_nodes")
-_execution_generation: ContextVar[int | None] = ContextVar("read_exr_execution_generation", default=None)
+_execution_selection: ContextVar[tuple[Any, Any, str] | None] = ContextVar("read_exr_execution_selection", default=None)
+_execution_id: ContextVar[int | None] = ContextVar("read_exr_execution_id", default=None)
 
 # The provider's friendly name, matched case-insensitively by the artifact manager.
 _EXR_PROVIDER_NAME = "EXR"
@@ -174,10 +175,16 @@ class ReadEXR(SuccessFailureNode):
     decode pixels for the selected part regardless of what the setting says.
     """
 
+    # Edit-read scheduling is local to the editor. Execution derives selection
+    # freshness from parameter snapshots and never uses these fields to choose results.
+    attributes_outside_parameters: ClassVar[frozenset[str]] = frozenset(
+        {"_metadata_generation", "_metadata_dirty", "_pending_loop", "_pending_metadata", "_request_preview"}
+    )
+
     def __init__(self, name: str, metadata: dict[Any, Any] | None = None) -> None:
         super().__init__(name, metadata)
 
-        # Keyed on the resolved path, so a frame scrub reuses the scan.
+        # Latest adopted headers, used by the dropdowns and metadata outputs.
         self._scan: ScanState | None = None
         self._render: RenderState | None = None
         # The after_value_set scan runs as a background task so the setter can return.
@@ -186,6 +193,7 @@ class ReadEXR(SuccessFailureNode):
         self._control_selection: tuple[str, int] | None = None
         self._deleted = False
         self._metadata_generation = 0
+        self._execution_serial = 0
         self._pending_metadata: asyncio.Task[None] | Future[None] | None = None
         self._metadata_dirty = False
         self._adjusting_selection = False
@@ -431,9 +439,6 @@ class ReadEXR(SuccessFailureNode):
         if self._adjusting_selection:
             return
         if parameter.name in {self._path_param.name, self._frame_param.name, self._part_name_param.name}:
-            if parameter.name == self._path_param.name:
-                self._render = None
-                self._control_selection = None
             self._submit_metadata(preview=parameter.name == self._path_param.name)
 
     def _submit_metadata(self, *, preview: bool = False) -> None:
@@ -452,36 +457,45 @@ class ReadEXR(SuccessFailureNode):
         else:
             self._pending_metadata = asyncio.run_coroutine_threadsafe(coroutine, loop)
 
+    def _selection_values(self) -> tuple[Any, Any, str]:
+        return (
+            deepcopy(self.get_parameter_value(self._path_param.name)),
+            self.get_parameter_value(self._frame_param.name),
+            str(self.get_parameter_value(self._part_name_param.name) or ""),
+        )
+
     async def _read_current_selection(self) -> ScanState:
-        raw_path = deepcopy(self.get_parameter_value(self._path_param.name))
-        frame = self.get_parameter_value(self._frame_param.name)
-        part_choice = str(self.get_parameter_value(self._part_name_param.name) or "")
-        return await asyncio.to_thread(
+        raw_path, frame, part_choice = self._selection_values()
+        return await to_thread(
             self._read_selection,
             raw_path,
             frame,
             part_choice,
-            reset_part=self._control_selection is None,
+            reset_part=self._control_selection is None or self._control_selection[0] != _scan_key_for(raw_path),
         )
 
+    def _metadata_is_current(self, generation: int) -> bool:
+        return not self._deleted and self._metadata_lifetime.active and generation == self._metadata_generation
+
     async def _refresh_metadata(self, generation: int, *, preview: bool) -> None:
-        if self._deleted or not self._metadata_lifetime.active or generation != self._metadata_generation:
+        if not self._metadata_is_current(generation):
             return
         try:
             scan = await self._read_current_selection()
         except Exception:
-            if not self._deleted and generation == self._metadata_generation:
+            if self._metadata_is_current(generation):
+                logger.warning("ReadEXR '%s': failed to refresh header metadata", self.name, exc_info=True)
                 self._scan = None
                 self._render = None
                 self.parameter_output_values.update(HEADER_METADATA_DEFAULTS)
                 self._metadata_dirty = False
             return
-        if self._deleted or not self._metadata_lifetime.active or generation != self._metadata_generation:
+        if not self._metadata_is_current(generation):
             return
         self._adopt_scan(scan)
         self._metadata_dirty = False
         if preview:
-            await asyncio.to_thread(self._request_canvas_preview)
+            await to_thread(self._request_canvas_preview)
 
     @staticmethod
     def _read_selection(raw_path: Any, frame: Any, part_choice: str, *, reset_part: bool) -> ScanState:
@@ -500,13 +514,13 @@ class ReadEXR(SuccessFailureNode):
             raise ValueError(f"Cannot read{note}: '{entry.path}' is missing or unreadable")
         data = read_metadata(entry.path)
         index = _part_index_for(data, part_choice)
-        if reset_part and (index is None or (part_choice and part_choice != _part_choices_for(data)[index])):
+        choices = _part_choices_for(data)
+        valid_part = index is not None and (not part_choice or part_choice == choices[index])
+        if not valid_part:
+            if not reset_part:
+                raise ValueError(f"Part '{part_choice}' is not in{note or ' this file'}")
             index = 0
-            part_choice = ""
-        if index is None:
-            raise ValueError(f"Part '{part_choice}' is not in{note or ' this file'}")
-        if part_choice and part_choice != _part_choices_for(data)[index]:
-            raise ValueError(f"Part '{part_choice}' is not in{note or ' this file'}")
+        assert index is not None
         return ScanState(_scan_key_for(raw_path), sequence, data, stamp, entry, note, index)
 
     async def wait_for_pending_scan(self) -> None:
@@ -521,6 +535,12 @@ class ReadEXR(SuccessFailureNode):
     async def _wait_for_metadata(self) -> None:
         while self._metadata_dirty and self._metadata_lifetime.active and not self._deleted:
             pending = self._pending_metadata
+            owner_loop = self._pending_loop
+            if pending is not None and not pending.done() and owner_loop is not None and not owner_loop.is_running():
+                # The old loop may restart. Retire its result before replacing the read.
+                self._metadata_generation += 1
+                self._pending_metadata = None
+                pending = None
             if pending is None or pending.cancelled():
                 pending = asyncio.create_task(
                     self._refresh_metadata(self._metadata_generation, preview=self._request_preview)
@@ -579,7 +599,7 @@ class ReadEXR(SuccessFailureNode):
             # Falsy means unset. ParameterInt's converter turns None and "" into 0 and
             # the default is 0, so 0 is the only falsy value that reaches here and an
             # explicit frame 0 cannot be told apart from an untouched slider. See
-            # _select_entry for why that costs nothing.
+            # _select_sequence_entry for why that costs nothing.
             if not self.get_parameter_value(self._frame_param.name):
                 self.set_parameter_value(self._frame_param.name, sequence.first, emit_change=False)
         else:
@@ -669,11 +689,31 @@ class ReadEXR(SuccessFailureNode):
         self._clear_metadata()
         super().after_node_deleted()
 
+    def _execution_is_current(self) -> bool:
+        execution_id = _execution_id.get()
+        return (
+            not self._deleted
+            and self._metadata_lifetime.active
+            and (execution_id is None or execution_id == self._execution_serial)
+        )
+
+    def _execution_selection_is_current(self) -> bool:
+        selection = _execution_selection.get()
+        return selection is None or selection == self._selection_values()
+
+    def _can_publish_execution(self) -> bool:
+        if not self._execution_is_current():
+            return False
+        if not self._execution_selection_is_current():
+            self._on_fail("Selection changed during execution")
+            return False
+        return True
+
     def _on_fail(self, details: str) -> None:
-        executing_generation = _execution_generation.get()
-        if executing_generation is not None and executing_generation != self._metadata_generation:
+        if not self._execution_is_current():
             return
-        self._clear_metadata()
+        if self._execution_selection_is_current():
+            self._clear_metadata()
         self._render = None
         self.parameter_output_values[self._image_param.name] = None
         self.parameter_output_values[self._part_param.name] = None
@@ -690,11 +730,14 @@ class ReadEXR(SuccessFailureNode):
     # ------------------------------------------------------------------
 
     async def aprocess(self) -> None:
-        token = _execution_generation.set(None)
+        self._execution_serial += 1
+        execution_token = _execution_id.set(self._execution_serial)
+        selection_token = _execution_selection.set(None)
         try:
             await self._aprocess_current()
         finally:
-            _execution_generation.reset(token)
+            _execution_selection.reset(selection_token)
+            _execution_id.reset(execution_token)
 
     async def _aprocess_current(self) -> None:
         """Resolve the parameters to one frame, render it, and publish the outputs.
@@ -706,8 +749,9 @@ class ReadEXR(SuccessFailureNode):
         scan = await self._aresolve_scan()
         if scan is None:
             return
-        generation = self._metadata_generation
-        _execution_generation.set(generation)
+        # Adopting headers may initialise the frame and part controls. Compare
+        # subsequent edits against those canonical parameter values.
+        _execution_selection.set(self._selection_values())
 
         is_sequence = self._publish_sequence_info(scan)
 
@@ -745,7 +789,7 @@ class ReadEXR(SuccessFailureNode):
         rendered = await self._arender_png(plan, selected, alpha_channel)
         if rendered is None:
             return
-        if self._deleted or not self._metadata_lifetime.active or generation != self._metadata_generation:
+        if not self._can_publish_execution():
             return
         png_bytes, tone_mode = rendered
 
@@ -769,14 +813,13 @@ class ReadEXR(SuccessFailureNode):
     async def _aresolve_scan(self) -> ScanState | None:
         """Read fresh headers for execution independently of edit-time reads."""
         self._clear_metadata()
-        generation = self._metadata_generation
+        _execution_selection.set(self._selection_values())
         try:
             scan = await self._read_current_selection()
         except Exception as error:
-            if not self._deleted and generation == self._metadata_generation:
-                self._on_fail(str(error))
+            self._on_fail(str(error))
             return None
-        if self._deleted or not self._metadata_lifetime.active or generation != self._metadata_generation:
+        if not self._can_publish_execution():
             return None
         self._adopt_scan(scan)
         return scan
@@ -977,11 +1020,6 @@ class ReadEXR(SuccessFailureNode):
             self.parameter_output_values[name] = value
         self.publish_update_to_parameter(self._image_param.name, outputs[self._image_param.name])
 
-    def _select_entry(self, sequence: Sequence, *, is_sequence: bool) -> tuple[SequenceEntry | None, str]:
-        return _select_sequence_entry(
-            sequence, self.get_parameter_value(self._frame_param.name), is_sequence=is_sequence
-        )
-
 
 def _select_sequence_entry(
     sequence: Sequence, requested: Any, *, is_sequence: bool
@@ -1086,10 +1124,6 @@ def _scan_key_for(raw_path: Any) -> str:
             return str(entries[0].get("path", "")) if entries else ""
         return _sequence_scan_key(str(raw_path.get("directory") or ""), str(pattern), entries)
     return str(raw_path).strip()
-
-
-def _describe_path(raw_path: Any) -> str:
-    return _scan_key_for(raw_path) or "<empty>"
 
 
 def _part_choices_for(exr_data: EXRData) -> list[str]:

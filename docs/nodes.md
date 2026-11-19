@@ -60,12 +60,16 @@ Python callers can await `wait_for_pending_scan()` to inspect refreshed metadata
 setters with no running host loop defer their read until that wait or node execution.
 Running the node updates metadata for the frame and part actually rendered.
 A failed execution clears all ten outputs to the defaults in the table, so metadata from a
-previous successful read does not survive a failed run.
+previous successful read does not survive a failed run. If the selection changes during a run,
+that run follows the Failed control output and discards its image results. Metadata refreshed
+for the newer selection is preserved. Completions after node deletion or library unload cannot
+publish outputs or status.
 
 Header reads currently run in a thread in the hosting process. OpenEXR holds the GIL during
 file opening, so slow storage can still stall Python execution in that host. Rapid edits and
 execution may start overlapping reads. Native reads already running cannot be cancelled;
-enough blocked reads can occupy the thread pool. Process isolation
+cancelling their caller waits for the worker to finish before cancellation propagates.
+Enough blocked reads can occupy the thread pool. Process isolation
 and reader cleanup are tracked in [#119](https://github.com/griptape-ai/griptape-nodes-library-openexr/issues/119).
 
 `data_window` and `display_window` retain the source coordinates regardless of `window_mode`.

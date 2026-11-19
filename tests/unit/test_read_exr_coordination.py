@@ -300,11 +300,21 @@ async def test_selection_change_during_render_does_not_update_old_outputs(harnes
     assert node._render is None
     assert node._scan is not None
     assert node._scan.key == str(second)
+    assert node.parameter_output_values["was_successful"] is False
+    expected_details = "old frame render failed" if fails else "Selection changed during execution"
+    assert expected_details in node.parameter_output_values["result_details"]
+    assert node.get_next_control_output() is node.failure_output
+    assert node.parameter_output_values["compression"] == "ZIP_COMPRESSION"
+    for name in ("image", "part", "channels"):
+        assert node.parameter_output_values[name] is None
 
 
 @pytest.mark.parametrize("during_execution", [False, True])
+@pytest.mark.parametrize("fails", [False, True])
 @pytest.mark.asyncio
-async def test_node_deletion_during_read_prevents_output(harness, tmp_path: Path, during_execution: bool) -> None:
+async def test_node_deletion_during_read_prevents_output(
+    harness, tmp_path: Path, during_execution: bool, fails: bool
+) -> None:
     from griptape_nodes_openexr.exr.header_metadata import HEADER_METADATA_DEFAULTS
 
     node = _make_node()
@@ -316,6 +326,8 @@ async def test_node_deletion_during_read_prevents_output(harness, tmp_path: Path
         started.set()
         try:
             assert release.wait(5), "deleted node's read was not released"
+            if fails:
+                raise RuntimeError("deleted node read failed")
             return harness.scan_exr_header(path)
         finally:
             finished.set()
