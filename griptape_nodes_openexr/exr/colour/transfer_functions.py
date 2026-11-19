@@ -19,6 +19,7 @@ class PiecewiseTransferCurve:
     offset: float
 
 
+# Colour-standard acknowledgements: THIRD_PARTY_NOTICES.md.
 # IEC 61966-2-1 sRGB encoding: linear toe followed by the 1/2.4 power segment.
 SRGB = PiecewiseTransferCurve(
     linear_cutoff=0.0031308,

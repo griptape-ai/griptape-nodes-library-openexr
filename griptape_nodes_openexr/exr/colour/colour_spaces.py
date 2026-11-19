@@ -22,6 +22,10 @@ class RGBColourSpace:
     white: Chromaticity
 
 
+# Source attribution and licence text: THIRD_PARTY_NOTICES.md and licenses/.
+# ACES coordinates are reproduced from the ACES documentation at revision
+# ef03499b58a349de4d09c4c739742dab4ca61122, Copyright Contributors to the ACES Documentation,
+# licensed CC-BY-4.0. Numeric coordinates are unchanged; matrices are calculated below.
 # ACES2065-1 (AP0): SMPTE ST 2065-1, colour-space chromaticities.
 # https://docs.acescentral.com/encodings/aces2065-1/ (Chromaticities table)
 # ACEScg (AP1): Academy S-2014-004, colour-space chromaticities.

@@ -118,6 +118,13 @@ images are never resized to fit. It does not limit Read EXR, Display EXR Part or
 source EXR decoding. See [render limits and memory](docs/troubleshooting.md#render-limits-and-memory)
 before raising it.
 
+## Colour-Source Attribution
+
+See [Third-party notices](THIRD_PARTY_NOTICES.md) for the ACES documentation attribution,
+colour-standard references and included licence text. Colour conversions and lookup tables are
+calculated by the library. The basic ACES choices include no ACES output transform and carry no
+certification or endorsement claim.
+
 ## Links
 
 - [Documentation index](docs/README.md)
