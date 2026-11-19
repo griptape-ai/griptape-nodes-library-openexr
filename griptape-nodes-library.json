@@ -58,7 +58,7 @@
         "category": "exr",
         "description": "Deprecated. Use Read EXR for new file-reading workflows. Missing functionality is being migrated to Read EXR; Load EXR remains available during migration.",
         "deprecation": {
-          "deprecation_message": "Use Read EXR for new file-reading workflows. We are migrating missing functionality to Read EXR. Both load nodes remain available during migration, with no scheduled removal release. Keep Load EXR for header-only inspection, metadata outputs, all-parts lists and named part/channel connections until their replacements are available. See the README migration guide."
+          "deprecation_message": "Use Read EXR for new file-reading workflows. We are migrating missing functionality to Read EXR. Both load nodes remain available during migration, with no scheduled removal release. Keep Load EXR for header-only inspection, metadata outputs, all-parts lists and named part/channel connections until their replacements are available. See the migration guide in docs/migration.md."
         },
         "declarations": [
           { "type": "lifecycle_stage", "stage": "DEPRECATED" }
@@ -75,7 +75,7 @@
         "category": "exr",
         "description": "Deprecated. Use Read EXR for new sequence-reading workflows. Missing functionality is being migrated to Read EXR; Load EXR Sequence remains available during migration.",
         "deprecation": {
-          "deprecation_message": "Use Read EXR for new sequence-reading workflows: connect Sequence to path and drive frame with actual frame numbers. We are migrating missing functionality to Read EXR. Both load nodes remain available during migration, with no scheduled removal release. Keep Load EXR Sequence for per-frame descriptor lists, mismatch validation and parallel header-only scans until their replacements are available. See the README migration guide."
+          "deprecation_message": "Use Read EXR for new sequence-reading workflows: connect Sequence to path and drive frame with actual frame numbers. We are migrating missing functionality to Read EXR. Both load nodes remain available during migration, with no scheduled removal release. Keep Load EXR Sequence for per-frame descriptor lists, mismatch validation and parallel header-only scans until their replacements are available. See the migration guide in docs/migration.md."
         },
         "declarations": [
           { "type": "lifecycle_stage", "stage": "DEPRECATED" }

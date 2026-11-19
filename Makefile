@@ -3,7 +3,7 @@ MAKEFLAGS += --no-print-directory
 
 LIBRARY_JSON := griptape-nodes-library.json
 # CHANGELOG.md is written by scripts/changelog.py, whose format mdformat would rewrite.
-MARKDOWN := $(filter-out CHANGELOG.md,$(wildcard *.md))
+MARKDOWN := $(filter-out CHANGELOG.md,$(wildcard *.md docs/*.md))
 
 # Dev tooling lives in .venv-dev, away from the .venv the engine builds beside the manifest.
 # See "Two virtual environments" in CONTRIBUTING.md for why they must stay apart.

@@ -14,7 +14,7 @@ To install all dependencies including core and extras:
 make install
 ```
 
-### Two virtual environments
+### Two Virtual Environments
 
 A checkout holds two environments beside `griptape-nodes-library.json`:
 
@@ -31,7 +31,7 @@ The Makefile sets `UV_PROJECT_ENVIRONMENT`, so `make` targets use the right one.
 UV_PROJECT_ENVIRONMENT=.venv-dev uv run pytest tests/unit
 ```
 
-### Migrating an existing checkout
+### Migrating An Existing Checkout
 
 An existing checkout may hold developer tools in `.venv`, from a plain `uv sync` or an older Makefile. Running `make install/dev` does not update an IDE's interpreter or remove that environment.
 
