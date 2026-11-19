@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 from static_ffmpeg import run  # type: ignore[import-untyped]
 
-from griptape_nodes_openexr.exr.tone_mapping import TONE_CHOICES
+from griptape_nodes_openexr.exr.colour.tone_mapping import TONE_CHOICES
 from griptape_nodes_openexr.nodes.exr_sequence_to_preview import (
     _MOVFLAGS,
     _PIX_FMT,

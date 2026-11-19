@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from griptape_nodes_openexr.exr.ocio_helpers import COLOR_MODE_BASIC, COLOR_MODE_OCIO, read_color_settings
+from griptape_nodes_openexr.exr.colour.ocio_helpers import COLOR_MODE_BASIC, COLOR_MODE_OCIO, read_color_settings
 from griptape_nodes_openexr.nodes.display_exr_channel import DisplayEXRChannel
 from griptape_nodes_openexr.nodes.display_exr_part import DisplayEXRPart
 from griptape_nodes_openexr.nodes.exr_sequence_to_preview import EXRSequenceToPreview
@@ -42,7 +42,10 @@ def test_tone_validation_precedes_source_io(node_type: type, tone: str, color_mo
     # Given a saved invalid tone and an I/O boundary that stops execution.
     with ExitStack() as stack:
         stack.enter_context(
-            patch("griptape_nodes_openexr.exr.ocio_helpers.find_colorspace_transform_request_type", return_value=None)
+            patch(
+                "griptape_nodes_openexr.exr.colour.ocio_helpers.find_colorspace_transform_request_type",
+                return_value=None,
+            )
         )
         node = node_type("early_validation")
         node.set_parameter_value("tone_mapping", tone, initial_setup=True)

@@ -16,16 +16,18 @@ import numpy as np
 import pytest
 from PIL import Image
 
-from griptape_nodes_openexr.exr.icc_profiles import (
+from griptape_nodes_openexr.exr.colour.icc_profiles import (
     PROFILE_DESCRIPTIONS,
     build_icc_profile,
     profile_for_tone_mapping,
 )
-from griptape_nodes_openexr.exr.tone_mapping import (
-    REC709_CUTOFF,
+from griptape_nodes_openexr.exr.colour.tone_mapping import (
     TONE_CHOICES,
     apply_tone_mapping,
     to_uint8,
+)
+from griptape_nodes_openexr.exr.colour.transfer_functions import (
+    REC709_CUTOFF,
 )
 
 ImageCms = pytest.importorskip("PIL.ImageCms", reason="Pillow built without littlecms")

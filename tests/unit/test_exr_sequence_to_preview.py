@@ -13,14 +13,14 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import pytest
 
-from griptape_nodes_openexr.exr.ocio_helpers import COLOR_MODE_BASIC, COLOR_MODE_OCIO
-from griptape_nodes_openexr.exr.tone_mapping import TONE_CHOICES, TONE_REC709
+from griptape_nodes_openexr.exr.colour.ocio_helpers import COLOR_MODE_BASIC, COLOR_MODE_OCIO
+from griptape_nodes_openexr.exr.colour.tone_mapping import TONE_CHOICES, TONE_REC709
 
 DATA = Path(__file__).parents[1] / "data"
 SINGLE_PART_RGBA = DATA / "single_part_rgba.exr"
 
 _NODE_MODULE = "griptape_nodes_openexr.nodes.exr_sequence_to_preview"
-_OCIO_MODULE = "griptape_nodes_openexr.exr.ocio_helpers"
+_OCIO_MODULE = "griptape_nodes_openexr.exr.colour.ocio_helpers"
 
 
 # ---------------------------------------------------------------------------
@@ -1255,7 +1255,7 @@ class TestVideoColourTags:
         assert color_trc_for("something-else") == "bt709"
 
     def test_every_choice_maps_to_an_accepted_value(self) -> None:
-        from griptape_nodes_openexr.exr.tone_mapping import TONE_CHOICES
+        from griptape_nodes_openexr.exr.colour.tone_mapping import TONE_CHOICES
         from griptape_nodes_openexr.nodes.exr_sequence_to_preview import color_trc_for
 
         expected = {

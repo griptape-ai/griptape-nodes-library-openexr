@@ -6,8 +6,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from griptape_nodes_openexr.exr.ocio_helpers import COLOR_MODE_BASIC, COLOR_MODE_OCIO, read_tone_mapping
-from griptape_nodes_openexr.exr.tone_mapping import (
+from griptape_nodes_openexr.exr.colour.ocio_helpers import COLOR_MODE_BASIC, COLOR_MODE_OCIO, read_tone_mapping
+from griptape_nodes_openexr.exr.colour.tone_mapping import (
     TONE_ACES2065_SRGB,
     TONE_ACESCG_REC709,
     TONE_ACESCG_SRGB,
@@ -22,7 +22,7 @@ from griptape_nodes_openexr.nodes.display_exr_part import DisplayEXRPart
 from griptape_nodes_openexr.nodes.exr_sequence_to_preview import EXRSequenceToPreview
 from griptape_nodes_openexr.nodes.read_exr import ReadEXR
 
-_OCIO_MODULE = "griptape_nodes_openexr.exr.ocio_helpers"
+_OCIO_MODULE = "griptape_nodes_openexr.exr.colour.ocio_helpers"
 
 _NODE_TYPES = [ReadEXR, DisplayEXRPart, DisplayEXRChannel, EXRSequenceToPreview]
 

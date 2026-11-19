@@ -8,14 +8,11 @@ from unittest.mock import patch
 import numpy as np
 import pytest
 
-from griptape_nodes_openexr.exr.tone_mapping import (
+from griptape_nodes_openexr.exr.colour.tone_mapping import (
     ACES2065_TO_REC709,
     ACESCG_TO_REC709,
-    REC709_CUTOFF,
     REC709_TO_ACES2065,
     REC709_TO_ACESCG,
-    SRGB_LINEAR_CUTOFF,
-    SRGB_TOE_SLOPE,
     TONE_ACES2065_SRGB,
     TONE_ACESCG_REC709,
     TONE_ACESCG_SRGB,
@@ -31,13 +28,18 @@ from griptape_nodes_openexr.exr.tone_mapping import (
     display_encoding,
     gamut_matrix,
     inverse_gamut_matrix,
+    to_uint8,
+    validate_tone_mapping,
+)
+from griptape_nodes_openexr.exr.colour.transfer_functions import (
+    REC709_CUTOFF,
+    SRGB_LINEAR_CUTOFF,
+    SRGB_TOE_SLOPE,
     linear_to_rec709,
     linear_to_rec1886,
     linear_to_srgb,
     srgb_to_linear,
     srgb_uint8_to_linear,
-    to_uint8,
-    validate_tone_mapping,
 )
 
 
@@ -754,9 +756,11 @@ class TestToePatchRegression:
 
     @pytest.mark.parametrize("curve", [linear_to_srgb, linear_to_rec709, srgb_to_linear])
     def test_curves_share_the_toe_patch(self, curve) -> None:
-        from griptape_nodes_openexr.exr import tone_mapping
+        from griptape_nodes_openexr.exr.colour import transfer_functions
 
-        with patch.object(tone_mapping, "_patch_linear_toe", wraps=tone_mapping._patch_linear_toe) as helper:
+        with patch.object(
+            transfer_functions, "_patch_linear_toe", wraps=transfer_functions._patch_linear_toe
+        ) as helper:
             curve(np.array([0.0, 0.5], dtype=np.float32))
         helper.assert_called_once()
 
@@ -768,8 +772,13 @@ class TestPiecewiseTransferPerformance:
     def test_skips_toe_patch_when_all_values_lie_above_cutoff(self, curve) -> None:
         arr = np.full((16, 16, 3), 0.5, dtype=np.float32)
         with (
-            patch("griptape_nodes_openexr.exr.tone_mapping.np.copyto", side_effect=AssertionError("no copyto")),
-            patch("griptape_nodes_openexr.exr.tone_mapping.np.where", side_effect=AssertionError("no where")),
+            patch(
+                "griptape_nodes_openexr.exr.colour.transfer_functions.np.copyto",
+                side_effect=AssertionError("no copyto"),
+            ),
+            patch(
+                "griptape_nodes_openexr.exr.colour.transfer_functions.np.where", side_effect=AssertionError("no where")
+            ),
         ):
             out = curve(arr)
         assert out.shape == arr.shape
@@ -788,7 +797,7 @@ class TestPiecewiseTransferPerformance:
             seen_mins.append(float(np.min(base)))
             return real_power(base, *args, **kwargs)
 
-        with patch("griptape_nodes_openexr.exr.tone_mapping.np.power", side_effect=_spy_power):
+        with patch("griptape_nodes_openexr.exr.colour.transfer_functions.np.power", side_effect=_spy_power):
             curve(arr)
 
         assert seen_mins

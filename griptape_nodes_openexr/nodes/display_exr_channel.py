@@ -19,6 +19,24 @@ from griptape_nodes.traits.options import Options
 from PIL import Image
 
 from griptape_nodes_openexr.exr import channel_alignment, render_limits
+from griptape_nodes_openexr.exr.colour.icc_profiles import profile_for_tone_mapping
+from griptape_nodes_openexr.exr.colour.ocio_helpers import (
+    ColorParamsProtocol,
+    add_color_mode_parameters,
+    apply_color_management,
+    handle_color_mode_change,
+    read_color_settings,
+)
+from griptape_nodes_openexr.exr.colour.tone_mapping import (
+    apply_exposure,
+    convert_gamut,
+    inverse_gamut_matrix,
+    to_uint8,
+    validate_tone_mapping,
+)
+from griptape_nodes_openexr.exr.colour.transfer_functions import (
+    srgb_uint8_to_linear,
+)
 from griptape_nodes_openexr.exr.display_window import (
     WINDOW_MODE_DISPLAY,
     WindowFraming,
@@ -27,23 +45,7 @@ from griptape_nodes_openexr.exr.display_window import (
 )
 from griptape_nodes_openexr.exr.exr_header_artifact import EXRChannelArtifact
 from griptape_nodes_openexr.exr.exr_io import load_slot_sources
-from griptape_nodes_openexr.exr.icc_profiles import profile_for_tone_mapping
-from griptape_nodes_openexr.exr.ocio_helpers import (
-    ColorParamsProtocol,
-    add_color_mode_parameters,
-    apply_color_management,
-    handle_color_mode_change,
-    read_color_settings,
-)
 from griptape_nodes_openexr.exr.rendering import ndarray_to_png
-from griptape_nodes_openexr.exr.tone_mapping import (
-    apply_exposure,
-    convert_gamut,
-    inverse_gamut_matrix,
-    srgb_uint8_to_linear,
-    to_uint8,
-    validate_tone_mapping,
-)
 from griptape_nodes_openexr.exr.viewer_launcher import handle_viewer_button_click
 
 if TYPE_CHECKING:

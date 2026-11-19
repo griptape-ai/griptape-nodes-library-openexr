@@ -51,7 +51,7 @@ _NODE_MODULE = "griptape_nodes_openexr.nodes.read_exr"
 # Decode and colour management live in the shared rendering helper, so that is
 # where they are patched from.
 _RENDER_MODULE = "griptape_nodes_openexr.exr.rendering"
-_OCIO_MODULE = "griptape_nodes_openexr.exr.ocio_helpers"
+_OCIO_MODULE = "griptape_nodes_openexr.exr.colour.ocio_helpers"
 
 WIDTH = 16
 HEIGHT = 10
@@ -366,7 +366,7 @@ class TestAProcessFailures:
         assert result.success is False
 
     def test_ocio_mode_without_color_params_fails_loudly(self, harness: _Harness, tmp_path: Path) -> None:
-        from griptape_nodes_openexr.exr.ocio_helpers import COLOR_MODE_OCIO
+        from griptape_nodes_openexr.exr.colour.ocio_helpers import COLOR_MODE_OCIO
 
         node = _make_node()
         node.set_parameter_value("path", str(_single_file(tmp_path)))

@@ -1,4 +1,4 @@
-"""Shared OCIO helpers — colour management dispatch without hard imports."""
+"""Dispatch colour management requests to loaded OCIO libraries without importing them."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ from griptape_nodes.node_library.library_registry import LibraryRegistry
 from griptape_nodes.retained_mode.griptape_nodes import GriptapeNodes
 from griptape_nodes.traits.options import Options
 
-from griptape_nodes_openexr.exr.tone_mapping import (
+from griptape_nodes_openexr.exr.colour.tone_mapping import (
     TONE_CHOICES,
     TONE_CURVES_DESCRIPTION,
     TONE_DEFAULT,
@@ -50,21 +50,20 @@ _cached_request_type: type | None = None
 
 
 def reset_colorspace_transform_request_type_cache() -> None:
-    """Forget a previously discovered ColorspaceTransformRequest type.
+    """Clear the cached ColorspaceTransformRequest type.
 
-    Only needed if a library is unloaded or replaced at runtime; newly loaded
-    libraries are picked up without this because misses are never cached.
+    Call when a library is unloaded or replaced at runtime. Newly loaded
+    libraries are discovered automatically because misses are never cached.
     """
     global _cached_request_type  # noqa: PLW0603
     _cached_request_type = None
 
 
 def find_colorspace_transform_request_type() -> type | None:
-    """Discover ColorspaceTransformRequest from any loaded library — no hard import.
+    """Find ColorspaceTransformRequest in the loaded libraries without importing them.
 
-    The full registry scan is memoised once a handler is found, since this runs
-    per frame for sequences. Misses are not cached, so a library loaded later in
-    the session is still discovered.
+    Cache a discovered handler to avoid scanning the registry for each sequence
+    frame. Misses are not cached, so libraries loaded later can still be found.
     """
     global _cached_request_type  # noqa: PLW0603
     if _cached_request_type is not None:
@@ -148,10 +147,10 @@ def read_color_settings(
     tone_mapping_param: ParameterString,
     color_params_param: Parameter,
 ) -> tuple[str, str, ColorParamsProtocol | None]:
-    """Resolve execution colour settings, validating basic mode before source I/O.
+    """Read execution colour settings and validate basic mode before source I/O.
 
     OCIO ignores the hidden tone mapping value and requires a connected artifact.
-    Call within the node's failure handler boundary.
+    Call inside the node's failure-handling block.
     """
     color_mode = str(node.get_parameter_value(color_mode_param.name) or COLOR_MODE_BASIC)
     tone_mapping = read_tone_mapping(node, tone_mapping_param)
@@ -200,26 +199,24 @@ def add_color_mode_parameters(
 ) -> tuple[ParameterString, ParameterString, Parameter, ParameterBool | None]:
     """Create and register the colour management parameters.
 
-    Registers color_mode, tone_mapping, color_params and, unless
-    `include_embed_profile` is False, embed_color_profile. A node writing
-    video passes False because YUV video players read CICP stream and
-    container tags rather than an RGB ICC profile.
+    Registers color_mode, tone_mapping and color_params. Also registers
+    embed_color_profile unless `include_embed_profile` is False. Video nodes
+    pass False because YUV players use CICP stream and container tags instead
+    of an RGB ICC profile.
 
     The mode defaults to 'basic'. Initial visibility follows the saved mode in
-    node.metadata, and then any color_mode value restored from a saved workflow.
-    Returns the parameter objects so the caller can store them as instance
-    attributes, with None in place of embed_color_profile when it was not
-    registered.
+    node.metadata, then any color_mode restored from a saved workflow.
+    Returns the parameter objects for the caller to store, with None in place
+    of embed_color_profile when it is omitted.
     """
     tone_mapping_name = "tone_mapping"
     color_params_name = "color_params"
     embed_profile_name = "embed_color_profile" if include_embed_profile else None
 
     def apply_visibility_for_value(value: Any) -> Any:
-        # Converters run on every set, including the initial_setup replay of a saved
-        # workflow, which skips after_value_set. A workflow saved while 'ocio' was the
-        # default stores color_mode but no "_color_mode" metadata, so this is what
-        # gives it OCIO visibility.
+        # Converters run during initial_setup when after_value_set is skipped.
+        # Workflows saved while 'ocio' was the default can have color_mode without
+        # "_color_mode" metadata. Use the restored value to set their visibility.
         apply_color_mode_visibility(
             node, value == COLOR_MODE_OCIO, tone_mapping_name, color_params_name, embed_profile_name
         )
@@ -243,12 +240,11 @@ def add_color_mode_parameters(
         # Shows saved aliases and mixed-case inputs under their canonical choice name.
         converters=[_convert_tone_mapping_param],
     )
-    # allow_custom keeps the dropdown but disables the Options converter, which
-    # rewrites any off-list value to choices[0]. A workflow saved with a retired
-    # name then keeps that name, and apply_tone_mapping reports it when the node
-    # runs. There is deliberately no validator: a saved value is restored with
-    # initial_setup=True, where a validator's error only reaches the log and the
-    # parameter stays at its default, so the workflow would render sRGB silently.
+    # allow_custom keeps the dropdown and disables the Options converter, which
+    # rewrites off-list values to choices[0]. Retired names survive loading so
+    # apply_tone_mapping can report them during execution. Validation is deferred:
+    # with initial_setup=True, a validator error only reaches the log and leaves
+    # the parameter at its default. The workflow would silently render as sRGB.
     tone_mapping_param.add_trait(Options(choices=TONE_CHOICES, allow_custom=True))
     node.add_parameter(tone_mapping_param)
 
@@ -307,11 +303,11 @@ def apply_color_mode_visibility(
     color_params_name: str,
     embed_profile_name: str | None,
 ) -> None:
-    """Show/hide the basic-mode and OCIO parameters to match the active color mode.
+    """Set basic-mode and OCIO parameter visibility for the active colour mode.
 
-    embed_color_profile follows tone_mapping: it describes a local display
-    transform, and OCIO output is already display-referred. It is None on a
-    node that writes video, which has no profile to embed.
+    embed_color_profile follows tone_mapping because it describes a local
+    display transform. OCIO output is already display-referred. Video nodes
+    pass None because they have no profile to embed.
     """
     if ocio_active:
         node.hide_parameter_by_name(tone_mapping_name)

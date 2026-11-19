@@ -15,11 +15,11 @@ from griptape_nodes.retained_mode.events.config_events import GetConfigValueResu
 from griptape_nodes.retained_mode.griptape_nodes import GriptapeNodes
 from PIL import Image
 
+from griptape_nodes_openexr.exr.colour.ocio_helpers import COLOR_MODE_OCIO
+from griptape_nodes_openexr.exr.colour.transfer_functions import linear_to_srgb, srgb_to_linear
 from griptape_nodes_openexr.exr.display_window import WINDOW_MODE_DATA, WindowFraming
 from griptape_nodes_openexr.exr.exr_io import ChannelSource
 from griptape_nodes_openexr.exr.exr_types import WindowCoordinates
-from griptape_nodes_openexr.exr.ocio_helpers import COLOR_MODE_OCIO
-from griptape_nodes_openexr.exr.tone_mapping import linear_to_srgb, srgb_to_linear
 from griptape_nodes_openexr.nodes.display_exr_channel import _composite, _render_channels
 
 _NODE_MODULE = "griptape_nodes_openexr.nodes.display_exr_channel"
@@ -145,7 +145,10 @@ class TestCompositeInLinearLight:
         assert np.all(out == 55)
 
     def test_background_decode_uses_lookup_table_without_runtime_power(self) -> None:
-        with patch("griptape_nodes_openexr.exr.tone_mapping.np.power", side_effect=AssertionError("no runtime pow")):
+        with patch(
+            "griptape_nodes_openexr.exr.colour.transfer_functions.np.power",
+            side_effect=AssertionError("no runtime pow"),
+        ):
             out = _render(1.0, 0.0, _background((128, 128, 128)), tone_mapping="raw")
         assert np.all(out == 55)
 

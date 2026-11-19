@@ -33,6 +33,17 @@ from griptape_nodes.retained_mode.griptape_nodes import GriptapeNodes
 from PIL import Image
 
 from griptape_nodes_openexr.exr.channel_selection import select_display_channels
+from griptape_nodes_openexr.exr.colour.ocio_helpers import COLOR_MODE_BASIC, COLOR_MODE_OCIO
+from griptape_nodes_openexr.exr.colour.tone_mapping import (
+    TONE_ACES2065_SRGB,
+    TONE_ACESCG_REC709,
+    TONE_ACESCG_SRGB,
+    TONE_CHOICES,
+    TONE_RAW,
+    TONE_REC709,
+    TONE_REC1886,
+    TONE_SRGB,
+)
 from griptape_nodes_openexr.exr.display_window import (
     WINDOW_MODE_DATA,
     WINDOW_MODE_DISPLAY,
@@ -43,17 +54,6 @@ from griptape_nodes_openexr.exr.display_window import (
 )
 from griptape_nodes_openexr.exr.exr_header_artifact import EXRChannelArtifact, EXRPartArtifact
 from griptape_nodes_openexr.exr.exr_io import scan_exr_header, write_exr_channels
-from griptape_nodes_openexr.exr.ocio_helpers import COLOR_MODE_BASIC, COLOR_MODE_OCIO
-from griptape_nodes_openexr.exr.tone_mapping import (
-    TONE_ACES2065_SRGB,
-    TONE_ACESCG_REC709,
-    TONE_ACESCG_SRGB,
-    TONE_CHOICES,
-    TONE_RAW,
-    TONE_REC709,
-    TONE_REC1886,
-    TONE_SRGB,
-)
 
 DATA = Path(__file__).parents[1] / "data"
 SINGLE_PART_RGBA = DATA / "single_part_rgba.exr"
@@ -64,7 +64,7 @@ _NODE_MODULE = "griptape_nodes_openexr.nodes.read_exr"
 # Decode and colour management live in the shared rendering helper, so that is
 # where they are patched from.
 _RENDER_MODULE = "griptape_nodes_openexr.exr.rendering"
-_OCIO_MODULE = "griptape_nodes_openexr.exr.ocio_helpers"
+_OCIO_MODULE = "griptape_nodes_openexr.exr.colour.ocio_helpers"
 
 
 def _sequence_dict(paths: list[Path], *, start: int) -> dict:

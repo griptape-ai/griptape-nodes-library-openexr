@@ -48,12 +48,16 @@ primaries to Rec.709 first and then applies one of the curves above:
 | `ACEScg to rec709`   | ACEScg (AP1)     | `rec709`        |
 | `ACES2065-1 to sRGB` | ACES2065-1 (AP0) | `sRGB`          |
 
-The conversion is a 3x3 matrix with a Bradford adaptation from the ACES white
-point to D65, so neutral greys stay neutral and render as they do with the
-matching base curve. Colours outside Rec.709 clip. This is a gamut conversion
-and display encode, not the ACES output transform (RRT and ODT): there is no
-tone curve or highlight roll-off, so it will not match an ACES view in Nuke or
-an OCIO ACES config. Use `ocio` mode for that.
+The conversion matrix is calculated in
+[`colour_spaces.py`](../griptape_nodes_openexr/exr/colour/colour_spaces.py) from the published
+[ACEScg](https://docs.acescentral.com/encodings/acescg/) and
+[ACES2065-1](https://docs.acescentral.com/encodings/aces2065-1/) chromaticities and the
+[ITU-R BT.709](https://www.itu.int/rec/R-REC-BT.709-6-201506-I/en) primaries and white point.
+A [Bradford adaptation](https://www.color.org/chadtag.xalter) maps the ACES reference white
+point to the destination D65 white point, so neutral greys stay neutral. Colours outside
+Rec.709 clip. Highlights clip at the display encoding stage. Use `ocio` mode for an ACES
+output transform with tone mapping and highlight roll-off; these basic conversions will
+produce a different image from an OCIO ACES view.
 
 No choice applies a tone curve, so scene values above 1.0 clip to white.
 Nuke's default viewer behaves the same way. Lower the `exposure` to bring

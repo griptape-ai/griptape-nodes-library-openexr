@@ -7,12 +7,12 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import pytest
 
-from griptape_nodes_openexr.exr.ocio_helpers import (
+from griptape_nodes_openexr.exr.colour.ocio_helpers import (
     apply_color_management,
     find_colorspace_transform_request_type,
     reset_colorspace_transform_request_type_cache,
 )
-from griptape_nodes_openexr.exr.tone_mapping import TONE_REC709, TONE_SRGB
+from griptape_nodes_openexr.exr.colour.tone_mapping import TONE_REC709, TONE_SRGB
 
 from .conftest import (
     _color_params,
@@ -24,7 +24,7 @@ from .conftest import (
     _rgb,
 )
 
-_OCIO_HELPERS = "griptape_nodes_openexr.exr.ocio_helpers"
+_OCIO_HELPERS = "griptape_nodes_openexr.exr.colour.ocio_helpers"
 
 
 # ---------------------------------------------------------------------------
