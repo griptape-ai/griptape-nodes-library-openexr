@@ -111,6 +111,14 @@ class TestToneMappingChoices:
         assert _tone_choices(node) == TONE_CHOICES
         assert {TONE_ACESCG_SRGB, TONE_ACESCG_REC709, TONE_ACES2065_SRGB} <= set(_tone_choices(node))
 
+    def test_tooltip_explains_input_primaries_and_clipping_without_nuke_comparison(self, node_type: type) -> None:
+        node = _make_node(node_type, ocio_available=False)
+        tooltip = node.get_parameter_by_name("tone_mapping").tooltip
+
+        assert "scene-linear RGB with Rec.709/sRGB primaries" in tooltip
+        assert "Values above 1.0 clip" in tooltip
+        assert "Nuke" not in tooltip
+
     @pytest.mark.parametrize("tone", TONE_CHOICES)
     def test_saved_choice_is_restored_unchanged(self, node_type: type, tone: str) -> None:
         # Saved values come back with initial_setup=True; existing names must keep loading as-is.

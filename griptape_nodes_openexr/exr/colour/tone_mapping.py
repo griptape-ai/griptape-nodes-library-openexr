@@ -55,9 +55,8 @@ _CANONICAL_TONES = {
 TONE_CURVES_DESCRIPTION = (
     "'Linear sRGB to sRGB' applies the sRGB transfer function; 'Linear sRGB to rec709' "
     "applies the BT.709 OETF; 'Linear sRGB to rec1886' applies BT.1886 (gamma 2.4); 'raw' "
-    "clamps to [0, 1] with no transfer function. These assume linear Rec.709/sRGB "
-    "primaries, match the sRGB, rec709, rec1886 and raw views in Nuke's default config, "
-    "and like that viewer clip scene values above 1.0. "
+    "clamps to [0, 1] with no transfer function. These choices expect scene-linear RGB with Rec.709/sRGB primaries. "
+    "Values above 1.0 clip. Lower exposure to bring highlights into range. "
     "'ACEScg to sRGB', 'ACEScg to rec709' and 'ACES2065-1 to sRGB' first convert ACES "
     "primaries to Rec.709, then apply the named encoding. That is a gamut conversion, "
     "not the ACES output transform, so highlights still clip. Use 'ocio' mode for a "
@@ -251,8 +250,7 @@ def apply_tone_mapping(rgb: np.ndarray, tone_mapping: str) -> np.ndarray:
     The base choices assume linear Rec.709/sRGB primaries. The ACES choices
     convert ACES primaries to Rec.709 first, then apply a base choice's
     encoding. Each choice applies a display transfer function that clips scene
-    values above 1.0, matching Nuke's default viewer. Use 'ocio' mode for tone
-    mapping with highlight roll-off.
+    values above 1.0. Use 'ocio' mode for tone mapping with highlight roll-off.
 
     Output is an 8-bit PNG with no embedded profile unless `embed_color_profile`
     is set, so by default viewers read it as sRGB. Choosing 'Linear sRGB to
