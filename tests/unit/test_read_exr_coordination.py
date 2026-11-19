@@ -309,6 +309,61 @@ async def test_selection_change_during_render_does_not_update_old_outputs(harnes
         assert node.parameter_output_values[name] is None
 
 
+@pytest.mark.parametrize("phase", ["read", "render"])
+@pytest.mark.parametrize("fails", [False, True])
+@pytest.mark.asyncio
+async def test_returning_to_original_selection_does_not_revive_execution(harness, tmp_path, phase, fails):
+    from tests.unit.test_read_exr import _RENDER_MODULE
+
+    # Given an execution blocked on A while fresh edit reads remain available.
+    node = _make_node()
+    first = _single_file(tmp_path)
+    second = tmp_path / "second.exr"
+    second.write_bytes(b"")
+    node.set_parameter_value("path", str(first))
+    await node.wait_for_pending_scan()
+    started, release = threading.Event(), threading.Event()
+    original = harness.scan_exr_header if phase == "read" else harness.load_exr_channels
+    blocked = False
+
+    def work(*args):
+        nonlocal blocked
+        if not blocked:
+            blocked = True
+            started.set()
+            assert release.wait(5), "execution was not released"
+            if fails:
+                raise RuntimeError("superseded execution failed")
+        return original(*args)
+
+    target = f"{_NODE_MODULE}.read_metadata" if phase == "read" else f"{_RENDER_MODULE}.load_exr_channels"
+    with patch(target, side_effect=work):
+        execution = asyncio.create_task(node.aprocess())
+        try:
+            assert await asyncio.to_thread(started.wait, 5)
+            # When the source moves A -> B -> A and the newer A read completes.
+            node.set_parameter_value("path", str(second))
+            await node.wait_for_pending_scan()
+            node.set_parameter_value("path", str(first))
+            await node.wait_for_pending_scan()
+            scan = node._scan
+            assert node.parameter_output_values["compression"] == "ZIP_COMPRESSION"
+        finally:
+            release.set()
+            await execution
+
+    # Then the old run fails without clearing the newer metadata or publishing pixels.
+    assert node._scan is scan
+    assert node.parameter_output_values["compression"] == "ZIP_COMPRESSION"
+    assert node.parameter_output_values["was_successful"] is False
+    details = "superseded execution failed" if fails else "Selection changed during execution"
+    assert details in node.parameter_output_values["result_details"]
+    assert node.get_next_control_output() is node.failure_output
+    assert harness.written == []
+    for name in ("image", "part", "channels"):
+        assert node.parameter_output_values[name] is None
+
+
 @pytest.mark.parametrize("during_execution", [False, True])
 @pytest.mark.parametrize("fails", [False, True])
 @pytest.mark.asyncio

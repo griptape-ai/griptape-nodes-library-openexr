@@ -72,6 +72,9 @@ if TYPE_CHECKING:
 logger = logging.getLogger("griptape_nodes")
 _execution_selection: ContextVar[tuple[Any, Any, str] | None] = ContextVar("read_exr_execution_selection", default=None)
 _execution_id: ContextVar[int | None] = ContextVar("read_exr_execution_id", default=None)
+_execution_selection_revision: ContextVar[int | None] = ContextVar(
+    "read_exr_execution_selection_revision", default=None
+)
 
 # The provider's friendly name, matched case-insensitively by the artifact manager.
 _EXR_PROVIDER_NAME = "EXR"
@@ -175,10 +178,17 @@ class ReadEXR(SuccessFailureNode):
     decode pixels for the selected part regardless of what the setting says.
     """
 
-    # Edit-read scheduling is local to the editor. Execution derives selection
-    # freshness from parameter snapshots and never uses these fields to choose results.
+    # Edit scheduling and selection revisions are local to this node. Execution
+    # checks both the revision and parameter snapshot to reject superseded work.
     attributes_outside_parameters: ClassVar[frozenset[str]] = frozenset(
-        {"_metadata_generation", "_metadata_dirty", "_pending_loop", "_pending_metadata", "_request_preview"}
+        {
+            "_metadata_generation",
+            "_metadata_dirty",
+            "_pending_loop",
+            "_pending_metadata",
+            "_request_preview",
+            "_selection_revision",
+        }
     )
 
     def __init__(self, name: str, metadata: dict[Any, Any] | None = None) -> None:
@@ -193,6 +203,7 @@ class ReadEXR(SuccessFailureNode):
         self._control_selection: tuple[str, int] | None = None
         self._deleted = False
         self._metadata_generation = 0
+        self._selection_revision = 0
         self._execution_serial = 0
         self._pending_metadata: asyncio.Task[None] | Future[None] | None = None
         self._metadata_dirty = False
@@ -439,6 +450,7 @@ class ReadEXR(SuccessFailureNode):
         if self._adjusting_selection:
             return
         if parameter.name in {self._path_param.name, self._frame_param.name, self._part_name_param.name}:
+            self._selection_revision += 1
             self._submit_metadata(preview=parameter.name == self._path_param.name)
 
     def _submit_metadata(self, *, preview: bool = False) -> None:
@@ -567,6 +579,8 @@ class ReadEXR(SuccessFailureNode):
 
     def _adopt_scan(self, scan: ScanState) -> None:
         """Update node controls and outputs from the current request only."""
+        if self._render is not None and self._render.key.scan_key != scan.key:
+            self._render = None
         self._scan = scan
         control_selection = (scan.key, scan.part_index)
         reset_layer = self._control_selection != control_selection
@@ -699,7 +713,10 @@ class ReadEXR(SuccessFailureNode):
 
     def _execution_selection_is_current(self) -> bool:
         selection = _execution_selection.get()
-        return selection is None or selection == self._selection_values()
+        revision = _execution_selection_revision.get()
+        return (revision is None or revision == self._selection_revision) and (
+            selection is None or selection == self._selection_values()
+        )
 
     def _can_publish_execution(self) -> bool:
         if not self._execution_is_current():
@@ -733,9 +750,11 @@ class ReadEXR(SuccessFailureNode):
         self._execution_serial += 1
         execution_token = _execution_id.set(self._execution_serial)
         selection_token = _execution_selection.set(None)
+        revision_token = _execution_selection_revision.set(None)
         try:
             await self._aprocess_current()
         finally:
+            _execution_selection_revision.reset(revision_token)
             _execution_selection.reset(selection_token)
             _execution_id.reset(execution_token)
 
@@ -814,6 +833,7 @@ class ReadEXR(SuccessFailureNode):
         """Read fresh headers for execution independently of edit-time reads."""
         self._clear_metadata()
         _execution_selection.set(self._selection_values())
+        _execution_selection_revision.set(self._selection_revision)
         try:
             scan = await self._read_current_selection()
         except Exception as error:

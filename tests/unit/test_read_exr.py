@@ -1371,6 +1371,37 @@ class TestViewerPath:
         assert result is not None
         assert result.success is False
 
+    @pytest.mark.parametrize("replace_source", [False, True])
+    def test_metadata_refresh_retires_only_a_different_source_render(
+        self, harness: _Harness, tmp_path: Path, replace_source: bool
+    ) -> None:
+        # Given a completed render of A.
+        node = _make_node()
+        first = _single_file(tmp_path)
+        second = tmp_path / "second.exr"
+        second.write_bytes(b"")
+        node.set_parameter_value("path", str(first))
+        asyncio.run(node.aprocess())
+        render = node._render
+        assert render is not None
+
+        # When metadata refreshes for B or for the same source A.
+        selected = second if replace_source else first
+        node.set_parameter_value("path", str(selected))
+        asyncio.run(node.wait_for_pending_scan())
+        assert node._scan is not None
+        assert node._scan.key == str(selected)
+
+        # Then the viewer cannot open A after adopting B; A retains its cache.
+        with patch(f"{_NODE_MODULE}.handle_viewer_button_click") as viewer:
+            node._on_open_viewer_click(MagicMock(), MagicMock())
+        viewer.assert_called_once_with(node.name, None if replace_source else str(first))
+        assert node._render is (None if replace_source else render)
+        renders = len(harness.load_calls)
+        asyncio.run(node.aprocess())
+        assert len(harness.load_calls) == renders + int(replace_source)
+        assert node.parameter_output_values["was_successful"] is True
+
     def test_a_cache_hit_keeps_the_viewer_on_the_rendered_frame(self, harness: _Harness, tmp_path: Path) -> None:
         paths = _frames(tmp_path, range(1001, 1006))
         harness.sequence = _make_sequence(paths, start=1001)
