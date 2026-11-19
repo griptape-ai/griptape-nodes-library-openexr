@@ -189,8 +189,8 @@ Display EXR Channel checks output and intermediate assembly sizes against `opene
 
 Saves a single-part EXR file from either an 8-bit image or EXR channel artifacts. Operates in two modes:
 
-- **Image input**: accepts an `ImageArtifact` or `ImageUrlArtifact` (8-bit PNG/JPEG), normalises pixel values from [0, 255] to [0.0, 1.0], and writes R, G, B channels.
-- **Channel input**: accepts up to four `EXRChannelArtifact` slots (R, G, B, A), loads their pixel arrays, and writes them preserving float precision. Mode B takes priority when any channel slot is connected.
+- **Mode A (image input)**: accepts an `ImageArtifact` or `ImageUrlArtifact` (8-bit PNG/JPEG), normalises pixel values from [0, 255] to [0.0, 1.0], and writes R, G, B channels.
+- **Mode B (channel input)**: accepts up to four `EXRChannelArtifact` slots (R, G, B, A), loads their pixel arrays, and writes them preserving float precision. Mode B takes priority when any channel slot is connected.
 
 **Inputs**
 
@@ -206,16 +206,16 @@ Saves a single-part EXR file from either an 8-bit image or EXR channel artifacts
 
 The collapsed **Metadata** group exposes optional header fields:
 
-| Parameter            | Description                                     |
-| -------------------- | ----------------------------------------------- |
-| `part_name`          | Name for this EXR part                          |
-| `pixel_aspect_ratio` | Pixel width/height ratio (default `1.0`)        |
-| `owner`              | Asset owner                                     |
-| `comments`           | Free-text comments                              |
-| `capture_date`       | Capture date (e.g. `2025-01-01T12:00:00`)       |
-| `software`           | Authoring application name                      |
-| `time_code`          | Editorial timecode (`HH:MM:SS:FF`)              |
-| `custom_attributes`  | Non-standard header attributes as a JSON object |
+| Parameter                     | Description                                     |
+| ----------------------------- | ----------------------------------------------- |
+| `metadata_part_name`          | Name for this EXR part                          |
+| `metadata_pixel_aspect_ratio` | Pixel width/height ratio (default `1.0`)        |
+| `metadata_owner`              | Asset owner                                     |
+| `metadata_comments`           | Free-text comments                              |
+| `metadata_capture_date`       | Capture date (e.g. `2025-01-01T12:00:00`)       |
+| `metadata_software`           | Authoring application name                      |
+| `metadata_time_code`          | Editorial timecode (`HH:MM:SS:FF`)              |
+| `metadata_custom`             | Non-standard header attributes as a JSON object |
 
 **Outputs**
 

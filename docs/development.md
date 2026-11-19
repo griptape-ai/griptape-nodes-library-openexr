@@ -16,7 +16,7 @@ Use `make install/dev` rather than `uv sync` directly. Development tooling belon
 ## Running Tests
 
 ```bash
-# Unit tests only (no EXR files required)
+# Unit tests only
 make test/unit
 
 # Integration tests (fixtures auto-generated on first run)
@@ -43,7 +43,7 @@ EXR fixtures are generated locally and are not committed to the repository. To g
 make test/fixtures
 ```
 
-The fixtures are also generated automatically the first time you run `pytest`. The `openexr` Python package (included in dev dependencies) is required:
+The fixtures are also generated automatically the first time you run `pytest`, unit tests included. The `openexr` Python package (included in dev dependencies) is required:
 
 ```bash
 make install/dev
@@ -51,13 +51,16 @@ make install/dev
 
 The fixture set covers:
 
-| File                    | Purpose                                                   |
-| ----------------------- | --------------------------------------------------------- |
-| `single_part_rgba.exr`  | Baseline single-part RGBA                                 |
-| `single_part_aovs.exr`  | Multi-layer AOVs (`beauty`, `diffuse`, `depth`, `normal`) |
-| `multi_part.exr`        | Three named parts with legacy channel naming              |
-| `tiled.exr`             | Tiled image with `TileDescription`                        |
-| `overscan.exr`          | Data window extends beyond display window (8px overscan)  |
-| `custom_attributes.exr` | Chromaticities, software, and non-standard attributes     |
-| `nuke_metadata.exr`     | Nuke-style custom binary blob attribute (`nuke/node`)     |
-| `legacy_multipart.exr`  | Multi-part where part name encodes the layer name         |
+| File                      | Purpose                                                   |
+| ------------------------- | --------------------------------------------------------- |
+| `single_part_rgba.exr`    | Baseline single-part RGBA                                 |
+| `single_part_aovs.exr`    | Multi-layer AOVs (`beauty`, `diffuse`, `depth`, `normal`) |
+| `multi_part.exr`          | Three named parts with legacy channel naming              |
+| `tiled.exr`               | Tiled image with `TileDescription`                        |
+| `overscan.exr`            | Data window extends beyond display window (8px overscan)  |
+| `custom_attributes.exr`   | Chromaticities, software, and non-standard attributes     |
+| `nuke_metadata.exr`       | Nuke-style custom binary blob attribute (`nuke/node`)     |
+| `pixel_types.exr`         | `HALF`, `FLOAT` and `UINT` channels                       |
+| `legacy_multipart.exr`    | Multi-part where part name encodes the layer name         |
+| `infinity_attributes.exr` | Custom float attributes with non-finite values            |
+| `vector_attributes.exr`   | Vector and matrix attributes (`V2f`, `V3f`, `M44f`)       |

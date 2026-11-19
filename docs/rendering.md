@@ -105,10 +105,11 @@ Choose `embed_color_profile` according to how you will use the output:
 The parameter is hidden in `ocio` colour mode, where the display/view
 transform already resolves to a display colorspace we cannot describe.
 
-**Video** is always tagged, and has no `embed_color_profile` parameter. An MP4
-cannot carry an ICC profile, so **EXR Sequence to Preview** writes Rec.709
+**Video** has no `embed_color_profile` parameter. An MP4 cannot carry an ICC
+profile, so in `basic` colour mode **EXR Sequence to Preview** writes Rec.709
 primaries and a matching transfer characteristic into the stream instead.
-Players use those tags; without them, the player guesses. In `ocio` colour mode the transfer tag is Rec.709, since the
-display/view transform resolves to a colorspace we cannot name.
+Players use those tags; without them, the player guesses. In `ocio` colour mode
+the video is left untagged, since the display/view transform resolves to a
+colorspace we cannot name.
 
 Alpha is included automatically when an alpha channel (`A`) is found in the part.
