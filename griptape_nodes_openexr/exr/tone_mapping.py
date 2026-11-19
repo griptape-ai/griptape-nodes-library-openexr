@@ -131,6 +131,23 @@ def _clamp_unit(arr: np.ndarray) -> np.ndarray:
     return out
 
 
+def _patch_linear_toe(
+    src: np.ndarray, toe: np.ndarray, output: np.ndarray, slope: np.float32, operation: np.ufunc
+) -> np.ndarray:
+    """Patch the linear segment, limiting temporary arrays when the toe is sparse."""
+    toe_count = int(np.count_nonzero(toe))
+    if not toe_count:
+        return output
+    with np.errstate(over="ignore", invalid="ignore"):
+        if toe_count * _SPARSE_TOE_DENOMINATOR < src.size:
+            output[toe] = operation(np.fmax(src[toe], np.float32(0.0)), slope)
+            return output
+        tmp = np.empty_like(src)
+        np.fmax(src, np.float32(0.0), out=tmp)
+        operation(tmp, slope, out=tmp)
+        return np.asarray(np.where(toe, tmp, output), dtype=np.float32)
+
+
 def _encode_piecewise(  # noqa: PLR0913
     arr: np.ndarray,
     *,
@@ -155,17 +172,7 @@ def _encode_piecewise(  # noqa: PLR0913
     encoded *= np.float32(gain)
     encoded -= np.float32(offset)
 
-    toe_count = int(np.count_nonzero(toe))
-    if toe_count:
-        with np.errstate(over="ignore", invalid="ignore"):
-            if toe_count * _SPARSE_TOE_DENOMINATOR < src.size:
-                encoded[toe] = np.fmax(src[toe], np.float32(0.0)) * slope_f32
-            else:
-                tmp = np.empty_like(src)
-                np.fmax(src, np.float32(0.0), out=tmp)
-                tmp *= slope_f32
-                encoded = np.asarray(np.where(toe, tmp, encoded), dtype=np.float32)
-    return encoded
+    return _patch_linear_toe(src, toe, encoded, slope_f32, np.multiply)
 
 
 def apply_exposure(arr: np.ndarray, ev: float) -> np.ndarray:
@@ -229,17 +236,7 @@ def srgb_to_linear(arr: np.ndarray) -> np.ndarray:
     linear /= np.float32(SRGB_GAIN)
     np.power(linear, np.float32(1.0 / SRGB_GAMMA), out=linear, dtype=np.float32)
 
-    toe_count = int(np.count_nonzero(toe))
-    if toe_count:
-        with np.errstate(over="ignore", invalid="ignore"):
-            if toe_count * _SPARSE_TOE_DENOMINATOR < src.size:
-                linear[toe] = np.fmax(src[toe], np.float32(0.0)) / slope_f32
-            else:
-                tmp = np.empty_like(src)
-                np.fmax(src, np.float32(0.0), out=tmp)
-                tmp /= slope_f32
-                linear = np.asarray(np.where(toe, tmp, linear), dtype=np.float32)
-    return linear
+    return _patch_linear_toe(src, toe, linear, slope_f32, np.divide)
 
 
 _SRGB_UINT8_TO_LINEAR = srgb_to_linear(np.arange(256, dtype=np.float32) / np.float32(255.0))

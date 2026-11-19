@@ -15,6 +15,7 @@ from griptape_nodes_openexr.exr.tone_mapping import (
     REC709_TO_ACES2065,
     REC709_TO_ACESCG,
     SRGB_LINEAR_CUTOFF,
+    SRGB_TOE_SLOPE,
     TONE_ACES2065_SRGB,
     TONE_ACESCG_REC709,
     TONE_ACESCG_SRGB,
@@ -704,6 +705,62 @@ class TestSrgbUint8ToLinear:
             srgb_uint8_to_linear(np.array([0.5], dtype=np.float32))
 
 
+class TestToePatchRegression:
+    @pytest.mark.parametrize("curve", [linear_to_srgb, linear_to_rec709, srgb_to_linear])
+    @pytest.mark.parametrize("toe_count", [1, 3, 4, 5, 64])
+    def test_preserves_float32_results_and_input(self, curve, toe_count: int) -> None:
+        # Given toe values on both sides of the sparse/dense threshold, including non-finite input.
+        cutoff = np.float32(
+            REC709_CUTOFF
+            if curve is linear_to_rec709
+            else SRGB_LINEAR_CUTOFF
+            if curve is linear_to_srgb
+            else SRGB_LINEAR_CUTOFF * SRGB_TOE_SLOPE
+        )
+        toe_values = np.array([np.nan, -np.inf, -1.0, 0.0, 1e-40, 0.001], dtype=np.float32)
+        source = np.full(64, 0.5, dtype=np.float32)
+        source[:toe_count] = np.resize(toe_values, toe_count)
+        if toe_count < 64:
+            source[-1] = np.inf
+        original = source.copy()
+        with np.errstate(invalid="ignore", over="ignore"):
+            toe = ~(source >= cutoff) if curve is linear_to_rec709 else ~(source > cutoff)
+            expected = np.fmin(np.fmax(source, cutoff), np.float32(1.0))
+            if curve is srgb_to_linear:
+                expected += np.float32(0.055)
+                expected /= np.float32(1.055)
+                np.power(expected, np.float32(2.4), out=expected)
+                toe_result = np.fmax(source, np.float32(0.0)) / np.float32(12.92)
+            else:
+                gamma, gain, offset, slope = (
+                    (0.45, 1.099, 0.099, 4.5) if curve is linear_to_rec709 else (1.0 / 2.4, 1.055, 0.055, 12.92)
+                )
+                np.power(expected, np.float32(gamma), out=expected)
+                expected *= np.float32(gain)
+                expected -= np.float32(offset)
+                toe_result = np.fmax(source, np.float32(0.0)) * np.float32(slope)
+            expected[toe] = toe_result[toe]
+
+        # When the transfer function runs.
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", RuntimeWarning)
+            actual = curve(source)
+
+        # Then the result is bit-exact float32 and the source is unchanged.
+        assert actual.dtype == np.float32
+        assert actual.shape == source.shape
+        np.testing.assert_array_equal(actual, expected)
+        np.testing.assert_array_equal(source, original)
+
+    @pytest.mark.parametrize("curve", [linear_to_srgb, linear_to_rec709, srgb_to_linear])
+    def test_curves_share_the_toe_patch(self, curve) -> None:
+        from griptape_nodes_openexr.exr import tone_mapping
+
+        with patch.object(tone_mapping, "_patch_linear_toe", wraps=tone_mapping._patch_linear_toe) as helper:
+            curve(np.array([0.0, 0.5], dtype=np.float32))
+        helper.assert_called_once()
+
+
 class TestPiecewiseTransferPerformance:
     """Piecewise curves avoid eager full-frame toe allocations and subnormal powf inputs."""
 
@@ -737,7 +794,7 @@ class TestPiecewiseTransferPerformance:
         assert seen_mins
         assert seen_mins[0] >= np.float32(cutoff)
 
-    @pytest.mark.parametrize("toe_count", [0, 1, 4, 16, 64])
+    @pytest.mark.parametrize("toe_count", [0, 1, 3, 4, 5, 16, 64])
     @pytest.mark.parametrize("curve", [linear_to_srgb, linear_to_rec709, srgb_to_linear])
     def test_sparse_and_dense_toe_paths_agree_elementwise(self, curve, toe_count: int) -> None:
         arr = np.full((64,), 0.5, dtype=np.float32)
