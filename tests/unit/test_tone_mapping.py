@@ -32,9 +32,8 @@ from griptape_nodes_openexr.exr.colour.tone_mapping import (
     validate_tone_mapping,
 )
 from griptape_nodes_openexr.exr.colour.transfer_functions import (
-    REC709_CUTOFF,
-    SRGB_LINEAR_CUTOFF,
-    SRGB_TOE_SLOPE,
+    REC709,
+    SRGB,
     linear_to_rec709,
     linear_to_rec1886,
     linear_to_srgb,
@@ -141,8 +140,8 @@ class TestLinearToSrgb:
         np.testing.assert_allclose(result, [1.0], rtol=1e-6)
 
     def test_toe_breakpoint(self) -> None:
-        # The piecewise split must be continuous: SRGB_LINEAR_CUTOFF * 12.92.
-        result = linear_to_srgb(np.array([SRGB_LINEAR_CUTOFF], dtype=np.float32))
+        # The piecewise split must be continuous: SRGB.linear_cutoff * 12.92.
+        result = linear_to_srgb(np.array([SRGB.linear_cutoff], dtype=np.float32))
         assert result[0] == pytest.approx(0.040450, rel=1e-4)
 
     def test_mid_value(self) -> None:
@@ -200,7 +199,7 @@ class TestLinearToRec709:
         # At the cutoff the toe has been left behind and the power segment applies.
         # BT.709 is very slightly discontinuous here (0.0810 toe vs 0.08125 power);
         # the spec defines it this way, so pin the power-segment value.
-        result = linear_to_rec709(np.array([REC709_CUTOFF], dtype=np.float32))
+        result = linear_to_rec709(np.array([REC709.linear_cutoff], dtype=np.float32))
         assert result[0] == pytest.approx(0.081248, rel=1e-4)
 
     def test_mid_value(self) -> None:
@@ -713,11 +712,11 @@ class TestToePatchRegression:
     def test_preserves_float32_results_and_input(self, curve, toe_count: int) -> None:
         # Given toe values on both sides of the sparse/dense threshold, including non-finite input.
         cutoff = np.float32(
-            REC709_CUTOFF
+            REC709.linear_cutoff
             if curve is linear_to_rec709
-            else SRGB_LINEAR_CUTOFF
+            else SRGB.linear_cutoff
             if curve is linear_to_srgb
-            else SRGB_LINEAR_CUTOFF * SRGB_TOE_SLOPE
+            else SRGB.linear_cutoff * SRGB.toe_slope
         )
         toe_values = np.array([np.nan, -np.inf, -1.0, 0.0, 1e-40, 0.001], dtype=np.float32)
         source = np.full(64, 0.5, dtype=np.float32)
@@ -786,7 +785,7 @@ class TestPiecewiseTransferPerformance:
 
     @pytest.mark.parametrize(
         ("curve", "cutoff"),
-        [(linear_to_srgb, SRGB_LINEAR_CUTOFF), (linear_to_rec709, REC709_CUTOFF)],
+        [(linear_to_srgb, SRGB.linear_cutoff), (linear_to_rec709, REC709.linear_cutoff)],
     )
     def test_power_segment_never_receives_zero_or_subnormals(self, curve, cutoff: float) -> None:
         arr = np.array([-1.0, 0.0, 1e-40, 0.5, 2.0], dtype=np.float32)

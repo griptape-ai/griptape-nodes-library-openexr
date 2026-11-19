@@ -2,22 +2,43 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import numpy as np
 
+
+@dataclass(frozen=True)
+class PiecewiseTransferCurve:
+    """Linear toe and power-segment parameters for a display encoding."""
+
+    linear_cutoff: float
+    toe_inclusive: bool
+    toe_slope: float
+    exponent: float
+    gain: float
+    offset: float
+
+
 # IEC 61966-2-1 sRGB encoding: linear toe followed by the 1/2.4 power segment.
-SRGB_LINEAR_CUTOFF = 0.0031308  # sRGB piecewise split: linear toe below, power curve above
-SRGB_TOE_SLOPE = 12.92  # linear toe: encoded = linear * SRGB_TOE_SLOPE
-SRGB_GAMMA = 1.0 / 2.4  # power-segment exponent
-SRGB_GAIN = 1.055  # power-segment scale
-SRGB_OFFSET = 0.055  # power-segment offset: encoded = SRGB_GAIN * linear**SRGB_GAMMA - SRGB_OFFSET
+SRGB = PiecewiseTransferCurve(
+    linear_cutoff=0.0031308,
+    toe_inclusive=True,
+    toe_slope=12.92,
+    exponent=1.0 / 2.4,
+    gain=1.055,
+    offset=0.055,
+)
 
 # ITU-R BT.709-6 Table 1, section 1.2, opto-electronic transfer characteristic.
 # https://www.itu.int/rec/R-REC-BT.709-6-201506-I/en
-REC709_CUTOFF = 0.018  # BT.709 OETF piecewise split: linear toe below, power curve above
-REC709_TOE_SLOPE = 4.5  # linear toe: encoded = linear * REC709_TOE_SLOPE
-REC709_GAMMA = 0.45  # power-segment exponent
-REC709_GAIN = 1.099  # power-segment scale
-REC709_OFFSET = 0.099  # power-segment offset
+REC709 = PiecewiseTransferCurve(
+    linear_cutoff=0.018,
+    toe_inclusive=False,
+    toe_slope=4.5,
+    exponent=0.45,
+    gain=1.099,
+    offset=0.099,
+)
 
 # ITU-R BT.1886 Annex 1, inverse EOTF with zero black luminance.
 # https://www.itu.int/rec/R-REC-BT.1886/en
@@ -54,29 +75,20 @@ def _patch_linear_toe(
         return np.asarray(np.where(toe, tmp, output), dtype=np.float32)
 
 
-def _encode_piecewise(  # noqa: PLR0913
-    arr: np.ndarray,
-    *,
-    cutoff: float,
-    toe_inclusive: bool,
-    toe_slope: float,
-    gamma: float,
-    gain: float,
-    offset: float,
-) -> np.ndarray:
+def _encode_piecewise(arr: np.ndarray, *, curve: PiecewiseTransferCurve) -> np.ndarray:
     """Apply linear-toe and power encoding, allocating full-frame toe arrays only for a dense mask."""
-    cutoff_f32 = np.float32(cutoff)
-    slope_f32 = np.float32(toe_slope)
+    cutoff_f32 = np.float32(curve.linear_cutoff)
+    slope_f32 = np.float32(curve.toe_slope)
     with np.errstate(over="ignore", invalid="ignore"):
         src = np.asarray(arr, dtype=np.float32)
-        toe = ~(src > cutoff_f32) if toe_inclusive else ~(src >= cutoff_f32)
+        toe = ~(src > cutoff_f32) if curve.toe_inclusive else ~(src >= cutoff_f32)
         encoded = np.empty_like(src)
         np.fmax(src, cutoff_f32, out=encoded)
         np.fmin(encoded, np.float32(1.0), out=encoded)
 
-    np.power(encoded, np.float32(gamma), out=encoded, dtype=np.float32)
-    encoded *= np.float32(gain)
-    encoded -= np.float32(offset)
+    np.power(encoded, np.float32(curve.exponent), out=encoded, dtype=np.float32)
+    encoded *= np.float32(curve.gain)
+    encoded -= np.float32(curve.offset)
 
     return _patch_linear_toe(src, toe, encoded, slope_f32, np.multiply)
 
@@ -90,15 +102,7 @@ def linear_to_srgb(arr: np.ndarray) -> np.ndarray:
     Returns:
         Display-encoded float32 array in [0, 1], same shape as input.
     """
-    return _encode_piecewise(
-        arr,
-        cutoff=SRGB_LINEAR_CUTOFF,
-        toe_inclusive=True,
-        toe_slope=SRGB_TOE_SLOPE,
-        gamma=SRGB_GAMMA,
-        gain=SRGB_GAIN,
-        offset=SRGB_OFFSET,
-    )
+    return _encode_piecewise(arr, curve=SRGB)
 
 
 def srgb_to_linear(arr: np.ndarray) -> np.ndarray:
@@ -112,8 +116,8 @@ def srgb_to_linear(arr: np.ndarray) -> np.ndarray:
     """
     # The toe ends at linear_to_srgb's encoded continuity point: 0.0031308 * 12.92 = 0.040449936.
     # IEC 61966-2-1 rounds this to 0.04045.
-    cutoff_f32 = np.float32(SRGB_LINEAR_CUTOFF * SRGB_TOE_SLOPE)
-    slope_f32 = np.float32(SRGB_TOE_SLOPE)
+    cutoff_f32 = np.float32(SRGB.linear_cutoff * SRGB.toe_slope)
+    slope_f32 = np.float32(SRGB.toe_slope)
     with np.errstate(over="ignore", invalid="ignore"):
         src = np.asarray(arr, dtype=np.float32)
         toe = ~(src > cutoff_f32)
@@ -121,9 +125,9 @@ def srgb_to_linear(arr: np.ndarray) -> np.ndarray:
         np.fmax(src, cutoff_f32, out=linear)
         np.fmin(linear, np.float32(1.0), out=linear)
 
-    linear += np.float32(SRGB_OFFSET)
-    linear /= np.float32(SRGB_GAIN)
-    np.power(linear, np.float32(1.0 / SRGB_GAMMA), out=linear, dtype=np.float32)
+    linear += np.float32(SRGB.offset)
+    linear /= np.float32(SRGB.gain)
+    np.power(linear, np.float32(1.0 / SRGB.exponent), out=linear, dtype=np.float32)
 
     return _patch_linear_toe(src, toe, linear, slope_f32, np.divide)
 
@@ -152,15 +156,7 @@ def linear_to_rec709(arr: np.ndarray) -> np.ndarray:
     Returns:
         Display-encoded float32 array in [0, 1], same shape as input.
     """
-    return _encode_piecewise(
-        arr,
-        cutoff=REC709_CUTOFF,
-        toe_inclusive=False,
-        toe_slope=REC709_TOE_SLOPE,
-        gamma=REC709_GAMMA,
-        gain=REC709_GAIN,
-        offset=REC709_OFFSET,
-    )
+    return _encode_piecewise(arr, curve=REC709)
 
 
 def linear_to_rec1886(arr: np.ndarray) -> np.ndarray:

@@ -37,17 +37,10 @@ from griptape_nodes_openexr.exr.colour.tone_mapping import (
     display_encoding,
 )
 from griptape_nodes_openexr.exr.colour.transfer_functions import (
-    REC709_CUTOFF,
-    REC709_GAIN,
-    REC709_GAMMA,
-    REC709_OFFSET,
-    REC709_TOE_SLOPE,
+    REC709,
     REC1886_GAMMA,
-    SRGB_GAIN,
-    SRGB_GAMMA,
-    SRGB_LINEAR_CUTOFF,
-    SRGB_OFFSET,
-    SRGB_TOE_SLOPE,
+    SRGB,
+    PiecewiseTransferCurve,
 )
 
 TransferCurve = Literal["srgb", "rec709", "gamma"]
@@ -144,7 +137,7 @@ def _gamma_curve(gamma: float) -> bytes:
     return b"curv" + bytes(4) + struct.pack(">I", 1) + struct.pack(">H", round(gamma * 256))
 
 
-def _sampled_curve(decode_exponent: float, gain: float, offset: float, toe_slope: float, linear_cutoff: float) -> bytes:
+def _sampled_curve(curve: PiecewiseTransferCurve) -> bytes:
     """Encode a piecewise curve as an ICC v2 'curv' tag of sampled u16 values.
 
     The parametric 'para' type was added in ICC v4. A v2.1 profile represents
@@ -157,10 +150,11 @@ def _sampled_curve(decode_exponent: float, gain: float, offset: float, toe_slope
     `c` undoes the toe slope. The breakpoint `d` is in the encoded domain.
     Multiply the linear cutoff by the toe slope to obtain it.
     """
-    decode_gain = 1.0 / gain
-    decode_offset = offset / gain
-    decode_toe_slope = 1.0 / toe_slope
-    breakpoint_x = linear_cutoff * toe_slope
+    decode_exponent = 1.0 / curve.exponent
+    decode_gain = 1.0 / curve.gain
+    decode_offset = curve.offset / curve.gain
+    decode_toe_slope = 1.0 / curve.toe_slope
+    breakpoint_x = curve.linear_cutoff * curve.toe_slope
 
     samples = []
     for i in range(_CURVE_SAMPLE_COUNT):
@@ -172,11 +166,9 @@ def _sampled_curve(decode_exponent: float, gain: float, offset: float, toe_slope
 
 def _curve_tag(trc: TransferCurve, gamma: float) -> bytes:
     if trc == "srgb":
-        # SRGB_GAMMA is the forward exponent 1/2.4, so its reciprocal is the
-        # 2.4 the ICC decode curve needs.
-        return _sampled_curve(1.0 / SRGB_GAMMA, SRGB_GAIN, SRGB_OFFSET, SRGB_TOE_SLOPE, SRGB_LINEAR_CUTOFF)
+        return _sampled_curve(SRGB)
     if trc == "rec709":
-        return _sampled_curve(1.0 / REC709_GAMMA, REC709_GAIN, REC709_OFFSET, REC709_TOE_SLOPE, REC709_CUTOFF)
+        return _sampled_curve(REC709)
     if trc == "gamma":
         return _gamma_curve(gamma)
     msg = f"Unknown transfer curve: {trc!r}"

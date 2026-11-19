@@ -27,7 +27,7 @@ from griptape_nodes_openexr.exr.colour.tone_mapping import (
     to_uint8,
 )
 from griptape_nodes_openexr.exr.colour.transfer_functions import (
-    REC709_CUTOFF,
+    REC709,
 )
 
 ImageCms = pytest.importorskip("PIL.ImageCms", reason="Pillow built without littlecms")
@@ -237,7 +237,7 @@ class TestColourRoundTrip:
         # Guards the test above: it only exercises the toe while these values
         # really do encode below the breakpoint.
         encoded = _render(self.SHADOW_SCENE, "rec709")[0, 0]
-        breakpoint_code = _render([REC709_CUTOFF] * 3, "rec709")[0, 0, 0]
+        breakpoint_code = _render([REC709.linear_cutoff] * 3, "rec709")[0, 0, 0]
         assert encoded.max() < breakpoint_code
 
     def test_untagged_and_tagged_pixels_are_identical(self) -> None:
