@@ -16,7 +16,7 @@ An out-of-range `frame` clamps to the sequence bounds and reports this in the re
 
 ## Discovery and failed frames
 
-Read EXR's `path` and EXR Sequence to Preview's `sequence` accept `####`, `%04d` and `@@@@` frame patterns, a bare file path, or a connected `Sequence`. A connected sequence retains its entries and missing-frame policy. A bare file produces a one-frame sequence or video.
+Read EXR's `path` and EXR Sequence to Preview's `sequence` accept `####`, `%04d` and `@@@@` frame patterns, a single file path, or a connected `Sequence`. Select a file or sequence through the File Browser, or type the path or pattern directly. **Scan Sequence** is optional. A connected sequence retains its entries and missing-frame policy. A single file produces a one-frame sequence or video.
 
 Path discovery skips absent frame numbers, shortening the video. Connect **Scan Sequence** to choose a different discovery policy. In EXR Sequence to Preview, `missing_frames` controls discovered entries that fail conversion:
 

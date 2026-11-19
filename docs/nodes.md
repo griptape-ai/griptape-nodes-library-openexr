@@ -4,9 +4,9 @@ Use **Read EXR** for new file and sequence reading workflows. See the [getting-s
 
 ## Read EXR
 
-Reads an EXR file or frame sequence and outputs a viewable image. It combines **Load EXR** -> **Get From List** -> **Display EXR Part** in one node and is modelled on Nuke's Read node.
+Reads an EXR file or frame sequence and outputs a viewable image. Modelled on Nuke's Read node.
 
-The `path` input accepts either a path or a connected `Sequence`. Scanning a bare filename produces a one-frame sequence, so single files and multi-frame renders use the same input and connections.
+Select a file or frame sequence through the File Browser, type a file path or frame pattern into `path`, or connect a `Sequence`. A single file produces a one-frame sequence. **Scan Sequence** is optional; use it when you need control over discovery and missing-frame policies.
 
 An **Open in external viewer** button opens the source EXR in a configured HDR viewer (or the OS default) after the node has been run. See [Library Settings](../README.md#library-settings).
 
@@ -256,6 +256,6 @@ Converts an EXR frame sequence to a single MP4/MOV preview video, applying expos
 | `frames_processed` | `int`              | Frames converted so far, updated live during a run |
 | `output_file`      | `str`              | Workspace path to the written video file           |
 
-For example, set `sequence` to `/renders/shot/beauty.####.exr`, `frame_rate` to `24`, and `format` to `mp4`, then run the node. It discovers the frames and writes a preview using the current exposure and colour settings. The path supports the same syntax as **Read EXR**, including `####`, `%04d`, and `@@@@`. A bare file path produces a one-frame video. Invalid patterns and paths with no matching frames report a failure in `result_details`.
+For example, set `sequence` to `/renders/shot/beauty.####.exr`, `frame_rate` to `24`, and `format` to `mp4`, then run the node. It discovers the frames and writes a preview using the current exposure and colour settings. The path supports the same syntax as **Read EXR**, including `####`, `%04d`, and `@@@@`. A single file path produces a one-frame video. Invalid patterns and paths with no matching frames report a failure in `result_details`.
 
 Path discovery skips absent frame numbers, so gaps shorten the video. To preserve gaps with a different discovery policy, connect a Sequence from **Scan Sequence**. The `missing_frames` setting applies to entries that fail conversion after discovery: `skip` (default) omits them, `error` fails the run, and `black` inserts black replacements to retain their timing. Existing saved workflows with connected Sequences keep working.

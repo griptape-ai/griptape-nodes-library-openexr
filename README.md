@@ -38,11 +38,12 @@ floating-point data. Use those outputs for channel work or saving HDR data.
 
 ### Read a frame sequence
 
-Set Read EXR's `path` to `/renders/shot/beauty.####.exr`, then choose a `frame`
+In **Read EXR**, select a sequence through the File Browser or type a frame
+pattern such as `/renders/shot/beauty.####.exr` into `path`. Choose a `frame`
 using its actual number on disk. Read EXR renders one frame per execution.
 
-Connect **Scan Sequence** when you need control over sequence discovery and
-missing-frame policies. Set its **Path or pattern** to the frame pattern:
+**Scan Sequence** is optional. Connect it when you need control over sequence
+discovery and missing-frame policies. Set its **Path or pattern** to the frame pattern:
 
 ```mermaid
 flowchart LR
