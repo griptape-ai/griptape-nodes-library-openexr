@@ -31,7 +31,7 @@ async def test_edit_scheduler_does_not_report_execution_state(harness, tmp_path,
     ) as scope:
         node.set_parameter_value(parameter, value)
     await node.wait_for_pending_scan()
-    # Then only explicitly declared edit-only scheduler state changes.
+    # Then only explicitly declared local edit state changes.
     assert [violation for violation in scope.violations if violation.rule_id == "state-outside-parameters"] == []
 
 

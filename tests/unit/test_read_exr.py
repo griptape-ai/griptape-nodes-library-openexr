@@ -1388,6 +1388,11 @@ class TestViewerPath:
         # When metadata refreshes for B or for the same source A.
         selected = second if replace_source else first
         node.set_parameter_value("path", str(selected))
+        # With no running loop, the deferred read has not started yet.
+        with patch(f"{_NODE_MODULE}.handle_viewer_button_click") as viewer:
+            node._on_open_viewer_click(MagicMock(), MagicMock())
+        viewer.assert_called_once_with(node.name, None if replace_source else str(first))
+        assert node._render is (None if replace_source else render)
         asyncio.run(node.wait_for_pending_scan())
         assert node._scan is not None
         assert node._scan.key == str(selected)

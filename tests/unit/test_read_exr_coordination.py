@@ -248,6 +248,38 @@ def test_completed_read_is_not_reused_on_execution(harness, tmp_path: Path) -> N
     assert node.parameter_output_values["owner"] == "current artist"
 
 
+@pytest.mark.asyncio
+async def test_source_edit_retires_viewer_render_while_header_read_is_blocked(harness, tmp_path: Path) -> None:
+    # Given a completed render of A and a replacement B whose header read blocks.
+    node = _make_node()
+    first = _single_file(tmp_path)
+    second = tmp_path / "second.exr"
+    second.write_bytes(b"")
+    node.set_parameter_value("path", str(first), initial_setup=True)
+    await node.aprocess()
+    assert node._render is not None
+    started, release = threading.Event(), threading.Event()
+
+    def read(path):
+        started.set()
+        assert release.wait(5), "replacement read was not released"
+        return harness.scan_exr_header(path)
+
+    with patch(f"{_NODE_MODULE}.read_metadata", side_effect=read):
+        try:
+            # When B's edit read starts but cannot finish.
+            node.set_parameter_value("path", str(second))
+            assert await asyncio.to_thread(started.wait, 5)
+            # Then the viewer has no previous source to open before adoption.
+            with patch(f"{_NODE_MODULE}.handle_viewer_button_click") as viewer:
+                node._on_open_viewer_click(MagicMock(), MagicMock())
+            viewer.assert_called_once_with(node.name, None)
+            assert node._render is None
+        finally:
+            release.set()
+            await node.wait_for_pending_scan()
+
+
 def test_source_change_resets_obsolete_part(harness, tmp_path: Path) -> None:
     from tests.unit.test_read_exr import _make_exr_data, _make_part
 

@@ -178,8 +178,8 @@ class ReadEXR(SuccessFailureNode):
     decode pixels for the selected part regardless of what the setting says.
     """
 
-    # Edit scheduling and selection revisions are local to this node. Execution
-    # checks both the revision and parameter snapshot to reject superseded work.
+    # Edit scheduling, selection revisions and the render cache are local to this
+    # node. Execution checks revision and parameters to reject superseded work.
     attributes_outside_parameters: ClassVar[frozenset[str]] = frozenset(
         {
             "_metadata_generation",
@@ -188,6 +188,7 @@ class ReadEXR(SuccessFailureNode):
             "_pending_metadata",
             "_request_preview",
             "_selection_revision",
+            "_render",
         }
     )
 
@@ -449,6 +450,10 @@ class ReadEXR(SuccessFailureNode):
 
         if self._adjusting_selection:
             return
+        if parameter.name == self._path_param.name:
+            render = self._render
+            if render is not None and render.key.scan_key != _scan_key_for(value):
+                self._render = None
         if parameter.name in {self._path_param.name, self._frame_param.name, self._part_name_param.name}:
             self._selection_revision += 1
             self._submit_metadata(preview=parameter.name == self._path_param.name)
