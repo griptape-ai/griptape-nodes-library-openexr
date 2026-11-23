@@ -7,7 +7,7 @@ when_to_use: Use it only to keep an existing workflow running, or when you need 
 
 This node is deprecated. Use [Read EXR](ReadEXR.md) for new file reading workflows. Load EXR stays available while the missing features are moved across, with no removal date. Existing workflows keep their parameters and connections and show a deprecation warning. The [migration guide](../migration.md) lists what Read EXR covers and when to keep Load EXR.
 
-Load EXR reads the file's structure and does not decode pixels. It reports header values such as compression, storage type, windows, time code, software, owner, chromaticities and custom attributes. It gives you a list of every part, and one output for each channel, ready to connect to [Display EXR Part](DisplayEXRPart.md), [Display EXR Channel](DisplayEXRChannel.md) or [Save EXR](SaveEXR.md).
+By default Load EXR reads only the file's structure, not its pixels. It reports header values such as compression, storage type, windows, time code, software, owner, chromaticities and custom attributes. It gives you a list of every part, and one output for each channel, ready to connect to [Display EXR Part](DisplayEXRPart.md), [Display EXR Channel](DisplayEXRChannel.md) or [Save EXR](SaveEXR.md).
 
 After the node has run, **Open in external viewer** opens the file in the configured viewer. See [Configure an external viewer](../troubleshooting.md#configure-an-external-viewer).
 
