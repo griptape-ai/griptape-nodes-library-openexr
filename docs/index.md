@@ -37,7 +37,7 @@ To install, open **Manage > Library Management** in Griptape Nodes, click **Add 
 
 Set these in the engine's `openexr` category.
 
-- `openexr.header_only` (default `true`): Load EXR scans headers only and labels every channel `half`. Read EXR always reads pixels.
+- `openexr.header_only` (default `true`): Load EXR scans headers only and labels every channel `half`. Read EXR ignores this setting. Its `part` and `channels` outputs always come from a header scan and label every channel `half` too, so Load EXR with `header_only` set to `false` is the only way to see true pixel types.
 - `openexr.max_render_pixels` (default `67108864`): the largest canvas Display EXR Channel and EXR Sequence to Preview will render, including video padding. See [Render limits and memory](troubleshooting.md#render-limits-and-memory).
 - `openexr.viewer_executable` (default empty): path to an external HDR viewer. Empty uses the operating system default for EXR files.
 - `openexr.viewer_args` (default empty): arguments placed before the file path.

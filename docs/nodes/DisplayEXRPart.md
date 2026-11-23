@@ -7,7 +7,7 @@ when_to_use: Use it to preview a part descriptor, such as one from Read EXR or S
 
 You have an EXR part descriptor and want a picture of it. Typical sources are the `part` output of [Read EXR](ReadEXR.md) and the `output_part` of [Save EXR](SaveEXR.md), which lets you check a file you have just written. To build an image from individual channels, or to pick channels yourself, use [Display EXR Channel](DisplayEXRChannel.md).
 
-The node chooses the channels itself, in the same order as Read EXR: undotted `R`, `G`, `B`, then the first layer with all three, then the first three channels, then a single channel as grey. If the chosen set has a matching `A`, the PNG is RGBA. Alpha is not changed by `exposure` or the display transform. A part with several layers shows the first layer that qualifies, so use Read EXR's `layer` or Display EXR Channel to look at another one.
+The node chooses the channels itself, in the same order as Read EXR: undotted `R`, `G`, `B`, then the first layer with all three, then the first three channels, then a single channel as grey. If the chosen set has a matching `A`, the PNG is RGBA. Alpha is not changed by `exposure` or the display transform. A part with several layers shows the first layer that qualifies. Read EXR's `layer` setting does not change this, because the node chooses from every channel in the part. To look at another layer, use Read EXR's own `image` output with `layer` set, or Display EXR Channel.
 
 The pixels are read again from the file named in the part, so the file has to still be on disk. The node does not check `openexr.max_render_pixels`.
 

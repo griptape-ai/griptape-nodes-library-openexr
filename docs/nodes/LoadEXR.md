@@ -19,7 +19,7 @@ The header is scanned when the path changes, which creates the part and channel 
 
 If the file has changed since the workflow was saved, the result details warn that channel connections may no longer be valid.
 
-By default only the header is read, and the node shows a warning that every channel is labelled `half`. Set `openexr.header_only` to `false` and select the file again to read the true pixel types. This setting does not affect [Read EXR](ReadEXR.md), which always reads pixels.
+By default only the header is read, and the node shows a warning that every channel is labelled `half`. Set `openexr.header_only` to `false` and select the file again to read the true pixel types. This setting does not affect [Read EXR](ReadEXR.md), whose channel descriptors always say `half`. Load EXR with `header_only` set to `false` is the only way to see true pixel types.
 
 ### image_width
 

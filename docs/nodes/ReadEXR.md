@@ -18,9 +18,9 @@ After the node has run, the **Open in external viewer** button opens the source 
 You have a lighting render of shot SH010 at `/shots/sh010/lighting/sh010_v003.####.exr`, written with one layer per AOV.
 
 1. Add **Read EXR** and set `path` to the pattern, or pick the sequence in the file browser.
-1. Set `layer` to `diffuse` to see the diffuse pass on its own.
-1. Raise `exposure` by 1 or 2 stops to check the shadows.
-1. Connect `image` to a **Display Image** node. To pull a single pass into a comp check, connect `channels` to **Get From List** and pick the channels you need.
+2. Set `layer` to `diffuse` to see the diffuse pass on its own.
+3. Raise `exposure` by 1 or 2 stops to check the shadows.
+4. Connect `image` to a **Display Image** node. To pull a single pass into a comp check, connect `channels` to **Get From List** and pick the channels you need.
 
 ## Parameters
 
@@ -44,7 +44,7 @@ Appears after the scan, and only when the selected part has more than one layer.
 
 The default is the layer the node would pick on its own: undotted `R`, `G`, `B` first, then the first layer that has all three. Without a full RGB set it falls back to the first three channels, then to a single channel shown as grey.
 
-The preview shows the three colour channels of the chosen layer. When that layer has an `A` channel, the preview is RGBA. Alpha is not affected by `exposure` or the display transform.
+The preview shows the channels chosen above. When the layer has a full `R`, `G`, `B` set and an `A` channel, the preview is RGBA. The grey and first-three-channel fallbacks never get alpha. Alpha is not affected by `exposure` or the display transform.
 
 ### frame
 
