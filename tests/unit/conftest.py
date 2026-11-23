@@ -7,7 +7,7 @@ from unittest.mock import MagicMock
 import numpy as np
 import pytest
 
-from griptape_nodes_openexr.exr.ocio_helpers import reset_colorspace_transform_request_type_cache
+from griptape_nodes_openexr.exr.colour.ocio_helpers import reset_colorspace_transform_request_type_cache
 
 
 @pytest.fixture(autouse=True)

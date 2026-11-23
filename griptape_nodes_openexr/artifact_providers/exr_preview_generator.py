@@ -25,15 +25,16 @@ from PIL import Image
 from pydantic import PositiveInt, field_validator
 
 from griptape_nodes_openexr.exr.channel_selection import select_alpha_channel, select_display_channels
-from griptape_nodes_openexr.exr.exr_io import build_rgb_array, load_exr_channels, scan_exr_header
-from griptape_nodes_openexr.exr.tone_mapping import (
+from griptape_nodes_openexr.exr.colour.tone_mapping import (
     TONE_CURVES_DESCRIPTION,
     TONE_DEFAULT,
     apply_exposure,
     apply_tone_mapping,
     retired_tone_message,
     to_uint8,
+    validate_tone_mapping,
 )
+from griptape_nodes_openexr.exr.exr_io import build_rgb_array, load_exr_channels, scan_exr_header
 
 if TYPE_CHECKING:
     from griptape_nodes.retained_mode.engine import Engine
@@ -60,10 +61,10 @@ class EXRPreviewParameters(BaseGeneratorParameters):
         than something the user chose.
         """
         retired = retired_tone_message(value)
-        if retired is None:
-            return value
-        logger.warning("EXR preview: %s Using %r for previews.", retired, TONE_DEFAULT)
-        return TONE_DEFAULT
+        if retired is not None:
+            logger.warning("EXR preview: %s Using %r for previews.", retired, TONE_DEFAULT)
+            return TONE_DEFAULT
+        return validate_tone_mapping(value)
 
     exposure: float = Field(
         default=0.0,

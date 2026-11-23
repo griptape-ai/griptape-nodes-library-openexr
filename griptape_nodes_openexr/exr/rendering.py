@@ -13,6 +13,9 @@ import io
 import numpy as np
 from PIL import Image
 
+from griptape_nodes_openexr.exr.colour.icc_profiles import profile_for_tone_mapping
+from griptape_nodes_openexr.exr.colour.ocio_helpers import ColorParamsProtocol, apply_color_management
+from griptape_nodes_openexr.exr.colour.tone_mapping import apply_exposure, to_uint8
 from griptape_nodes_openexr.exr.display_window import (
     WindowFraming,
     apply_window_mode,
@@ -20,9 +23,6 @@ from griptape_nodes_openexr.exr.display_window import (
     validate_window_mode,
 )
 from griptape_nodes_openexr.exr.exr_io import build_rgb_array, load_exr_channels
-from griptape_nodes_openexr.exr.icc_profiles import profile_for_tone_mapping
-from griptape_nodes_openexr.exr.ocio_helpers import ColorParamsProtocol, apply_color_management
-from griptape_nodes_openexr.exr.tone_mapping import apply_exposure, to_uint8
 
 _RGB_CHANNELS = 3
 _RGBA_CHANNELS = 4

@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-from griptape_nodes_openexr.exr.ocio_helpers import COLOR_MODE_BASIC, COLOR_MODE_OCIO
+from griptape_nodes_openexr.exr.colour.ocio_helpers import COLOR_MODE_BASIC, COLOR_MODE_OCIO
 
 _NODE_MODULE = "griptape_nodes_openexr.nodes.display_exr_channel"
-_OCIO_MODULE = "griptape_nodes_openexr.exr.ocio_helpers"
+_OCIO_MODULE = "griptape_nodes_openexr.exr.colour.ocio_helpers"
 
 
 def _make_node(ocio_available: bool = False, metadata: dict | None = None):

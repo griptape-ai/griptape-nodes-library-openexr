@@ -13,6 +13,12 @@ from griptape_nodes.exe_types.param_types.parameter_button import ParameterButto
 from griptape_nodes.exe_types.param_types.parameter_float import ParameterFloat
 
 from griptape_nodes_openexr.exr.channel_selection import select_alpha_channel, select_display_channels
+from griptape_nodes_openexr.exr.colour.ocio_helpers import (
+    add_color_mode_parameters,
+    handle_color_mode_change,
+    read_color_settings,
+)
+from griptape_nodes_openexr.exr.colour.tone_mapping import EV_MAX, EV_MIN
 from griptape_nodes_openexr.exr.display_window import (
     WindowFraming,
     add_window_mode_parameter,
@@ -20,15 +26,7 @@ from griptape_nodes_openexr.exr.display_window import (
     window_size,
 )
 from griptape_nodes_openexr.exr.exr_header_artifact import EXRPartArtifact
-from griptape_nodes_openexr.exr.ocio_helpers import (
-    COLOR_MODE_BASIC,
-    COLOR_MODE_OCIO,
-    ColorParamsProtocol,
-    add_color_mode_parameters,
-    handle_color_mode_change,
-)
 from griptape_nodes_openexr.exr.rendering import render_part_png
-from griptape_nodes_openexr.exr.tone_mapping import EV_MAX, EV_MIN, TONE_DEFAULT
 from griptape_nodes_openexr.exr.viewer_launcher import handle_viewer_button_click
 
 if TYPE_CHECKING:
@@ -44,7 +42,9 @@ class DisplayEXRPart(SuccessFailureNode):
     and colour management, and outputs an ImageUrlArtifact saved via the
     project's save_node_output situation.
 
-    In 'basic' mode, a local display transform (sRGB, rec709, rec1886 or raw) is applied.
+    In 'basic' mode, a local display transform ('Linear sRGB to sRGB',
+    'Linear sRGB to rec709', 'Linear sRGB to rec1886', 'raw', or an ACES
+    transform such as 'ACEScg to sRGB') is applied.
     In 'ocio' mode, a connected OCIOColorParamsArtifact drives an OCIO
     display-view transform. OCIO failures are always surfaced loudly.
 
@@ -164,17 +164,10 @@ class DisplayEXRPart(SuccessFailureNode):
         alpha_channel = select_alpha_channel(channel_names, selected)
 
         ev = float(self.get_parameter_value(self._exposure_param.name) or 0.0)
-        tone_mapping = str(self.get_parameter_value(self._tone_mapping_param.name) or TONE_DEFAULT)
-        color_mode = str(self.get_parameter_value(self._color_mode_param.name) or COLOR_MODE_BASIC)
-
-        color_params: ColorParamsProtocol | None = None
-        if color_mode == COLOR_MODE_OCIO:
-            color_params = self.get_parameter_value(self._color_params_param.name)  # type: ignore[assignment]
-            if color_params is None:
-                self._on_fail_handler("OCIO mode requires a connected color_params artifact.")
-                return
-
         try:
+            _, tone_mapping, color_params = read_color_settings(
+                self, self._color_mode_param, self._tone_mapping_param, self._color_params_param
+            )
             window_mode = validate_window_mode(str(self.get_parameter_value(self._window_mode_param.name)))
             framing = WindowFraming.for_header(window_mode, part.header)
             png_bytes, tone_mode = render_part_png(
