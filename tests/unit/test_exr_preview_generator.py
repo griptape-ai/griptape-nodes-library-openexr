@@ -14,14 +14,14 @@ from griptape_nodes_openexr.artifact_providers.exr_preview_generator import (
 class TestEXRPreviewParameters:
     def test_defaults(self) -> None:
         params = EXRPreviewParameters()
-        assert params.tone_mapping == "sRGB"
+        assert params.tone_mapping == "Linear sRGB to sRGB"
         assert params.exposure == 0.0
         assert params.max_width == 1024
         assert params.max_height == 1024
 
     def test_custom_values(self) -> None:
         params = EXRPreviewParameters(tone_mapping="rec709", exposure=2.0, max_width=512, max_height=256)
-        assert params.tone_mapping == "rec709"
+        assert params.tone_mapping == "Linear sRGB to rec709"
         assert params.exposure == 2.0
         assert params.max_width == 512
         assert params.max_height == 256
@@ -60,7 +60,7 @@ class TestEXRPreviewParameters:
 
     def test_model_validate_from_dict(self) -> None:
         params = EXRPreviewParameters.model_validate({"tone_mapping": "rec709", "exposure": -1.0})
-        assert params.tone_mapping == "rec709"
+        assert params.tone_mapping == "Linear sRGB to rec709"
         assert params.exposure == -1.0
 
     def test_retired_tone_mapping_replaced_with_default(self) -> None:
@@ -69,26 +69,35 @@ class TestEXRPreviewParameters:
         # apply_tone_mapping at render time, and must not reset the other
         # stored settings (that's what raising in the validator would do).
         params = EXRPreviewParameters(tone_mapping="filmic")
-        assert params.tone_mapping == "sRGB"
+        assert params.tone_mapping == "Linear sRGB to sRGB"
 
     def test_retired_tone_mapping_replaced_via_model_validate(self) -> None:
         # Mirrors the registration path, which loads a stored config dict.
         params = EXRPreviewParameters.model_validate({"tone_mapping": "filmic", "max_width": 2048})
-        assert params.tone_mapping == "sRGB"
+        assert params.tone_mapping == "Linear sRGB to sRGB"
         assert params.max_width == 2048
 
     def test_retired_tone_mapping_case_insensitive(self) -> None:
         params = EXRPreviewParameters(tone_mapping="Filmic")
-        assert params.tone_mapping == "sRGB"
+        assert params.tone_mapping == "Linear sRGB to sRGB"
 
     def test_retired_tone_mapping_logs_a_warning(self, caplog: pytest.LogCaptureFixture) -> None:
         with caplog.at_level("WARNING", logger="griptape_nodes"):
             EXRPreviewParameters(tone_mapping="filmic")
         assert "filmic" in caplog.text.lower()
 
+    def test_mixed_case_tone_mapping_normalises_to_canonical_choice(self) -> None:
+        params = EXRPreviewParameters(tone_mapping="acescg to srgb")
+        assert params.tone_mapping == "ACEScg to sRGB"
+
+    @pytest.mark.parametrize("invalid", ["acescg", "reinhard", ""])
+    def test_unknown_tone_mapping_raises_validation_error(self, invalid: str) -> None:
+        with pytest.raises(ValidationError):
+            EXRPreviewParameters(tone_mapping=invalid)
+
     def test_extra_fields_ignored(self) -> None:
         params = EXRPreviewParameters.model_validate({"unknown_field": "ignored"})
-        assert params.tone_mapping == "sRGB"
+        assert params.tone_mapping == "Linear sRGB to sRGB"
 
     def test_editor_schema_type_present(self) -> None:
         assert EXRPreviewParameters.get_json_schema_type("tone_mapping") == "string"

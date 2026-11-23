@@ -13,17 +13,17 @@ import pytest
 from griptape.artifacts import ImageUrlArtifact
 from PIL import Image
 
+from griptape_nodes_openexr.exr.colour.ocio_helpers import COLOR_MODE_BASIC, COLOR_MODE_OCIO
+from griptape_nodes_openexr.exr.colour.transfer_functions import linear_to_srgb
 from griptape_nodes_openexr.exr.exr_header_artifact import EXRPartArtifact
 from griptape_nodes_openexr.exr.exr_io import scan_exr_header
-from griptape_nodes_openexr.exr.ocio_helpers import COLOR_MODE_BASIC, COLOR_MODE_OCIO
-from griptape_nodes_openexr.exr.tone_mapping import linear_to_srgb
 from griptape_nodes_openexr.nodes.display_exr_part import DisplayEXRPart
 
 DATA = Path(__file__).parents[1] / "data"
 SINGLE_PART_RGBA = DATA / "single_part_rgba.exr"  # 64x64, R ramp, G ramp*0.5, B 0.2, A 1.0
 MULTI_PART = DATA / "multi_part.exr"  # parts: rgba, depth (Z only), normal
 
-_OCIO_MODULE = "griptape_nodes_openexr.exr.ocio_helpers"
+_OCIO_MODULE = "griptape_nodes_openexr.exr.colour.ocio_helpers"
 
 
 def _part(path: Path, part_index: int = 0) -> EXRPartArtifact:

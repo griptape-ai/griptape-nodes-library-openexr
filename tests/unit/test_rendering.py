@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 from PIL import Image
 
-from griptape_nodes_openexr.exr.icc_profiles import profile_for_tone_mapping
+from griptape_nodes_openexr.exr.colour.icc_profiles import profile_for_tone_mapping
 from griptape_nodes_openexr.exr.rendering import ndarray_to_png
 
 _RGB = np.full((4, 4, 3), 128, dtype=np.uint8)

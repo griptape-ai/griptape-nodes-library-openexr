@@ -13,14 +13,14 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import pytest
 
-from griptape_nodes_openexr.exr.ocio_helpers import COLOR_MODE_BASIC, COLOR_MODE_OCIO
-from griptape_nodes_openexr.exr.tone_mapping import TONE_CHOICES, TONE_REC709
+from griptape_nodes_openexr.exr.colour.ocio_helpers import COLOR_MODE_BASIC, COLOR_MODE_OCIO
+from griptape_nodes_openexr.exr.colour.tone_mapping import TONE_CHOICES, TONE_REC709
 
 DATA = Path(__file__).parents[1] / "data"
 SINGLE_PART_RGBA = DATA / "single_part_rgba.exr"
 
 _NODE_MODULE = "griptape_nodes_openexr.nodes.exr_sequence_to_preview"
-_OCIO_MODULE = "griptape_nodes_openexr.exr.ocio_helpers"
+_OCIO_MODULE = "griptape_nodes_openexr.exr.colour.ocio_helpers"
 
 
 # ---------------------------------------------------------------------------
@@ -128,8 +128,8 @@ class TestNodeInit:
 
 class TestNoEmbedColorProfileParameter:
     def test_video_node_has_no_embed_color_profile(self) -> None:
-        # An MP4 cannot carry an ICC profile, so the switch would do nothing
-        # here. Colour is signalled through the stream tags instead.
+        # YUV video players use CICP stream and colr container tags, so this
+        # node signals colour through those tags rather than an ICC profile.
         node = _make_node()
         assert node.get_parameter_by_name("embed_color_profile") is None
 
@@ -176,6 +176,39 @@ class TestRetiredToneMappingIsReported:
         node = _make_node()
         node.set_parameter_value("tone_mapping", tone)
         assert node.get_parameter_value("tone_mapping") == tone
+
+    @pytest.mark.parametrize("empty", [None, ""])
+    def test_empty_tone_mapping_runs_with_default(self, tmp_path: Path, empty: str | None) -> None:
+        from griptape_nodes.retained_mode.griptape_nodes import GriptapeNodes
+
+        node = _make_node()
+        fake_saved = MagicMock(location="/tmp/preview.mp4")
+        fake_dest = MagicMock()
+        fake_dest.write_bytes.return_value = fake_saved
+        node._output_file = MagicMock()
+        node._output_file.build_file.return_value = fake_dest
+        mock_situation_dest = MagicMock()
+        mock_situation_dest.resolve.return_value = tmp_path / "exr-preview" / "frame_0000.png"
+
+        node.set_parameter_value("sequence", _make_sequence([SINGLE_PART_RGBA]))
+        node.set_parameter_value("color_mode", COLOR_MODE_BASIC)
+        node.set_parameter_value("tone_mapping", empty)
+
+        def _fake_ffmpeg(cmd: list[str], **_kwargs: Any) -> MagicMock:
+            Path(cmd[-1]).write_bytes(b"FAKE_MP4")
+            return MagicMock(returncode=0, stderr="")
+
+        with (
+            patch(f"{_NODE_MODULE}.ProjectFileDestination") as mock_pfd,
+            patch.object(GriptapeNodes, "handle_request", return_value=MagicMock()),
+            patch(f"{_NODE_MODULE}.run") as mock_ffmpeg_run,
+            patch(f"{_NODE_MODULE}.subprocess.run", side_effect=_fake_ffmpeg),
+        ):
+            mock_pfd.from_situation.return_value = mock_situation_dest
+            mock_ffmpeg_run.get_or_fetch_platform_executables_else_raise.return_value = ("ffmpeg", "ffprobe")
+            asyncio.run(node.aprocess())
+
+        assert _was_successful(node) is True, node.parameter_output_values.get("result_details")
 
     @pytest.mark.parametrize("tone", ["filmic", "linear", "reinhard"])
     def test_saved_value_survives_workflow_load(self, node_in_flow, tone: str) -> None:
@@ -564,8 +597,8 @@ class TestAProcessPipeline:
 
         assert "libx264" in captured_cmd
         assert "yuv420p" in captured_cmd
-        # A video carries no ICC profile, so these tags are its only colour
-        # signalling. Without them a player guesses.
+        # YUV video players use CICP stream and colr container tags for
+        # colour signalling. Without them a player guesses.
         assert "-x264-params" in captured_cmd
         params = captured_cmd[captured_cmd.index("-x264-params") + 1]
         assert "colorprim=bt709" in params
@@ -573,9 +606,16 @@ class TestAProcessPipeline:
         assert "colormatrix=bt709" in params
         # The tag alone only labels the stream; ffmpeg's default RGB->YUV
         # conversion uses BT.601 coefficients regardless, so the actual
-        # pixels must be converted with the matching matrix too.
+        # pixels must be converted with the matching matrix too, and frame
+        # params populate the MP4/MOV colr container box.
         assert "-vf" in captured_cmd
-        assert captured_cmd[captured_cmd.index("-vf") + 1] == "scale=out_color_matrix=bt709"
+        vf_arg = captured_cmd[captured_cmd.index("-vf") + 1]
+        assert vf_arg == (
+            "scale=out_color_matrix=bt709:out_range=tv,"
+            "setparams=range=tv:colorspace=bt709:color_primaries=bt709:color_trc=bt709"
+        )
+        assert "-movflags" in captured_cmd
+        assert captured_cmd[captured_cmd.index("-movflags") + 1] == "+faststart+write_colr"
 
     @pytest.mark.parametrize(
         ("speed", "expected_preset", "expected_crf"),
@@ -984,11 +1024,13 @@ class TestAProcessOCIOMode:
         call_args = mock_cm.call_args
         assert call_args[0][1] is fake_color_params
 
-    def test_ocio_render_has_no_colour_tags(self, tmp_path: Path) -> None:
+    def test_ocio_render_tags_bt709_yuv_matrix_without_asserting_primaries_or_transfer(self, tmp_path: Path) -> None:
         # OCIO output can be sRGB, P3, Rec.2020, or anything else the config
-        # produces, so we must not assert Rec.709 (or any other) colour
-        # characteristics for it. Pick raw for tone_mapping (hidden/stale in
-        # OCIO mode) so a leaked basic-mode tag would be easy to spot.
+        # produces, so primaries and transfer must remain unspecified. RGB->YUV
+        # conversion still needs an explicit BT.709 matrix and tag so HD players
+        # decode YUV with the same matrix used to encode it. Pick raw for
+        # tone_mapping (hidden/stale in OCIO mode) so a leaked basic-mode
+        # transfer tag would be easy to spot.
         from griptape_nodes.retained_mode.events.os_events import DeleteFileRequest
         from griptape_nodes.retained_mode.griptape_nodes import GriptapeNodes
 
@@ -1054,8 +1096,17 @@ class TestAProcessOCIOMode:
 
             asyncio.run(node.aprocess())
 
-        assert "-x264-params" not in captured_cmd
-        assert "-vf" not in captured_cmd
+        assert "-vf" in captured_cmd
+        assert captured_cmd[captured_cmd.index("-vf") + 1] == (
+            "scale=out_color_matrix=bt709:out_range=tv,setparams=range=tv:colorspace=bt709"
+        )
+        assert "-x264-params" in captured_cmd
+        ocio_x264 = captured_cmd[captured_cmd.index("-x264-params") + 1]
+        assert ocio_x264 == "colormatrix=bt709"
+        assert "colorprim" not in ocio_x264
+        assert "transfer" not in ocio_x264
+        assert "-movflags" in captured_cmd
+        assert captured_cmd[captured_cmd.index("-movflags") + 1] == "+faststart+write_colr"
 
 
 # ---------------------------------------------------------------------------
@@ -1185,6 +1236,9 @@ class TestVideoColourTags:
             ("rec709", "bt709"),
             ("rec1886", "bt709"),
             ("raw", "linear"),
+            ("ACEScg to sRGB", "iec61966-2-1"),
+            ("ACEScg to rec709", "bt709"),
+            ("ACES2065-1 to sRGB", "iec61966-2-1"),
         ],
     )
     def test_transfer_characteristics_per_transform(self, tone: str, expected_trc: str) -> None:
@@ -1201,11 +1255,18 @@ class TestVideoColourTags:
         assert color_trc_for("something-else") == "bt709"
 
     def test_every_choice_maps_to_an_accepted_value(self) -> None:
-        from griptape_nodes_openexr.exr.tone_mapping import TONE_CHOICES
-        from griptape_nodes_openexr.nodes.exr_sequence_to_preview import _FFMPEG_TRC_VALUES, color_trc_for
+        from griptape_nodes_openexr.exr.colour.tone_mapping import TONE_CHOICES
+        from griptape_nodes_openexr.nodes.exr_sequence_to_preview import color_trc_for
 
-        accepted = set(_FFMPEG_TRC_VALUES.values())
-        for tone in TONE_CHOICES:
-            # Every choice must have an explicit entry, not reach the fallback.
-            assert tone.lower() in _FFMPEG_TRC_VALUES
-            assert color_trc_for(tone) in accepted
+        expected = {
+            "Linear sRGB to sRGB": "iec61966-2-1",
+            "Linear sRGB to rec709": "bt709",
+            "Linear sRGB to rec1886": "bt709",
+            "raw": "linear",
+            "ACEScg to sRGB": "iec61966-2-1",
+            "ACEScg to rec709": "bt709",
+            "ACES2065-1 to sRGB": "iec61966-2-1",
+        }
+        assert set(expected) == set(TONE_CHOICES)
+        for tone, transfer in expected.items():
+            assert color_trc_for(tone) == transfer

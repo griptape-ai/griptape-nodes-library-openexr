@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from griptape_nodes_openexr.exr.icc_profiles import profile_for_tone_mapping
+from griptape_nodes_openexr.exr.colour.icc_profiles import profile_for_tone_mapping
 from griptape_nodes_openexr.nodes.display_exr_channel import _output_profile
 
 

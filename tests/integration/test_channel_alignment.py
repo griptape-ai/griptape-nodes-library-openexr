@@ -121,7 +121,9 @@ def test_uncovered_coordinate_regions_stay_black_after_lifting_transform(
     ],
 )
 def test_invalid_choices_fail_before_decode(engine, tmp_path: Path, parameter: str, value: str, message: str) -> None:
-    with patch("griptape_nodes_openexr.exr.ocio_helpers.find_colorspace_transform_request_type", return_value=None):
+    with patch(
+        "griptape_nodes_openexr.exr.colour.ocio_helpers.find_colorspace_transform_request_type", return_value=None
+    ):
         node = channel_node.DisplayEXRChannel("invalid")
     node.set_parameter_value("channel_r", _channel(_write_windowed(tmp_path / "input.exr", (0, 0, 3, 1), (0, 0, 3, 1))))
     node.set_parameter_value(parameter, value)
@@ -136,7 +138,9 @@ def test_invalid_choices_fail_before_decode(engine, tmp_path: Path, parameter: s
 def test_invalid_settings_fail_before_decode(engine, tmp_path: Path, limit: object) -> None:
     result = GetConfigValueResultSuccess(value=limit, result_details="test override")
     assert isinstance(result, GetConfigValueResultSuccess)
-    with patch("griptape_nodes_openexr.exr.ocio_helpers.find_colorspace_transform_request_type", return_value=None):
+    with patch(
+        "griptape_nodes_openexr.exr.colour.ocio_helpers.find_colorspace_transform_request_type", return_value=None
+    ):
         node = channel_node.DisplayEXRChannel("invalid_setting")
     node.set_parameter_value("channel_r", _channel(_write_windowed(tmp_path / "input.exr", (0, 0, 3, 1), (0, 0, 3, 1))))
     with (
@@ -150,7 +154,9 @@ def test_invalid_settings_fail_before_decode(engine, tmp_path: Path, limit: obje
 
 def test_setting_is_read_each_execution(engine, tmp_path: Path) -> None:
     path = _write_windowed(tmp_path / "input.exr", (0, 0, 3, 1), (0, 0, 3, 1))
-    with patch("griptape_nodes_openexr.exr.ocio_helpers.find_colorspace_transform_request_type", return_value=None):
+    with patch(
+        "griptape_nodes_openexr.exr.colour.ocio_helpers.find_colorspace_transform_request_type", return_value=None
+    ):
         node = channel_node.DisplayEXRChannel("limit")
     node.set_parameter_value("channel_r", _channel(path))
     for limit in [7, 8, 7]:
@@ -262,7 +268,9 @@ def test_opaque_alpha_without_rgb_coverage_stays_black_over_background(engine, t
 
 def test_disjoint_coordinate_output_still_validates_colour(engine, tmp_path: Path) -> None:
     path = _write_windowed(tmp_path / "disjoint.exr", (-10, 0, -9, 1), (0, 0, 3, 1))
-    with patch("griptape_nodes_openexr.exr.ocio_helpers.find_colorspace_transform_request_type", return_value=None):
+    with patch(
+        "griptape_nodes_openexr.exr.colour.ocio_helpers.find_colorspace_transform_request_type", return_value=None
+    ):
         node = channel_node.DisplayEXRChannel("disjoint")
     node.set_parameter_value("channel_r", _channel(path))
     node.set_parameter_value("channel_alignment", "Match EXR Coordinates")
@@ -275,7 +283,9 @@ def test_disjoint_coordinate_output_still_validates_colour(engine, tmp_path: Pat
 @pytest.mark.parametrize("phase", ["prepare", "finish"])
 def test_framing_failure_clears_node_image(engine, tmp_path: Path, phase: str) -> None:
     path = _write_windowed(tmp_path / "input.exr", (0, 0, 3, 1), (0, 0, 3, 1))
-    with patch("griptape_nodes_openexr.exr.ocio_helpers.find_colorspace_transform_request_type", return_value=None):
+    with patch(
+        "griptape_nodes_openexr.exr.colour.ocio_helpers.find_colorspace_transform_request_type", return_value=None
+    ):
         node = channel_node.DisplayEXRChannel("framing_failure")
     node.set_parameter_value("channel_r", _channel(path))
     node.parameter_output_values["image"] = "previous output"
@@ -294,7 +304,9 @@ def test_real_subsampled_source_is_rejected(engine, tmp_path: Path, policy: str)
     path = tmp_path / "sampled.exr"
     channel = OpenEXR.Channel("Y", np.ones((4, 4), np.float32), xSampling=2, ySampling=2)
     OpenEXR.File({"compression": OpenEXR.NO_COMPRESSION}, {"Y": channel}).write(str(path))
-    with patch("griptape_nodes_openexr.exr.ocio_helpers.find_colorspace_transform_request_type", return_value=None):
+    with patch(
+        "griptape_nodes_openexr.exr.colour.ocio_helpers.find_colorspace_transform_request_type", return_value=None
+    ):
         node = channel_node.DisplayEXRChannel("sampled")
     node.set_parameter_value("channel_r", _channel(path, "Y"))
     node.set_parameter_value("channel_alignment", policy)

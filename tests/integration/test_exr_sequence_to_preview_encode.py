@@ -22,8 +22,8 @@ from griptape_nodes.retained_mode.events.os_events import DeleteFileRequest
 from griptape_nodes.retained_mode.griptape_nodes import GriptapeNodes
 from static_ffmpeg import run  # type: ignore[import-untyped]
 
-from griptape_nodes_openexr.exr.ocio_helpers import COLOR_MODE_BASIC
-from griptape_nodes_openexr.exr.tone_mapping import TONE_REC709
+from griptape_nodes_openexr.exr.colour.ocio_helpers import COLOR_MODE_BASIC
+from griptape_nodes_openexr.exr.colour.tone_mapping import TONE_REC709
 from griptape_nodes_openexr.nodes.exr_sequence_to_preview import (
     MISSING_FRAMES_BLACK,
     MISSING_FRAMES_SKIP,
@@ -31,7 +31,7 @@ from griptape_nodes_openexr.nodes.exr_sequence_to_preview import (
 )
 
 _NODE_MODULE = "griptape_nodes_openexr.nodes.exr_sequence_to_preview"
-_OCIO_MODULE = "griptape_nodes_openexr.exr.ocio_helpers"
+_OCIO_MODULE = "griptape_nodes_openexr.exr.colour.ocio_helpers"
 _FRAMES = 5
 _SIZE = 16
 

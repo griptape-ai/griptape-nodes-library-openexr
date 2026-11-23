@@ -19,6 +19,24 @@ from griptape_nodes.traits.options import Options
 from PIL import Image
 
 from griptape_nodes_openexr.exr import channel_alignment, render_limits
+from griptape_nodes_openexr.exr.colour.icc_profiles import profile_for_tone_mapping
+from griptape_nodes_openexr.exr.colour.ocio_helpers import (
+    ColorParamsProtocol,
+    add_color_mode_parameters,
+    apply_color_management,
+    handle_color_mode_change,
+    read_color_settings,
+)
+from griptape_nodes_openexr.exr.colour.tone_mapping import (
+    apply_exposure,
+    convert_gamut,
+    inverse_gamut_matrix,
+    to_uint8,
+    validate_tone_mapping,
+)
+from griptape_nodes_openexr.exr.colour.transfer_functions import (
+    srgb_uint8_to_linear,
+)
 from griptape_nodes_openexr.exr.display_window import (
     WINDOW_MODE_DISPLAY,
     WindowFraming,
@@ -27,22 +45,7 @@ from griptape_nodes_openexr.exr.display_window import (
 )
 from griptape_nodes_openexr.exr.exr_header_artifact import EXRChannelArtifact
 from griptape_nodes_openexr.exr.exr_io import load_slot_sources
-from griptape_nodes_openexr.exr.icc_profiles import profile_for_tone_mapping
-from griptape_nodes_openexr.exr.ocio_helpers import (
-    COLOR_MODE_BASIC,
-    COLOR_MODE_OCIO,
-    ColorParamsProtocol,
-    add_color_mode_parameters,
-    apply_color_management,
-    handle_color_mode_change,
-)
 from griptape_nodes_openexr.exr.rendering import ndarray_to_png
-from griptape_nodes_openexr.exr.tone_mapping import (
-    TONE_DEFAULT,
-    apply_exposure,
-    srgb_to_linear,
-    to_uint8,
-)
 from griptape_nodes_openexr.exr.viewer_launcher import handle_viewer_button_click
 
 if TYPE_CHECKING:
@@ -64,7 +67,9 @@ class DisplayEXRChannel(SuccessFailureNode):
     Single RGB channel → placed in its colour plane (R-only → red, etc.). Missing RGB slots → zero-filled plane.
     Connected alpha slot → RGBA output PNG.
 
-    In 'basic' mode, a local display transform (sRGB, rec709, rec1886 or raw) is applied.
+    In 'basic' mode, a local display transform ('Linear sRGB to sRGB',
+    'Linear sRGB to rec709', 'Linear sRGB to rec1886', 'raw', or an ACES
+    transform such as 'ACEScg to sRGB') is applied.
     In 'ocio' mode, a connected OCIOColorParamsArtifact drives an OCIO
     display-view transform. OCIO failures are always surfaced loudly.
     """
@@ -245,7 +250,12 @@ class DisplayEXRChannel(SuccessFailureNode):
         window_mode = str(self.get_parameter_value(self._window_mode_param.name))
         alignment_policy = str(self.get_parameter_value(self._alignment_param.name))
         frame_reference = str(self.get_parameter_value(self._frame_reference_param.name))
+        ev = float(self.get_parameter_value(self._exposure_param.name) or 0.0)
+        embed_color_profile = bool(self.get_parameter_value(self._embed_color_profile_param.name))
         try:
+            _, tone_mapping, color_params = read_color_settings(
+                self, self._color_mode_param, self._tone_mapping_param, self._color_params_param
+            )
             channel_alignment.resolve_reference(all_slots, alignment_policy, frame_reference, window_mode)
             limit = render_limits.get_render_limit()
             sources = load_slot_sources(all_slots)
@@ -266,18 +276,6 @@ class DisplayEXRChannel(SuccessFailureNode):
         except Exception as e:
             self._on_fail_handler(f"Failed to build RGB: {e}")
             return
-
-        ev = float(self.get_parameter_value(self._exposure_param.name) or 0.0)
-        tone_mapping = str(self.get_parameter_value(self._tone_mapping_param.name) or TONE_DEFAULT)
-        embed_color_profile = bool(self.get_parameter_value(self._embed_color_profile_param.name))
-        color_mode = str(self.get_parameter_value(self._color_mode_param.name) or COLOR_MODE_BASIC)
-
-        color_params: ColorParamsProtocol | None = None
-        if color_mode == COLOR_MODE_OCIO:
-            color_params = self.get_parameter_value(self._color_params_param.name)  # type: ignore[assignment]
-            if color_params is None:
-                self._on_fail_handler("OCIO mode requires a connected color_params artifact.")
-                return
 
         rgb = apply_exposure(rgb, ev)
 
@@ -368,16 +366,20 @@ def _render_channels(  # noqa: PLR0913
     Raises ValueError or RuntimeError for framing, colour or background failures.
     Exposure has already been applied by the caller.
     """
+    if color_params is None:
+        tone_mapping = validate_tone_mapping(tone_mapping)
     prepared = _prepare_framing(rgb, alpha, coverage, framing, background is not None)
     rgb, alpha, coverage = prepared.rgb, prepared.alpha, prepared.coverage
     height, width = rgb.shape[:2]
     bg_rgb = _load_background_rgb(background, width, height) if background is not None and alpha is not None else None
 
-    # Basic mode composites in linear light; OCIO composites its display output
-    # against the sRGB background because its source colourspace is unknown here.
+    # Basic mode composites in linear light. The sRGB background is first moved into
+    # the primaries the display transform expects, so an ACES transform's gamut
+    # conversion brings it back unchanged. OCIO composites its display output against
+    # the sRGB background because its source colourspace is unknown here.
     if color_params is None:
         if alpha is not None and bg_rgb is not None:
-            rgb = _composite(rgb, alpha, srgb_to_linear(bg_rgb))
+            rgb = _composite(rgb, alpha, _background_in_source_primaries(bg_rgb, tone_mapping))
         rgb, tone_mode = apply_color_management(rgb, color_params, tone_mapping)
         if alpha is not None and bg_rgb is not None:
             rgb[~coverage & (alpha >= 1.0)] = 0.0
@@ -385,7 +387,8 @@ def _render_channels(  # noqa: PLR0913
         rgb, tone_mode = apply_color_management(rgb, color_params, tone_mapping)
         rgb[~coverage] = 0.0
         if alpha is not None and bg_rgb is not None:
-            rgb = _composite(np.clip(rgb, 0.0, 1.0), alpha, bg_rgb)
+            bg_encoded = _UINT8_TO_UNIT[bg_rgb]
+            rgb = _composite(np.clip(rgb, 0.0, 1.0), alpha, bg_encoded)
     if bg_rgb is None:
         rgb[~coverage] = 0.0
     uint8 = _compose_alpha(to_uint8(rgb), alpha if bg_rgb is None else None)
@@ -415,6 +418,19 @@ def _build_rgb(pixels: dict[str, np.ndarray], height: int, width: int) -> np.nda
     return np.stack([r, g, b], axis=-1)
 
 
+_UINT8_TO_UNIT = np.arange(256, dtype=np.float32) / np.float32(255.0)
+_UINT8_TO_UNIT.flags.writeable = False
+
+
+def _background_in_source_primaries(bg_rgb: np.ndarray, tone_mapping: str) -> np.ndarray:
+    """Decode an sRGB background to linear light in the primaries `tone_mapping` expects."""
+    linear = srgb_uint8_to_linear(bg_rgb)
+    inverse = inverse_gamut_matrix(tone_mapping)
+    if inverse is None:
+        return linear
+    return convert_gamut(linear, inverse)
+
+
 def _load_background_rgb(artifact: Any, width: int, height: int) -> np.ndarray:
     from griptape.artifacts import ImageArtifact, ImageUrlArtifact
     from griptape_nodes.files.file import File, FileLoadError
@@ -431,7 +447,7 @@ def _load_background_rgb(artifact: Any, width: int, height: int) -> np.ndarray:
             raise RuntimeError(msg)
         img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
         img = img.resize((width, height), Image.Resampling.LANCZOS)
-        return np.asarray(img, dtype=np.float32) / 255.0
+        return np.asarray(img, dtype=np.uint8)
     except (RuntimeError, FileLoadError):
         raise
     except Exception as e:
@@ -454,7 +470,9 @@ def _compose_alpha(uint8_rgb: np.ndarray, alpha_plane: np.ndarray | None) -> np.
 
 def _composite(rgb: np.ndarray, alpha_plane: np.ndarray, bg_rgb: np.ndarray) -> np.ndarray:
     """Composite RGB over a background (A-over-B, straight alpha), both in the same encoding."""
-    a = np.clip(alpha_plane, 0.0, 1.0)[..., np.newaxis]
-    # Zero-coverage samples contribute nothing; selecting 0 keeps an infinite sample from turning into NaN.
-    fg = np.where(a > 0.0, rgb, 0.0)
-    return (fg * a + bg_rgb * (1.0 - a)).astype(np.float32)
+    with np.errstate(over="ignore", invalid="ignore"):
+        alpha_clamped = np.fmin(np.fmax(np.asarray(alpha_plane, dtype=np.float32), np.float32(0.0)), np.float32(1.0))
+        a = alpha_clamped[..., np.newaxis]
+        # Zero-coverage or NaN samples contribute nothing to the foreground term.
+        fg = np.where((a > 0.0) & ~np.isnan(rgb), rgb, np.float32(0.0))
+        return (fg * a + bg_rgb * (np.float32(1.0) - a)).astype(np.float32, copy=False)

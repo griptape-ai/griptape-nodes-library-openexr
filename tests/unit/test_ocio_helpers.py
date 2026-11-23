@@ -7,12 +7,12 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import pytest
 
-from griptape_nodes_openexr.exr.ocio_helpers import (
+from griptape_nodes_openexr.exr.colour.ocio_helpers import (
     apply_color_management,
     find_colorspace_transform_request_type,
     reset_colorspace_transform_request_type_cache,
 )
-from griptape_nodes_openexr.exr.tone_mapping import TONE_REC709, TONE_SRGB
+from griptape_nodes_openexr.exr.colour.tone_mapping import TONE_REC709, TONE_SRGB
 
 from .conftest import (
     _color_params,
@@ -24,7 +24,7 @@ from .conftest import (
     _rgb,
 )
 
-_OCIO_HELPERS = "griptape_nodes_openexr.exr.ocio_helpers"
+_OCIO_HELPERS = "griptape_nodes_openexr.exr.colour.ocio_helpers"
 
 
 # ---------------------------------------------------------------------------
@@ -271,6 +271,16 @@ class TestApplyColorManagementBasicMode:
 
         mock_gn.handle_request.assert_not_called()
         assert label == TONE_SRGB
+
+    @pytest.mark.parametrize(
+        ("spelling", "canonical"),
+        [("sRGB", TONE_SRGB), ("rec709", TONE_REC709), ("RAW", "raw")],
+    )
+    def test_basic_mode_returns_canonical_label(self, spelling: str, canonical: str) -> None:
+        rgb = _rgb()
+        with patch(f"{_OCIO_HELPERS}.GriptapeNodes", MagicMock()):
+            _, label = apply_color_management(rgb, None, spelling)
+        assert label == canonical
 
     def test_basic_mode_output_is_display_encoded(self) -> None:
         """Basic mode must encode, so scene 0.18 lands near mid-grey rather than crushed."""
