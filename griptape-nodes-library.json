@@ -5,7 +5,7 @@
   "metadata": {
     "author": "Griptape Community",
     "description": "OpenEXR file handling nodes for VFX and HDR workflows",
-    "library_version": "0.4.0",
+    "library_version": "0.5.0",
     "engine_version": "0.104.0",
     "tags": [
       "EXR",
@@ -61,7 +61,10 @@
           "deprecation_message": "Use Read EXR for new file-reading workflows. We are migrating missing functionality to Read EXR. Both load nodes remain available during migration, with no scheduled removal release. Keep Load EXR for header-only inspection, metadata outputs, all-parts lists and named part/channel connections until their replacements are available. See the migration guide in docs/migration.md."
         },
         "declarations": [
-          { "type": "lifecycle_stage", "stage": "DEPRECATED" }
+          {
+            "type": "lifecycle_stage",
+            "stage": "DEPRECATED"
+          }
         ],
         "display_name": "Load EXR",
         "icon": "file-search",
@@ -78,7 +81,10 @@
           "deprecation_message": "Use Read EXR for new sequence-reading workflows: connect Sequence to path and drive frame with actual frame numbers. We are migrating missing functionality to Read EXR. Both load nodes remain available during migration, with no scheduled removal release. Keep Load EXR Sequence for per-frame descriptor lists, mismatch validation and parallel header-only scans until their replacements are available. See the migration guide in docs/migration.md."
         },
         "declarations": [
-          { "type": "lifecycle_stage", "stage": "DEPRECATED" }
+          {
+            "type": "lifecycle_stage",
+            "stage": "DEPRECATED"
+          }
         ],
         "display_name": "Load EXR Sequence",
         "icon": "file-search",
