@@ -8,13 +8,11 @@ The OpenEXR library reads [OpenEXR](https://openexr.com/) files and frame sequen
 
 Pictures made from EXR data are 8-bit PNGs. The float pixels stay on the part and channel outputs, so channel work and saving keep the HDR values. [Read EXR](nodes/ReadEXR.md) is the node to start with.
 
-## Requirements and install
+## Requirements
 
 - Griptape Nodes engine 0.104.0 or later.
 - The library installs its own Python dependencies: `numpy`, `OpenEXR`, `pillow` and `static-ffmpeg`.
-- The [OpenColorIO library](https://github.com/griptape-ai/griptape-nodes-library-opencolorio) is optional. Install it for pipeline-specific colour transforms. Everything else works without it.
-
-To install, open **Manage > Library Management** in Griptape Nodes, click **Add Library**, paste `https://github.com/griptape-ai/griptape-nodes-library-openexr`, click **Install**, then **Download** in the confirmation dialog. Where library installation is not available, ask your administrator to install it.
+- The OpenColorIO library is optional. Install it for pipeline-specific colour transforms. Everything else works without it.
 
 ## Nodes
 
