@@ -10,6 +10,83 @@ the `library_version` in `griptape-nodes-library.json`.
 
 <!-- Entries go in changelog.d/, one file each. See changelog.d/README.md. -->
 
+## [0.5.0] - 2026-11-24
+
+### Added
+
+- `tone_mapping` on Read EXR, Display EXR Part, Display EXR Channel and EXR Sequence to Preview
+  offers `ACEScg to sRGB`, `ACEScg to rec709` and `ACES2065-1 to sRGB`, so an ACES plate can be
+  viewed in `basic` colour mode without an OCIO config. Each converts ACES primaries to Rec.709
+  and applies the named curve; it is not the full ACES output transform, so highlights clip.
+  [#103](https://github.com/griptape-ai/griptape-nodes-library-openexr/issues/103)
+- Display EXR Channel has `channel_alignment` options: `Match Pixel Positions`,
+  `Match EXR Coordinates`, and `Require Matching Windows`. `frame_reference` selects which channel
+  defines the intended frame, defaulting to `First Connected RGB`. The default alignment preserves
+  stored pixel positions.
+- Read EXR, Display EXR Part, Display EXR Channel and EXR Sequence to Preview have a `window_mode`
+  option. `Crop Overscan` renders only the intended frame, cropping overscan and filling frame areas
+  with no pixels with black, with zero alpha in RGBA output. `Show Overscan Boundary` shows every
+  stored pixel and outlines the frame. The default, `Full`, renders as before.
+  [#97](https://github.com/griptape-ai/griptape-nodes-library-openexr/issues/97)
+- The library now ships a docs page for each node, shown in the editor's Docs panel, along with a
+  library overview. Engines older than 0.110.0 ignore these pages.
+- `EXR Sequence to Preview` accepts an EXR file path or frame pattern directly in `sequence`,
+  with a file picker. Connected Sequences take precedence; direct paths skip absent frame numbers.
+  https://github.com/griptape-ai/griptape-nodes-library-openexr/issues/114
+
+### Changed
+
+- **Breaking:** Display EXR Channel and EXR Sequence to Preview reject output or intermediate render
+  canvases above 67,108,864 pixels (8192x8192) by default. Raise `openexr.max_render_pixels` in the
+  library settings to run saved workflows that render larger canvases. Source EXR decoding remains
+  unrestricted.
+- **Breaking:** EXR Sequence to Preview rejects differing rendered frame sizes by default, replacing
+  ffmpeg's automatic resizing. Choose `frame_sizes=Pad to Largest` to preserve all frames with black
+  padding. `odd_dimensions` defaults to `Pad to Even`, adding black pixels on the right and bottom
+  when needed for H.264 encoding; choose `Require Even` to reject odd encoder dimensions.
+- `color_mode` on Read EXR, Display EXR Part, Display EXR Channel and EXR Sequence to Preview
+  defaults to `basic` on new nodes, whether or not OpenColorIO is loaded, so local tone mapping works
+  without setup. Saved workflows keep their mode; select `ocio` to use connected OCIO colour
+  parameters.
+  [#98](https://github.com/griptape-ai/griptape-nodes-library-openexr/issues/98)
+- The ICC profile written by `embed_color_profile` on Read EXR, Display EXR Part and Display EXR
+  Channel has a copyright tag naming The Foundry Visionmongers Ltd. and stating that the profile
+  may be copied, distributed and used without restriction. It previously read "Public Domain".
+  Pixel values are unchanged.
+- `tone_mapping` choices that assume linear sRGB input are named for it: `Linear sRGB to sRGB`,
+  `Linear sRGB to rec709` and `Linear sRGB to rec1886` across the EXR display nodes and the EXR
+  Preview artifact generator. Saved workflows and preview settings using `sRGB`, `rec709` or
+  `rec1886` load with the new name and render the same.
+  [#103](https://github.com/griptape-ai/griptape-nodes-library-openexr/issues/103)
+
+### Deprecated
+
+- `Load EXR` and `Load EXR Sequence` are deprecated with warnings and remain available during
+  migration, with no scheduled removal release. Use `Read EXR` for new file and sequence reading
+  workflows. Missing functionality is being migrated to it; the migration guide in `docs/migration.md` explains
+  when to keep the retained nodes.
+  [#112](https://github.com/griptape-ai/griptape-nodes-library-openexr/issues/112)
+
+### Fixed
+
+- Read EXR, Display EXR Part and EXR Sequence to Preview report unsupported basic-mode
+  `tone_mapping` values before scanning or decoding source images. OCIO mode continues to ignore
+  the hidden `tone_mapping` value.
+- `embed_color_profile` on Read EXR, Display EXR Part and Display EXR Channel writes the D65
+  display white point in `wtpt` with a Bradford D65-to-D50 `chad` adaptation tag and exact
+  D50-summing primary XYZ columns.
+- `Read EXR` reports the sequence scanner's error in `result_details` when a path or pattern
+  cannot be loaded, including paths with no matching frames.
+  https://github.com/griptape-ai/griptape-nodes-library-openexr/issues/114
+- EXR Sequence to Preview converts frames to BT.709 YUV and tags the colour matrix in `ocio` mode,
+  avoiding BT.601-to-BT.709 colour shifts on HD and 4K playback while keeping primaries and
+  transfer unspecified. MP4 and MOV previews also carry a container `colr` atom matching the stream
+  tags.
+- When the installed OpenEXR binary is older than the library needs, the library fails to load
+  with a message naming the installed and required OpenEXR versions and the reinstall command,
+  instead of a bare codec name such as `LJ2K_COMPRESSION`.
+  [#102](https://github.com/griptape-ai/griptape-nodes-library-openexr/issues/102)
+
 ## [0.4.0] - 2026-11-11
 
 ### Added
@@ -140,6 +217,7 @@ the `library_version` in `griptape-nodes-library.json`.
   blocked.
   [#46](https://github.com/griptape-ai/griptape-nodes-library-openexr/issues/46)
 
-[Unreleased]: https://github.com/griptape-ai/griptape-nodes-library-openexr/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/griptape-ai/griptape-nodes-library-openexr/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/griptape-ai/griptape-nodes-library-openexr/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/griptape-ai/griptape-nodes-library-openexr/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/griptape-ai/griptape-nodes-library-openexr/compare/v0.2.0...v0.3.0
