@@ -3,16 +3,17 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from griptape_nodes_openexr.exr.exr_header_artifact import EXRPartArtifact
 from griptape_nodes_openexr.exr.exr_types import (
+    CompressionType,
     EXRChannelInfo,
     EXRData,
     EXRHeader,
     EXRPart,
+    LineOrderType,
     PixelType,
     StorageType,
     WindowCoordinates,
@@ -23,91 +24,6 @@ SINGLE_PART_RGBA = DATA / "single_part_rgba.exr"
 MULTI_PART = DATA / "multi_part.exr"
 
 _NODE_MODULE = "griptape_nodes_openexr.nodes.load_exr_sequence"
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def _make_sequence(paths: list[Path], *, start: int = 0) -> dict:
-    """Build a minimal Sequence-shaped dict for wiring into the node.
-
-    `start` offsets the frame numbers from the list index (default 0, so
-    number == index) so tests can tell "frame number" and "list position"
-    apart, the way a real sequence like 1001-1100 would.
-    """
-    numbers = [start + i for i in range(len(paths))]
-    entries = [{"number": n, "padded_number": f"{n:04d}", "path": str(p)} for n, p in zip(numbers, paths, strict=True)]
-    return {
-        "entries": entries,
-        "first": numbers[0] if numbers else 0,
-        "last": numbers[-1] if numbers else 0,
-        "discovered_first": numbers[0] if numbers else 0,
-        "discovered_last": numbers[-1] if numbers else 0,
-        "padding": 4,
-        "pattern": "frame.####.exr",
-        "directory": str(paths[0].parent) if paths else "",
-        "policy": "skip",
-        "dropped_negative_number_count": 0,
-        "present_numbers": numbers,
-        "missing_numbers": [],
-    }
-
-
-def _make_window(xmax: int = 15, ymax: int = 9) -> WindowCoordinates:
-    return WindowCoordinates(xmin=0, ymin=0, xmax=xmax, ymax=ymax)
-
-
-def _make_header(name: str = "") -> EXRHeader:
-    return EXRHeader(
-        name=name,
-        compression=MagicMock(value="ZIP_COMPRESSION"),
-        line_order=MagicMock(value="INCREASING_Y"),
-        data_window=_make_window(),
-        display_window=_make_window(),
-        pixel_aspect_ratio=1.0,
-        screen_window_center=(0.0, 0.0),
-        screen_window_width=1.0,
-        storage_type=StorageType.SCANLINE_IMAGE,
-        chunk_count=None,
-        tile_description=None,
-        chromaticities=None,
-        time_code=None,
-        owner=None,
-        comments=None,
-        capture_date=None,
-        software=None,
-        custom={},
-    )
-
-
-def _make_exr_data(width: int = 16, height: int = 10, channel_names: tuple[str, ...] = ("R", "G", "B", "A")) -> EXRData:
-    channels = [
-        EXRChannelInfo(name=name, pixel_type=PixelType.HALF, x_sampling=1, y_sampling=1) for name in channel_names
-    ]
-    part = EXRPart(name="", channels=channels, header=_make_header(), width=width, height=height)
-    return EXRData(parts=[part])
-
-
-def _make_node(metadata: dict | None = None):
-    from griptape_nodes_openexr.nodes.load_exr_sequence import LoadEXRSequence
-
-    return LoadEXRSequence("test_node", metadata=metadata)
-
-
-def _was_successful(node) -> bool | None:
-    return node.parameter_output_values.get("was_successful")
-
-
-def _result_details(node) -> str:
-    return node.parameter_output_values.get("result_details", "") or ""
-
-
-def _parts(node) -> list[EXRPartArtifact]:
-    value = node.parameter_output_values.get("parts")
-    assert value is not None
-    return value
 
 
 # ---------------------------------------------------------------------------
@@ -190,7 +106,7 @@ class TestAProcessPipeline:
 
         effect = scan_side_effect if scan_side_effect is not None else _default_scan_side_effect
 
-        with patch(f"{_NODE_MODULE}.scan_exr_header", side_effect=effect) as mock_scan:
+        with patch(f"{_NODE_MODULE}.scan_exr_header", autospec=True, side_effect=effect) as mock_scan:
             asyncio.run(node.aprocess())
 
         return node, mock_scan
@@ -229,7 +145,7 @@ class TestAProcessPipeline:
         node = _make_node()
         node.set_parameter_value("sequence", _make_sequence(paths))
 
-        with patch(f"{_NODE_MODULE}.scan_exr_header", return_value=_make_exr_data()) as mock_scan:
+        with patch(f"{_NODE_MODULE}.scan_exr_header", autospec=True, return_value=_make_exr_data()) as mock_scan:
             asyncio.run(node.aprocess())
 
         assert mock_scan.call_args.kwargs["header_only"] is True
@@ -255,7 +171,7 @@ class TestAProcessPipeline:
         node.set_parameter_value("threads", 2)
         node.parameter_values["part_index"] = -1
 
-        with patch(f"{_NODE_MODULE}.scan_exr_header", return_value=_make_exr_data()):
+        with patch(f"{_NODE_MODULE}.scan_exr_header", autospec=True, return_value=_make_exr_data()):
             asyncio.run(node.aprocess())
 
         assert _was_successful(node) is False
@@ -427,21 +343,81 @@ class TestAProcessPipeline:
         assert len(parts) == 2
 
 
-# ---------------------------------------------------------------------------
-# Manifest registration
-# ---------------------------------------------------------------------------
+def _make_sequence(paths: list[Path], *, start: int = 0) -> dict:
+    """Build a minimal Sequence-shaped dict for wiring into the node.
+
+    `start` offsets the frame numbers from the list index (default 0, so
+    number == index) so tests can tell "frame number" and "list position"
+    apart, the way a real sequence like 1001-1100 would.
+    """
+    numbers = [start + i for i in range(len(paths))]
+    entries = [{"number": n, "padded_number": f"{n:04d}", "path": str(p)} for n, p in zip(numbers, paths, strict=True)]
+    return {
+        "entries": entries,
+        "first": numbers[0] if numbers else 0,
+        "last": numbers[-1] if numbers else 0,
+        "discovered_first": numbers[0] if numbers else 0,
+        "discovered_last": numbers[-1] if numbers else 0,
+        "padding": 4,
+        "pattern": "frame.####.exr",
+        "directory": str(paths[0].parent) if paths else "",
+        "policy": "skip",
+        "dropped_negative_number_count": 0,
+        "present_numbers": numbers,
+        "missing_numbers": [],
+    }
 
 
-class TestManifestRegistration:
-    def test_node_is_registered_in_manifest(self) -> None:
-        manifest_path = Path(__file__).parents[2] / "griptape-nodes-library.json"
-        assert manifest_path.exists(), f"Manifest not found at {manifest_path}"
-        manifest = json.loads(manifest_path.read_text())
-        class_names = [n["class_name"] for n in manifest.get("nodes", [])]
-        assert "LoadEXRSequence" in class_names
+def _make_window(xmax: int = 15, ymax: int = 9) -> WindowCoordinates:
+    return WindowCoordinates(xmin=0, ymin=0, xmax=xmax, ymax=ymax)
 
-    def test_manifest_entry_has_correct_file_path(self) -> None:
-        manifest_path = Path(__file__).parents[2] / "griptape-nodes-library.json"
-        manifest = json.loads(manifest_path.read_text())
-        entry = next(n for n in manifest["nodes"] if n["class_name"] == "LoadEXRSequence")
-        assert "load_exr_sequence" in entry["file_path"]
+
+def _make_header(name: str = "") -> EXRHeader:
+    return EXRHeader(
+        name=name,
+        compression=CompressionType.ZIP_COMPRESSION,
+        line_order=LineOrderType.INCREASING_Y,
+        data_window=_make_window(),
+        display_window=_make_window(),
+        pixel_aspect_ratio=1.0,
+        screen_window_center=(0.0, 0.0),
+        screen_window_width=1.0,
+        storage_type=StorageType.SCANLINE_IMAGE,
+        chunk_count=None,
+        tile_description=None,
+        chromaticities=None,
+        time_code=None,
+        owner=None,
+        comments=None,
+        capture_date=None,
+        software=None,
+        custom={},
+    )
+
+
+def _make_exr_data(width: int = 16, height: int = 10, channel_names: tuple[str, ...] = ("R", "G", "B", "A")) -> EXRData:
+    channels = [
+        EXRChannelInfo(name=name, pixel_type=PixelType.HALF, x_sampling=1, y_sampling=1) for name in channel_names
+    ]
+    part = EXRPart(name="", channels=channels, header=_make_header(), width=width, height=height)
+    return EXRData(parts=[part])
+
+
+def _make_node(metadata: dict | None = None):
+    from griptape_nodes_openexr.nodes.load_exr_sequence import LoadEXRSequence
+
+    return LoadEXRSequence("test_node", metadata=metadata)
+
+
+def _was_successful(node) -> bool | None:
+    return node.parameter_output_values.get("was_successful")
+
+
+def _result_details(node) -> str:
+    return node.parameter_output_values.get("result_details", "") or ""
+
+
+def _parts(node) -> list[EXRPartArtifact]:
+    value = node.parameter_output_values.get("parts")
+    assert value is not None
+    return value

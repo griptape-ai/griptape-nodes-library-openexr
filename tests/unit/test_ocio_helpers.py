@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, create_autospec, patch
 
 import numpy as np
 import pytest
+from griptape_nodes.node_library.library_registry import Library, LibraryRegistry
+from griptape_nodes.retained_mode.griptape_nodes import GriptapeNodes
 
 from griptape_nodes_openexr.exr.colour.ocio_helpers import (
     apply_color_management,
@@ -13,16 +15,6 @@ from griptape_nodes_openexr.exr.colour.ocio_helpers import (
     reset_colorspace_transform_request_type_cache,
 )
 from griptape_nodes_openexr.exr.colour.tone_mapping import TONE_REC709, TONE_SRGB
-
-from .conftest import (
-    _color_params,
-    _cst_type,
-    _make_failed_result,
-    _make_succeeded_result,
-    _mock_lr_empty,
-    _mock_lr_with,
-    _rgb,
-)
 
 _OCIO_HELPERS = "griptape_nodes_openexr.exr.colour.ocio_helpers"
 
@@ -48,7 +40,7 @@ class TestFindColorspaceTransformRequestType:
         assert result is None
 
     def test_returns_none_on_exception(self) -> None:
-        mock_lr = MagicMock()
+        mock_lr = create_autospec(LibraryRegistry)
         mock_lr.list_libraries.side_effect = RuntimeError("engine not running")
 
         with patch(f"{_OCIO_HELPERS}.LibraryRegistry", mock_lr):
@@ -71,11 +63,15 @@ class TestFindColorspaceTransformRequestType:
         req_type = _cst_type()
 
         with patch(f"{_OCIO_HELPERS}.LibraryRegistry", _mock_lr_empty()):
-            assert find_colorspace_transform_request_type() is None
+            missing = find_colorspace_transform_request_type()
+
+        assert missing is None
 
         # A library loaded later in the session must still be discovered.
         with patch(f"{_OCIO_HELPERS}.LibraryRegistry", _mock_lr_with(req_type)):
-            assert find_colorspace_transform_request_type() is req_type
+            found = find_colorspace_transform_request_type()
+
+        assert found is req_type
 
     def test_reset_clears_cache(self) -> None:
         req_type = _cst_type()
@@ -99,7 +95,7 @@ class TestApplyColorManagement:
         rgb = _rgb()
         expected = _rgb() * 2.0
         req_type = _cst_type()
-        mock_gn = MagicMock()
+        mock_gn = create_autospec(GriptapeNodes)
         mock_gn.handle_request.return_value = _make_succeeded_result(expected)
 
         with (
@@ -115,7 +111,7 @@ class TestApplyColorManagement:
     def test_mode_label_contains_source_display_view(self) -> None:
         rgb = _rgb()
         req_type = _cst_type()
-        mock_gn = MagicMock()
+        mock_gn = create_autospec(GriptapeNodes)
         mock_gn.handle_request.return_value = _make_succeeded_result(_rgb())
 
         with (
@@ -131,39 +127,39 @@ class TestApplyColorManagement:
     def test_raises_on_type_error(self) -> None:
         rgb = _rgb()
         req_type = _cst_type()
-        mock_gn = MagicMock()
+        mock_gn = create_autospec(GriptapeNodes)
         mock_gn.handle_request.side_effect = TypeError("No manager found")
 
         with (
             patch(f"{_OCIO_HELPERS}.LibraryRegistry", _mock_lr_with(req_type)),
             patch(f"{_OCIO_HELPERS}.GriptapeNodes", mock_gn),
-            pytest.raises(ValueError, match="No manager found"),
         ):
-            apply_color_management(rgb, _color_params(), TONE_REC709)
+            with pytest.raises(ValueError, match="No manager found"):
+                apply_color_management(rgb, _color_params(), TONE_REC709)
 
     def test_raises_on_failed_ocio_result(self) -> None:
         rgb = _rgb()
         req_type = _cst_type()
-        mock_gn = MagicMock()
+        mock_gn = create_autospec(GriptapeNodes)
         mock_gn.handle_request.return_value = _make_failed_result("unknown colorspace")
 
         with (
             patch(f"{_OCIO_HELPERS}.LibraryRegistry", _mock_lr_with(req_type)),
             patch(f"{_OCIO_HELPERS}.GriptapeNodes", mock_gn),
-            pytest.raises(ValueError, match="unknown colorspace"),
         ):
-            apply_color_management(rgb, _color_params(), TONE_REC709)
+            with pytest.raises(ValueError, match="unknown colorspace"):
+                apply_color_management(rgb, _color_params(), TONE_REC709)
 
     def test_raises_when_ocio_library_not_loaded(self) -> None:
         rgb = _rgb()
-        mock_gn = MagicMock()
+        mock_gn = create_autospec(GriptapeNodes)
 
         with (
             patch(f"{_OCIO_HELPERS}.LibraryRegistry", _mock_lr_empty()),
             patch(f"{_OCIO_HELPERS}.GriptapeNodes", mock_gn),
-            pytest.raises(ValueError, match="not loaded"),
         ):
-            apply_color_management(rgb, _color_params(), TONE_REC709)
+            with pytest.raises(ValueError, match="not loaded"):
+                apply_color_management(rgb, _color_params(), TONE_REC709)
 
         mock_gn.handle_request.assert_not_called()
 
@@ -173,14 +169,14 @@ class TestApplyColorManagement:
 
         with (
             patch(f"{_OCIO_HELPERS}.LibraryRegistry", _mock_lr_empty()),
-            pytest.raises(ValueError),
         ):
-            apply_color_management(rgb, _color_params(), TONE_REC709)
+            with pytest.raises(ValueError):
+                apply_color_management(rgb, _color_params(), TONE_REC709)
 
     def test_config_path_forwarded_to_request(self) -> None:
         rgb = _rgb()
         req_type = _cst_type()
-        mock_gn = MagicMock()
+        mock_gn = create_autospec(GriptapeNodes)
         mock_gn.handle_request.return_value = _make_succeeded_result(_rgb())
 
         with (
@@ -206,7 +202,7 @@ class TestApplyColorManagement:
         """
         handler_output = np.array([[[0.0, 0.5, 1.0]]], dtype=np.float32)
         req_type = _cst_type()
-        mock_gn = MagicMock()
+        mock_gn = create_autospec(GriptapeNodes)
         mock_gn.handle_request.return_value = _make_succeeded_result(handler_output)
 
         with (
@@ -220,7 +216,7 @@ class TestApplyColorManagement:
     def test_config_path_none_forwarded_to_request(self) -> None:
         rgb = _rgb()
         req_type = _cst_type()
-        mock_gn = MagicMock()
+        mock_gn = create_autospec(GriptapeNodes)
         mock_gn.handle_request.return_value = _make_succeeded_result(_rgb())
 
         with (
@@ -254,7 +250,7 @@ class TestApplyColorManagement:
 class TestApplyColorManagementBasicMode:
     def test_rec709_tone_mapping_used_when_no_artifact(self) -> None:
         rgb = _rgb()
-        mock_gn = MagicMock()
+        mock_gn = create_autospec(GriptapeNodes)
 
         with patch(f"{_OCIO_HELPERS}.GriptapeNodes", mock_gn):
             _, label = apply_color_management(rgb, None, TONE_REC709)
@@ -264,7 +260,7 @@ class TestApplyColorManagementBasicMode:
 
     def test_srgb_tone_mapping_used_when_no_artifact(self) -> None:
         rgb = _rgb()
-        mock_gn = MagicMock()
+        mock_gn = create_autospec(GriptapeNodes)
 
         with patch(f"{_OCIO_HELPERS}.GriptapeNodes", mock_gn):
             _, label = apply_color_management(rgb, None, TONE_SRGB)
@@ -278,7 +274,7 @@ class TestApplyColorManagementBasicMode:
     )
     def test_basic_mode_returns_canonical_label(self, spelling: str, canonical: str) -> None:
         rgb = _rgb()
-        with patch(f"{_OCIO_HELPERS}.GriptapeNodes", MagicMock()):
+        with patch(f"{_OCIO_HELPERS}.GriptapeNodes", autospec=True):
             _, label = apply_color_management(rgb, None, spelling)
         assert label == canonical
 
@@ -286,7 +282,7 @@ class TestApplyColorManagementBasicMode:
         """Basic mode must encode, so scene 0.18 lands near mid-grey rather than crushed."""
         rgb = _rgb(1, 1)  # 0.18 scene-linear
 
-        with patch(f"{_OCIO_HELPERS}.GriptapeNodes", MagicMock()):
+        with patch(f"{_OCIO_HELPERS}.GriptapeNodes", autospec=True):
             pixels, _ = apply_color_management(rgb, None, TONE_REC709)
 
         # rec709 encodes 0.18 to 0.4090. The point is that an encode happened
@@ -296,7 +292,64 @@ class TestApplyColorManagementBasicMode:
     def test_output_shape_preserved_in_basic_mode(self) -> None:
         rgb = _rgb(8, 8)
 
-        with patch(f"{_OCIO_HELPERS}.GriptapeNodes", MagicMock()):
+        with patch(f"{_OCIO_HELPERS}.GriptapeNodes", autospec=True):
             pixels, _ = apply_color_management(rgb, None, TONE_REC709)
 
         assert pixels.shape == rgb.shape
+
+
+def _rgb(h: int = 4, w: int = 4) -> np.ndarray:
+    return np.ones((h, w, 3), dtype=np.float32) * 0.18
+
+
+def _make_succeeded_result(pixels: np.ndarray) -> MagicMock:
+    result = MagicMock()
+    result.succeeded.return_value = True
+    result.pixels = pixels
+    return result
+
+
+def _make_failed_result(detail: str = "error") -> MagicMock:
+    result = MagicMock()
+    result.succeeded.return_value = False
+    result.result_details = detail
+    return result
+
+
+def _library_with_req_type(req_type: type) -> MagicMock:
+    lib = create_autospec(Library, instance=True)
+    lib.get_registered_request_handler_types.return_value = [req_type]
+    return lib
+
+
+def _cst_type() -> MagicMock:
+    req_type = MagicMock()
+    req_type.__name__ = "ColorspaceTransformRequest"
+    return req_type
+
+
+def _mock_lr_with(req_type: MagicMock) -> MagicMock:
+    mock_lr = create_autospec(LibraryRegistry)
+    mock_lr.list_libraries.return_value = ["OpenColorIO Library"]
+    mock_lr.get_library.return_value = _library_with_req_type(req_type)
+    return mock_lr
+
+
+def _mock_lr_empty() -> MagicMock:
+    mock_lr = create_autospec(LibraryRegistry)
+    mock_lr.list_libraries.return_value = []
+    return mock_lr
+
+
+def _color_params(
+    source: str = "ACEScg",
+    display: str = "sRGB",
+    view: str = "ACES",
+    config_path: str | None = None,
+) -> MagicMock:
+    artifact = MagicMock()
+    artifact.source_colorspace = source
+    artifact.display = display
+    artifact.view = view
+    artifact.config_path = config_path
+    return artifact

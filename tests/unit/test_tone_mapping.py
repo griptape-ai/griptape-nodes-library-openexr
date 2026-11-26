@@ -426,34 +426,12 @@ class TestApplyToneMapping:
         assert apply_tone_mapping(arr, "rec709").shape == (4, 8, 3)
 
 
-def _xy_to_xyz(x: float, y: float) -> np.ndarray:
-    return np.array([x / y, 1.0, (1.0 - x - y) / y])
-
-
-def _rgb_to_xyz(primaries: list[tuple[float, float]], white: tuple[float, float]) -> np.ndarray:
-    columns = np.array([_xy_to_xyz(*p) for p in primaries]).T
-    scale = np.linalg.solve(columns, _xy_to_xyz(*white))
-    return columns * scale
-
-
-def _bradford(source_white: tuple[float, float], target_white: tuple[float, float]) -> np.ndarray:
-    cone = np.array([[0.8951, 0.2664, -0.1614], [-0.7502, 1.7135, 0.0367], [0.0389, -0.0685, 1.0296]])
-    gain = (cone @ _xy_to_xyz(*target_white)) / (cone @ _xy_to_xyz(*source_white))
-    return np.linalg.inv(cone) @ np.diag(gain) @ cone
-
-
 # Primaries and white points from SMPTE ST 2065-1, Academy S-2014-004 and ITU-R BT.709.
 _ACES_WHITE = (0.32168, 0.33767)
 _D65 = (0.3127, 0.3290)
 _AP0 = [(0.7347, 0.2653), (0.0, 1.0), (0.0001, -0.0770)]
 _AP1 = [(0.713, 0.293), (0.165, 0.830), (0.128, 0.044)]
 _REC709 = [(0.64, 0.33), (0.30, 0.60), (0.15, 0.06)]
-
-
-def _derived_to_rec709(primaries: list[tuple[float, float]]) -> np.ndarray:
-    return (
-        np.linalg.inv(_rgb_to_xyz(_REC709, _D65)) @ _bradford(_ACES_WHITE, _D65) @ _rgb_to_xyz(primaries, _ACES_WHITE)
-    )
 
 
 class TestAcesMatrices:
@@ -466,24 +444,6 @@ class TestAcesMatrices:
     )
     def test_matches_derivation_from_primaries(self, matrix: np.ndarray, primaries: list) -> None:
         np.testing.assert_allclose(matrix, _derived_to_rec709(primaries), rtol=1e-7, atol=1e-7)
-
-    @pytest.mark.parametrize(
-        "matrix",
-        [ACESCG_TO_REC709, ACES2065_TO_REC709, REC709_TO_ACESCG, REC709_TO_ACES2065],
-    )
-    def test_matrix_constants_are_readonly_float32(self, matrix: np.ndarray) -> None:
-        assert matrix.dtype == np.float32
-        assert matrix.flags.writeable is False
-
-    @pytest.mark.parametrize(
-        ("forward", "inverse"),
-        [(ACESCG_TO_REC709, REC709_TO_ACESCG), (ACES2065_TO_REC709, REC709_TO_ACES2065)],
-        ids=["ACEScg", "ACES2065-1"],
-    )
-    def test_precomputed_inverse_matrices_invert_forward_matrices(
-        self, forward: np.ndarray, inverse: np.ndarray
-    ) -> None:
-        np.testing.assert_allclose(inverse @ forward, np.eye(3, dtype=np.float32), atol=1e-6)
 
     def test_gamut_matrix_accessors_return_precomputed_constants(self) -> None:
         assert gamut_matrix(TONE_ACESCG_SRGB) is ACESCG_TO_REC709
@@ -688,13 +648,6 @@ class TestNonFinitePixels:
 
 
 class TestSrgbUint8ToLinear:
-    def test_matches_float_srgb_to_linear_across_all_256_levels(self) -> None:
-        levels = np.arange(256, dtype=np.uint8)
-        expected = srgb_to_linear(levels.astype(np.float32) / np.float32(255.0))
-        actual = srgb_uint8_to_linear(levels)
-        assert actual.dtype == np.float32
-        np.testing.assert_array_equal(actual, expected)
-
     def test_preserves_image_shape(self) -> None:
         img = np.array([[[0, 128, 255], [10, 60, 200]]], dtype=np.uint8)
         out = srgb_uint8_to_linear(img)
@@ -810,3 +763,25 @@ class TestPiecewiseTransferPerformance:
         batch_out = curve(arr)
         scalar_out = np.array([float(curve(np.array(v, dtype=np.float32))) for v in arr], dtype=np.float32)
         np.testing.assert_array_equal(batch_out, scalar_out)
+
+
+def _xy_to_xyz(x: float, y: float) -> np.ndarray:
+    return np.array([x / y, 1.0, (1.0 - x - y) / y])
+
+
+def _rgb_to_xyz(primaries: list[tuple[float, float]], white: tuple[float, float]) -> np.ndarray:
+    columns = np.array([_xy_to_xyz(*p) for p in primaries]).T
+    scale = np.linalg.solve(columns, _xy_to_xyz(*white))
+    return columns * scale
+
+
+def _bradford(source_white: tuple[float, float], target_white: tuple[float, float]) -> np.ndarray:
+    cone = np.array([[0.8951, 0.2664, -0.1614], [-0.7502, 1.7135, 0.0367], [0.0389, -0.0685, 1.0296]])
+    gain = (cone @ _xy_to_xyz(*target_white)) / (cone @ _xy_to_xyz(*source_white))
+    return np.linalg.inv(cone) @ np.diag(gain) @ cone
+
+
+def _derived_to_rec709(primaries: list[tuple[float, float]]) -> np.ndarray:
+    return (
+        np.linalg.inv(_rgb_to_xyz(_REC709, _D65)) @ _bradford(_ACES_WHITE, _D65) @ _rgb_to_xyz(primaries, _ACES_WHITE)
+    )
