@@ -2,11 +2,17 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, create_autospec, patch
 
 import pytest
+from griptape_nodes.node_library.library_registry import Library, LibraryRegistry
 
-from griptape_nodes_openexr.exr.colour.ocio_helpers import COLOR_MODE_BASIC, COLOR_MODE_OCIO, read_tone_mapping
+from griptape_nodes_openexr.exr.colour.ocio_helpers import (
+    COLOR_MODE_BASIC,
+    COLOR_MODE_OCIO,
+    find_colorspace_transform_request_type,
+    read_tone_mapping,
+)
 from griptape_nodes_openexr.exr.colour.tone_mapping import (
     TONE_ACES2065_SRGB,
     TONE_ACESCG_REC709,
@@ -27,27 +33,18 @@ _OCIO_MODULE = "griptape_nodes_openexr.exr.colour.ocio_helpers"
 _NODE_TYPES = [ReadEXR, DisplayEXRPart, DisplayEXRChannel, EXRSequenceToPreview]
 
 
-def _make_node(node_type: type, *, ocio_available: bool, metadata: dict | None = None):
-    detected = MagicMock() if ocio_available else None
-    with patch(f"{_OCIO_MODULE}.find_colorspace_transform_request_type", return_value=detected):
-        return node_type("test_node", metadata=metadata)
+def test_ocio_available_fixture_is_visible_to_the_handler_lookup() -> None:
+    # Guards the guard: if this fails, the ocio_available=True cases below no longer exercise an
+    # environment where OCIO is detectable.
+    with patch(f"{_OCIO_MODULE}.LibraryRegistry", _registry_with_ocio_handler()):
+        found = find_colorspace_transform_request_type()
 
-
-def _hidden(node, name: str) -> bool:
-    parameter = node.get_parameter_by_name(name)
-    assert parameter is not None, name
-    return bool(parameter.ui_options.get("hide", False))
-
-
-def _assert_visibility(node, *, ocio_active: bool) -> None:
-    assert _hidden(node, "tone_mapping") is ocio_active
-    assert _hidden(node, "color_params") is not ocio_active
-    if node.get_parameter_by_name("embed_color_profile") is not None:
-        assert _hidden(node, "embed_color_profile") is ocio_active
+    assert found is not None
+    assert found.__name__ == "ColorspaceTransformRequest"
 
 
 @pytest.mark.parametrize("node_type", _NODE_TYPES)
-@pytest.mark.parametrize("ocio_available", [False, True])
+@pytest.mark.parametrize("ocio_available", [False, True], ids=["ocio-missing", "ocio-found"])
 class TestColorModeDefaults:
     def test_new_node_defaults_to_basic(self, node_type: type, ocio_available: bool) -> None:
         node = _make_node(node_type, ocio_available=ocio_available)
@@ -92,13 +89,6 @@ class TestColorModeDefaults:
         node = _make_node(node_type, ocio_available=ocio_available, metadata={"_color_mode": COLOR_MODE_OCIO})
 
         _assert_visibility(node, ocio_active=True)
-
-
-def _tone_choices(node) -> list[str]:
-    from griptape_nodes.traits.options import Options
-
-    parameter = node.get_parameter_by_name("tone_mapping")
-    return [trait.choices for trait in parameter.find_elements_by_type(Options)][0]
 
 
 @pytest.mark.parametrize("node_type", _NODE_TYPES)
@@ -172,3 +162,46 @@ class TestToneMappingChoices:
 
         assert node.get_parameter_value("tone_mapping") == TONE_DEFAULT
         assert read_tone_mapping(node, node.get_parameter_by_name("tone_mapping")) == TONE_DEFAULT
+
+
+def _registry_with_ocio_handler() -> MagicMock:
+    """A LibraryRegistry stand-in whose only library registers a ColorspaceTransformRequest handler."""
+    request_type = MagicMock()
+    request_type.__name__ = "ColorspaceTransformRequest"
+    library = create_autospec(Library, instance=True)
+    library.get_registered_request_handler_types.return_value = [request_type]
+    registry = create_autospec(LibraryRegistry)
+    registry.list_libraries.return_value = ["OpenColorIO Library"]
+    registry.get_library.return_value = library
+    return registry
+
+
+def _make_node(node_type: type, *, ocio_available: bool, metadata: dict | None = None):
+    # Patch the registry the lookup reads, not the lookup itself. Any code path that asks whether
+    # OCIO is available during construction then sees a handler, so a default that depends on it
+    # would change the outcome of the ocio_available=True cases.
+    registry = _registry_with_ocio_handler()
+    if not ocio_available:
+        registry.list_libraries.return_value = []
+    with patch(f"{_OCIO_MODULE}.LibraryRegistry", registry):
+        return node_type("test_node", metadata=metadata)
+
+
+def _hidden(node, name: str) -> bool:
+    parameter = node.get_parameter_by_name(name)
+    assert parameter is not None, name
+    return bool(parameter.ui_options.get("hide", False))
+
+
+def _assert_visibility(node, *, ocio_active: bool) -> None:
+    assert _hidden(node, "tone_mapping") is ocio_active
+    assert _hidden(node, "color_params") is not ocio_active
+    if node.get_parameter_by_name("embed_color_profile") is not None:
+        assert _hidden(node, "embed_color_profile") is ocio_active
+
+
+def _tone_choices(node) -> list[str]:
+    from griptape_nodes.traits.options import Options
+
+    parameter = node.get_parameter_by_name("tone_mapping")
+    return [trait.choices for trait in parameter.find_elements_by_type(Options)][0]
